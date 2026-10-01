@@ -10,5 +10,5 @@
 
 ## 3. Documentation and validation
 
-- [ ] 3.1 Update the notifications, tab and pane activity indicator, tracing, and agent harness feature matrix documentation for the new behavior; verify with `make docs-check` and `scripts/test-release-publishing.sh`.
+- [x] 3.1 Update the notifications, tab and pane activity indicator, tracing, and agent harness feature matrix documentation for the new behavior; verify with `make docs-check` and `scripts/test-release-publishing.sh`.
 - [ ] 3.2 Run the unit test suite, `make no-code-comments`, `make no-fixed-width-prose`, `openspec validate fix-claude-background-work-alerts --type change --strict`, and `git diff --check`; verify all pass.
