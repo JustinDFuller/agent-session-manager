@@ -2,7 +2,7 @@
 
 ## Real Claude Code payload through the app's hook script
 
-The hook script body was extracted verbatim from `writeHookLogScript()` on the implementation branch, with only the log path pointed at `/tmp/asm-prove/hooklog.jsonl`. It was registered as the `UserPromptSubmit` and `Stop` hook for a real `claude -p` run on Claude Code 2.1.286.
+The hook script body was extracted verbatim from `writeHookLogScript()` on the implementation branch, with only the log path pointed at a scratch file under `/tmp`. It was registered as the `UserPromptSubmit` and `Stop` hook for a real `claude -p` run on Claude Code 2.1.286.
 
 The logged lines, with `session_id` and `transcript_path` removed:
 
