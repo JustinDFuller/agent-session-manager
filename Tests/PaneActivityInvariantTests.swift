@@ -316,11 +316,13 @@ final class PaneActivityInvariantTests: XCTestCase {
     }
 
     func testClaudeStopFailureTransitionsIdle() {
+        InvariantReporter.shared.enableTestCapture()
+        addTeardownBlock { InvariantReporter.shared.resetForTesting() }
         let monitor = StatusLineMonitor(paneID: UUID(), harness: .claude)
         monitor.testApplyClaudeActivityPayload(Data(#"{"hook_event_name":"UserPromptSubmit"}"#.utf8))
-        monitor.testApplyClaudeActivityPayload(
-            Data(#"{"hook_event_name":"StopFailure","background_tasks":[],"session_crons":[]}"#.utf8))
+        monitor.testApplyClaudeActivityPayload(Data(#"{"hook_event_name":"StopFailure"}"#.utf8))
         XCTAssertFalse(monitor.isClaudeWorking)
+        XCTAssertTrue(InvariantReporter.shared.violationsForTesting.isEmpty)
     }
 
     func testClaudeActivityChangedTraceOnlyFiresOnEdges() {
