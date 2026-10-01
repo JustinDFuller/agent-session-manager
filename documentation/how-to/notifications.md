@@ -60,7 +60,7 @@ _The sidebar occupies a fixed rail beside the active tab's panes._
 - If in-app notifications appear but macOS banners do not, allow notifications for the correct Agent Session Manager app in **System Settings → Notifications**.
 - If the sidebar is hidden, enable **Always Show Notifications Bar** or wait for a pending notification. If a pane is focused, also check **Settings → Panes → Focus Mode → Hide Notification Sidebar**.
 - If a tool completion alert is missing, check its tool-specific setting in **Settings → Notifications** and reopen the pane after changing hook-related settings.
-- If Claude does not send a finished alert, it may still be waiting on background work such as a background agent, a background command, or a repeating `/loop` schedule. The pane stays working and the alert is sent once that work is done. This needs Claude Code v2.1.284 or later. If you cancel background work by hand and Claude does not resume, the pane stays working until your next prompt.
+- If Claude does not send a finished alert, it may still be waiting on background work such as a background agent, a background command, or a repeating `/loop` schedule. The pane stays working and the alert is sent once that work is done. This needs Claude Code v2.1.145 or later. If you cancel background work by hand and Claude does not resume, the pane stays working until your next prompt.
 
 ## Related tasks
 
