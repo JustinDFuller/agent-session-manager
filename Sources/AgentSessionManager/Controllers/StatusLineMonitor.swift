@@ -670,60 +670,48 @@ final class StatusLineMonitor {
                     "hook_event": payload.hookEventName,
                 ])
         case "Stop", "StopFailure":
-            let backgroundWork = backgroundWorkReport(for: payload)
+            if payload.hookEventName == "Stop", payload.backgroundTasks == nil || payload.sessionCrons == nil {
+                InvariantReporter.shared.violated(
+                    .claudeStopBackgroundState,
+                    context: [
+                        "pane.name": paneName, "pane.id": paneID.uuidString,
+                        "tab.id": tabID.uuidString, "tab.name": tabName,
+                        "has_background_tasks": "\(payload.backgroundTasks != nil)",
+                        "has_session_crons": "\(payload.sessionCrons != nil)",
+                    ])
+            }
             guard claudeLifecycle == .working else {
                 recordHookEventSpan(payload, decision: "ignored_not_working")
                 return
             }
-            if let backgroundWork, !backgroundWork.tasks.isEmpty || !backgroundWork.crons.isEmpty {
+            let backgroundTasks = payload.backgroundTasks ?? []
+            let sessionCrons = payload.sessionCrons ?? []
+            if !backgroundTasks.isEmpty || !sessionCrons.isEmpty {
                 recordHookEventSpan(
                     payload,
                     decision: "suppressed_background_work",
                     extraAttributes: [
-                        "background_task_types": backgroundWork.tasks.map { $0.type ?? "unknown" }
-                            .joined(separator: ","),
-                        "session_cron_count": "\(backgroundWork.crons.count)",
+                        "background_task_types": backgroundTasks.map { $0.type ?? "unknown" }.joined(separator: ","),
+                        "session_cron_count": "\(sessionCrons.count)",
                     ])
                 return
             }
-            finishClaudeTurn(payload)
+            claudeLifecycle = .stopped
+            TracingService.shared.record(
+                "pane.activity.changed",
+                attributes: [
+                    "pane.name": paneName, "pane.id": paneID.uuidString,
+                    "tab.id": tabID.uuidString, "tab.name": tabName,
+                    "state": "stopped", "source": "claude_hook",
+                    "hook_event": payload.hookEventName,
+                ])
+            recordHookEventSpan(payload, decision: "fired")
+            scheduleClaudeStoppedNotification()
         case "Notification":
             recordHookEventSpan(payload, decision: nil)
         default:
             return
         }
-    }
-
-    private func backgroundWorkReport(
-        for payload: ClaudeActivityPayload
-    ) -> (tasks: [ClaudeActivityPayload.BackgroundTask], crons: [ClaudeActivityPayload.SessionCron])? {
-        guard payload.hookEventName == "Stop" else { return nil }
-        guard let tasks = payload.backgroundTasks, let crons = payload.sessionCrons else {
-            InvariantReporter.shared.violated(
-                .claudeStopBackgroundState,
-                context: [
-                    "pane.name": paneName, "pane.id": paneID.uuidString,
-                    "tab.id": tabID.uuidString, "tab.name": tabName,
-                    "has_background_tasks": "\(payload.backgroundTasks != nil)",
-                    "has_session_crons": "\(payload.sessionCrons != nil)",
-                ])
-            return nil
-        }
-        return (tasks, crons)
-    }
-
-    private func finishClaudeTurn(_ payload: ClaudeActivityPayload) {
-        claudeLifecycle = .stopped
-        TracingService.shared.record(
-            "pane.activity.changed",
-            attributes: [
-                "pane.name": paneName, "pane.id": paneID.uuidString,
-                "tab.id": tabID.uuidString, "tab.name": tabName,
-                "state": "stopped", "source": "claude_hook",
-                "hook_event": payload.hookEventName,
-            ])
-        recordHookEventSpan(payload, decision: "fired")
-        scheduleClaudeStoppedNotification()
     }
 
     private func applyClaudeAttentionPayload(_ data: Data) {
