@@ -46,12 +46,6 @@ final class PaneActivityInvariantTests: XCTestCase {
         XCTAssertEqual(callCount, 0, file: file, line: line)
     }
 
-    private func hookEventDecisions(for hookEvent: String) -> [String?] {
-        TracingService.shared.recordedEventsForTesting
-            .filter { $0.name == "statusline.hook.event" && $0.attributes["hook_event"] == hookEvent }
-            .map { $0.attributes["decision"] }
-    }
-
     func testWaitingWhenHasNotification() {
         let state = paneActivityState(
             processState: .running(pid: 1),
@@ -540,7 +534,11 @@ final class PaneActivityInvariantTests: XCTestCase {
         monitor.testApplyClaudeActivityPayload(Self.userPromptSubmit)
         monitor.testApplyClaudeActivityPayload(Self.stop())
 
-        XCTAssertEqual(hookEventDecisions(for: "Stop"), ["suppressed_background_work", "fired"])
+        XCTAssertEqual(
+            TracingService.shared.recordedEventsForTesting
+                .filter { $0.name == "statusline.hook.event" && $0.attributes["hook_event"] == "Stop" }
+                .map { $0.attributes["decision"] },
+            ["suppressed_background_work", "fired"])
     }
 
     func testStopMissingBackgroundTasksReportsInvariantAndStillStops() {
