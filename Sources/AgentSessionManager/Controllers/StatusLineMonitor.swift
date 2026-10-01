@@ -54,7 +54,6 @@ final class StatusLineMonitor {
     private var hookLogWatcher: FileSystemEventWatcher?
     private var hookLogOffset: UInt64 = 0
     private var hookLogLineBuffer = Data()
-    private var outstandingBackgroundAgents = 0
     private var attentionDebounceWork: DispatchWorkItem?
     private var lastAttentionPayloadFingerprint: Int?
     private var pendingStopWork: DispatchWorkItem?
@@ -318,15 +317,7 @@ final class StatusLineMonitor {
                     let fingerprint = hasher.finalize()
                     guard fingerprint != lastAttentionPayloadFingerprint else { return }
                     lastAttentionPayloadFingerprint = fingerprint
-                    guard let event = PaneAttentionEvent.claudeHook(data) else { return }
-                    TracingService.shared.record(
-                        "statusline.attention.received",
-                        attributes: [
-                            "pane.name": paneName, "pane.id": paneID.uuidString,
-                            "tab.id": tabID.uuidString, "tab.name": tabName,
-                            "source": event.source.rawValue, "reason": event.reason,
-                        ])
-                    onClaudeHookAttention?(event)
+                    applyClaudeAttentionPayload(data)
                 }
                 attentionDebounceWork = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
@@ -684,36 +675,86 @@ final class StatusLineMonitor {
                     "hook_event": payload.hookEventName,
                 ])
         case "Stop", "StopFailure":
+            let backgroundWork = backgroundWorkReport(for: payload)
             guard claudeLifecycle == .working else {
                 recordHookEventSpan(payload, decision: "ignored_not_working")
                 return
             }
-            guard outstandingBackgroundAgents == 0 else {
-                recordHookEventSpan(payload, decision: "suppressed_background_agents")
+            if let backgroundWork, !backgroundWork.tasks.isEmpty || !backgroundWork.crons.isEmpty {
+                recordHookEventSpan(
+                    payload,
+                    decision: "suppressed_background_work",
+                    extraAttributes: [
+                        "background_task_types": backgroundWork.tasks.map { $0.type ?? "unknown" }
+                            .joined(separator: ","),
+                        "session_cron_count": "\(backgroundWork.crons.count)",
+                    ])
                 return
             }
-            claudeLifecycle = .stopped
-            TracingService.shared.record(
-                "pane.activity.changed",
-                attributes: [
-                    "pane.name": paneName, "pane.id": paneID.uuidString,
-                    "tab.id": tabID.uuidString, "tab.name": tabName,
-                    "state": "stopped", "source": "claude_hook",
-                    "hook_event": payload.hookEventName,
-                ])
-            recordHookEventSpan(payload, decision: "fired")
-            scheduleClaudeStoppedNotification()
-        case "SubagentStop":
-            outstandingBackgroundAgents = max(0, outstandingBackgroundAgents - 1)
-            recordHookEventSpan(payload, decision: nil)
-        case "PreToolUse":
-            outstandingBackgroundAgents += 1
-            recordHookEventSpan(payload, decision: nil)
+            finishClaudeTurn(payload)
         case "Notification":
             recordHookEventSpan(payload, decision: nil)
         default:
             return
         }
+    }
+
+    private func backgroundWorkReport(
+        for payload: ClaudeActivityPayload
+    ) -> (tasks: [ClaudeActivityPayload.BackgroundTask], crons: [ClaudeActivityPayload.SessionCron])? {
+        guard payload.hookEventName == "Stop" else { return nil }
+        guard let tasks = payload.backgroundTasks, let crons = payload.sessionCrons else {
+            InvariantReporter.shared.violated(
+                .claudeStopBackgroundState,
+                context: [
+                    "pane.name": paneName, "pane.id": paneID.uuidString,
+                    "tab.id": tabID.uuidString, "tab.name": tabName,
+                    "has_background_tasks": "\(payload.backgroundTasks != nil)",
+                    "has_session_crons": "\(payload.sessionCrons != nil)",
+                ])
+            return nil
+        }
+        return (tasks, crons)
+    }
+
+    private func finishClaudeTurn(_ payload: ClaudeActivityPayload) {
+        claudeLifecycle = .stopped
+        TracingService.shared.record(
+            "pane.activity.changed",
+            attributes: [
+                "pane.name": paneName, "pane.id": paneID.uuidString,
+                "tab.id": tabID.uuidString, "tab.name": tabName,
+                "state": "stopped", "source": "claude_hook",
+                "hook_event": payload.hookEventName,
+            ])
+        recordHookEventSpan(payload, decision: "fired")
+        scheduleClaudeStoppedNotification()
+    }
+
+    private func applyClaudeAttentionPayload(_ data: Data) {
+        if let payload = try? JSONDecoder().decode(ClaudeActivityPayload.self, from: data),
+            payload.hookEventName == "Notification",
+            payload.notificationType == "idle_prompt",
+            claudeLifecycle == .working
+        {
+            TracingService.shared.record(
+                "statusline.attention.suppressed",
+                attributes: [
+                    "pane.name": paneName, "pane.id": paneID.uuidString,
+                    "tab.id": tabID.uuidString, "tab.name": tabName,
+                    "reason": "pane_working",
+                ])
+            return
+        }
+        guard let event = PaneAttentionEvent.claudeHook(data) else { return }
+        TracingService.shared.record(
+            "statusline.attention.received",
+            attributes: [
+                "pane.name": paneName, "pane.id": paneID.uuidString,
+                "tab.id": tabID.uuidString, "tab.name": tabName,
+                "source": event.source.rawValue, "reason": event.reason,
+            ])
+        onClaudeHookAttention?(event)
     }
 
     private func scheduleClaudeStoppedNotification() {
@@ -1042,6 +1083,11 @@ extension StatusLineMonitor {
     }
 
     @MainActor
+    func testApplyClaudeAttentionPayload(_ data: Data) {
+        applyClaudeAttentionPayload(data)
+    }
+
+    @MainActor
     func testApplyCursorActivity(isWorking: Bool) {
         applyCursorActivity(isWorking: isWorking)
     }
@@ -1068,10 +1114,8 @@ extension StatusLineMonitor {
             "UserPromptSubmit": [["hooks": hookLogHook]],
             "Stop": [["hooks": hookLogHook]],
             "StopFailure": [["hooks": hookLogHook]],
-            "SubagentStop": [["hooks": hookLogHook]],
             "PreToolUse": [
-                ["matcher": "AskUserQuestion|ExitPlanMode", "hooks": attentionHook],
-                ["matcher": "Task|Agent", "hooks": hookLogHook],
+                ["matcher": "AskUserQuestion|ExitPlanMode", "hooks": attentionHook]
             ],
             "PermissionRequest": [["hooks": attentionHook]],
             "Notification": [
@@ -1129,21 +1173,28 @@ extension StatusLineMonitor {
             import time
 
             payload = json.load(sys.stdin)
-            tool_input = payload.get("tool_input")
-            if not isinstance(tool_input, dict):
-                tool_input = {}
             record = {
                 "hook_event_name": payload.get("hook_event_name", ""),
-                "type": payload.get("type"),
+                "notification_type": payload.get("notification_type"),
                 "message": payload.get("message"),
                 "agent_id": payload.get("agent_id"),
                 "agent_type": payload.get("agent_type"),
-                "tool_name": payload.get("tool_name"),
-                "subagent_type": tool_input.get("subagent_type"),
                 "transcript_path": payload.get("transcript_path"),
                 "session_id": payload.get("session_id"),
                 "timestamp": time.time()
             }
+            tasks = payload.get("background_tasks")
+            if isinstance(tasks, list):
+                record["background_tasks"] = [
+                    {"id": t.get("id"), "type": t.get("type"), "status": t.get("status")}
+                    for t in tasks if isinstance(t, dict)
+                ]
+            crons = payload.get("session_crons")
+            if isinstance(crons, list):
+                record["session_crons"] = [
+                    {"id": c.get("id"), "recurring": c.get("recurring")}
+                    for c in crons if isinstance(c, dict)
+                ]
             line = json.dumps(record, separators=(",", ":")) + "\\n"
             path = '\(hookLogFilePath)'
             fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
@@ -1160,48 +1211,49 @@ extension StatusLineMonitor {
 }
 
 extension StatusLineMonitor {
-    private func recordHookEventSpan(_ payload: ClaudeActivityPayload, decision: String?) {
+    private func recordHookEventSpan(
+        _ payload: ClaudeActivityPayload, decision: String?, extraAttributes: [String: String] = [:]
+    ) {
+        let attributes: [String: String] = [
+            "pane.name": paneName, "pane.id": paneID.uuidString,
+            "tab.id": tabID.uuidString, "tab.name": tabName,
+            "hook_event": payload.hookEventName,
+            "notification_type": payload.notificationType ?? "nil",
+            "agent_type": payload.agentType ?? "nil",
+            "decision": decision ?? "n/a",
+        ]
         TracingService.shared.record(
             "statusline.hook.event",
-            attributes: [
-                "pane.name": paneName, "pane.id": paneID.uuidString,
-                "tab.id": tabID.uuidString, "tab.name": tabName,
-                "hook_event": payload.hookEventName,
-                "notification_type": payload.notificationType ?? "nil",
-                "agent_type": payload.agentType ?? "nil",
-                "outstanding_count": "\(outstandingBackgroundAgents)",
-                "decision": decision ?? "n/a",
-            ])
+            attributes: attributes.merging(extraAttributes) { _, extra in extra })
     }
 }
 
 private struct ClaudeActivityPayload: Decodable {
-    struct ToolInput: Decodable {
-        let subagentType: String?
-        enum CodingKeys: String, CodingKey {
-            case subagentType = "subagent_type"
-        }
+    struct BackgroundTask: Decodable {
+        let type: String?
     }
+
+    struct SessionCron: Decodable {}
 
     let hookEventName: String
     let notificationType: String?
     let message: String?
     let agentID: String?
     let agentType: String?
-    let toolName: String?
-    let toolInput: ToolInput?
     let transcriptPath: String?
     let sessionID: String?
+    let backgroundTasks: [BackgroundTask]?
+    let sessionCrons: [SessionCron]?
 
     enum CodingKeys: String, CodingKey {
         case hookEventName = "hook_event_name"
-        case notificationType = "type"
+        case notificationType = "notification_type"
         case message
         case agentID = "agent_id"
         case agentType = "agent_type"
-        case toolName = "tool_name"
-        case toolInput = "tool_input"
         case transcriptPath = "transcript_path"
         case sessionID = "session_id"
+        case backgroundTasks = "background_tasks"
+        case sessionCrons = "session_crons"
     }
 }
