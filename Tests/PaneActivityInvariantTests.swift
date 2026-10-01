@@ -487,6 +487,33 @@ final class PaneActivityInvariantTests: XCTestCase {
         XCTAssertTrue(monitor.isClaudeStopped)
     }
 
+    func testBackToBackStopsWithSubagentThenEmptyListsStopsPaneAndFiresOnce() {
+        assertBackToBackStopsEndWithEmptyLists(firstStop: Self.stop(tasks: "[\(Self.task(type: "subagent"))]"))
+    }
+
+    func testBackToBackStopsWithRecurringCronThenEmptyListsStopsPaneAndFiresOnce() {
+        assertBackToBackStopsEndWithEmptyLists(firstStop: Self.stop(crons: "[\(Self.cron(recurring: true))]"))
+    }
+
+    private func assertBackToBackStopsEndWithEmptyLists(
+        firstStop: Data, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let monitor = StatusLineMonitor(paneID: UUID(), harness: .claude)
+        monitor.stopNotificationGracePeriod = 0
+        var callCount = 0
+        monitor.onClaudeStopped = { callCount += 1 }
+
+        monitor.testApplyClaudeActivityPayload(Self.userPromptSubmit)
+        monitor.testApplyClaudeActivityPayload(firstStop)
+        XCTAssertTrue(monitor.isClaudeWorking, file: file, line: line)
+        XCTAssertEqual(callCount, 0, file: file, line: line)
+
+        monitor.testApplyClaudeActivityPayload(Self.stop())
+        XCTAssertTrue(monitor.isClaudeStopped, file: file, line: line)
+        XCTAssertFalse(monitor.isClaudeWorking, file: file, line: line)
+        XCTAssertEqual(callCount, 1, file: file, line: line)
+    }
+
     func testSuppressedStopTracesBackgroundTaskTypesAndCronCount() {
         let monitor = StatusLineMonitor(paneID: UUID(), harness: .claude)
         monitor.testApplyClaudeActivityPayload(Self.userPromptSubmit)
@@ -540,6 +567,12 @@ final class PaneActivityInvariantTests: XCTestCase {
         monitor.testApplyClaudeActivityPayload(Data(payload.utf8))
 
         XCTAssertEqual(Invariant.claudeStopBackgroundState.id, "claude.stop.background_state", file: file, line: line)
+        XCTAssertEqual(Invariant.claudeStopBackgroundState.severity, .warning, file: file, line: line)
+        XCTAssertEqual(
+            Invariant.claudeStopBackgroundState.traceEventName,
+            "statusline.claude.stop_background_state_missing",
+            file: file, line: line
+        )
         XCTAssertEqual(
             InvariantReporter.shared.violationsForTesting.map(\.invariantID),
             ["claude.stop.background_state"],
