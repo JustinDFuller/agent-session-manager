@@ -606,6 +606,36 @@ final class PaneActivityInvariantTests: XCTestCase {
             TracingService.shared.recordedEventsForTesting.allSatisfy { $0.name != "statusline.attention.suppressed" })
     }
 
+    func testIdlePromptDroppedWhileWorkingDoesNotSwallowIdenticalIdlePromptAfterStop() {
+        let monitor = makeWorkingMonitorWithRunningSubagent()
+        var events: [PaneAttentionEvent] = []
+        monitor.onClaudeHookAttention = { events.append($0) }
+
+        monitor.testApplyClaudeAttentionPayload(Self.idlePromptNotification)
+        XCTAssertTrue(events.isEmpty)
+
+        monitor.testApplyClaudeActivityPayload(Self.stop())
+        XCTAssertTrue(monitor.isClaudeStopped)
+        monitor.testApplyClaudeAttentionPayload(Self.idlePromptNotification)
+
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events.first?.source, .claudeNotification)
+    }
+
+    func testIdenticalConsecutivePermissionPromptsProduceOneAttentionEvent() {
+        let monitor = StatusLineMonitor(paneID: UUID(), harness: .claude)
+        var events: [PaneAttentionEvent] = []
+        monitor.onClaudeHookAttention = { events.append($0) }
+        let payload = Data(
+            #"{"hook_event_name":"Notification","notification_type":"permission_prompt","message":"Claude needs your permission"}"#
+                .utf8)
+
+        monitor.testApplyClaudeAttentionPayload(payload)
+        monitor.testApplyClaudeAttentionPayload(payload)
+
+        XCTAssertEqual(events.count, 1)
+    }
+
     func testPermissionPromptWhileWorkingStillProducesAttentionEvent() {
         let monitor = makeWorkingMonitorWithRunningSubagent()
         var events: [PaneAttentionEvent] = []

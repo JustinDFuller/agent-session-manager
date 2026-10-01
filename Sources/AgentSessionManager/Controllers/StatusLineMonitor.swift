@@ -312,11 +312,6 @@ final class StatusLineMonitor {
                         let data = try? Data(contentsOf: URL(filePath: attentionSignalFilePath)),
                         !data.isEmpty
                     else { return }
-                    var hasher = Hasher()
-                    hasher.combine(data)
-                    let fingerprint = hasher.finalize()
-                    guard fingerprint != lastAttentionPayloadFingerprint else { return }
-                    lastAttentionPayloadFingerprint = fingerprint
                     applyClaudeAttentionPayload(data)
                 }
                 attentionDebounceWork = work
@@ -746,6 +741,11 @@ final class StatusLineMonitor {
                 ])
             return
         }
+        var hasher = Hasher()
+        hasher.combine(data)
+        let fingerprint = hasher.finalize()
+        guard fingerprint != lastAttentionPayloadFingerprint else { return }
+        lastAttentionPayloadFingerprint = fingerprint
         guard let event = PaneAttentionEvent.claudeHook(data) else { return }
         TracingService.shared.record(
             "statusline.attention.received",
