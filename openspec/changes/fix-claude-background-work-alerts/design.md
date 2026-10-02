@@ -42,4 +42,4 @@ The `Stop` trace decision becomes `suppressed_background_work` with `background_
 
 - If the user cancels background work by hand and Claude does not resume, the pane stays working until the next prompt and no finished alert arrives. Accepted and documented.
 - A long-lived recurring schedule keeps the pane working indefinitely, by design.
-- The behavior depends on Claude Code v2.1.284 or later reporting the lists. Older versions raise the invariant warning and behave as before.
+- The behavior depends on Claude Code v2.1.145 or later reporting the lists. Older versions raise the invariant warning and behave as before.

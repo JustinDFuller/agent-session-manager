@@ -16,8 +16,10 @@ A tab aggregates its panes: it shows `waiting` if any pane is waiting, `working`
 
 A pane is `working` when:
 - `processState == .running`, **and**
-- Claude Code's `UserPromptSubmit` lifecycle hook has fired without a subsequent `Stop` or `StopFailure`, **or**
+- Claude Code's `UserPromptSubmit` lifecycle hook has fired without a subsequent `Stop` or `StopFailure`, **or** the latest `Stop` reported pending background work (a non-empty `background_tasks` or `session_crons` list, including a repeating `/loop` schedule), **or**
 - OpenCode's database-derived session status state is `busy` or `retry`
+
+A pane that is only waiting on background work keeps the working indicator and sends no finished notification; it becomes idle on the `Stop` that reports both lists empty. Background work cancelled by hand without Claude resuming leaves the pane working until the next prompt. See [notifications.md]({{ '/documentation/features/notifications/' | relative_url }}).
 
 Codex and shell panes remain idle unless an explicit attention notification exists. Cursor uses its `beforeSubmitPrompt` and `stop` hooks for explicit working-state detection. PTY reads are intentionally not used for progress detection because terminal output includes echoed keystrokes and other noise that does not mean an agent is working.
 

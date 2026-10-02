@@ -104,6 +104,14 @@ struct Invariant: Identifiable, Hashable, Sendable {
         traceEventName: "app.launch.auxiliary_window_opened"
     )
 
+    static let claudeStopBackgroundState = Invariant(
+        id: "claude.stop.background_state",
+        integration: "Claude",
+        severity: .warning,
+        description: "A Claude Stop event must report both background_tasks and session_crons.",
+        traceEventName: "statusline.claude.stop_background_state_missing"
+    )
+
     static let githubCLIAvailable = Invariant(
         id: "github.cli.available",
         integration: "GitHub CLI",
