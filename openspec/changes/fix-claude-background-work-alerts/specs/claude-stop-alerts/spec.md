@@ -6,7 +6,7 @@ Claude panes alert the user when Claude is finished, and stay quiet while Claude
 
 ### Requirement: A Stop with pending background work is not finished
 
-When a Claude pane receives a `Stop` event whose `background_tasks` list has any entry, or whose `session_crons` list has any entry, the pane MUST remain in the working state and the app MUST NOT send a "finished" alert. This applies to every background task type and to recurring and non-recurring session crons alike.
+When a Claude pane receives a `Stop` event whose `background_tasks` and `session_crons` lists are both present and either list has any entry, the pane MUST remain in the working state and the app MUST NOT send a "finished" alert. This applies to every background task type and to recurring and non-recurring session crons alike.
 
 #### Scenario: Background agent still running
 
@@ -47,9 +47,9 @@ When a Claude pane receives a `Stop` event whose `background_tasks` and `session
 - **WHEN** a Claude pane receives a `Stop` with a running background agent, then a `UserPromptSubmit` as Claude resumes, then a `Stop` with both lists empty
 - **THEN** exactly one finished alert is sent, after the final `Stop`
 
-### Requirement: The idle notification is withheld while the pane is working
+### Requirement: Idle notifications are withheld only for confirmed background work
 
-The app MUST NOT show an alert or banner for a Claude `Notification` event with `notification_type` `idle_prompt` while the pane is in the working state, including while it waits on background work. While the pane is stopped, the app MUST handle `idle_prompt` as it does without this capability. Other notification types, including permission prompts, questions, and plan approvals, MUST continue to alert regardless of pane state.
+The app MUST NOT show an alert or banner for `idle_prompt` while the latest `Stop` report confirms pending background work. This confirmation MUST survive resumed prompts and MUST be replaced by the next `Stop` report or cleared by `StopFailure` or monitor teardown. With no confirmed pending work, an idle notification MUST recover a working pane to stopped, cancel any delayed completion, and forward the idle attention event without generating an additional finished alert. Other notification types and permission requests MUST continue to alert regardless of pane state.
 
 #### Scenario: Idle notification while waiting on background work
 
@@ -66,18 +66,52 @@ The app MUST NOT show an alert or banner for a Claude `Notification` event with 
 - **WHEN** a Claude pane is working and Claude Code sends a permission prompt notification
 - **THEN** the alert is produced
 
+#### Scenario: Interrupted foreground turn recovers on idle
+
+- **WHEN** a prompt starts a working turn with no confirmed background work, the user interrupts it without a `Stop`, and Claude sends `idle_prompt`
+- **THEN** the pane becomes stopped and one idle attention event is forwarded, without a finished alert
+
+#### Scenario: Resumed foreground turn retains pending-work confirmation
+
+- **WHEN** a complete `Stop` reports pending background work, a new prompt starts, and `idle_prompt` arrives before a replacement report
+- **THEN** no idle alert is produced
+
+### Requirement: Questions and plan approvals request attention
+
+The app MUST recognize `PreToolUse` for `AskUserQuestion` and `ExitPlanMode` and produce question and plan approval attention events regardless of pane state or pending background work. Unrelated tools MUST NOT produce attention. The existing identical-payload deduplication MUST remain in effect.
+
+#### Scenario: Question while background work is pending
+
+- **WHEN** pending background work is confirmed and `PreToolUse` names `AskUserQuestion`
+- **THEN** question attention is produced
+
+#### Scenario: Plan approval while background work is pending
+
+- **WHEN** pending background work is confirmed and `PreToolUse` names `ExitPlanMode`
+- **THEN** plan approval attention is produced
+
 ### Requirement: A Stop without a background-work report is surfaced
 
-When a Claude `Stop` event lacks either the `background_tasks` list or the `session_crons` list, the app MUST record a warning invariant named `claude.stop.background_state` and MUST treat the turn as finished.
+When a Claude `Stop` event lacks either the `background_tasks` list or the `session_crons` list, the app MUST record a warning invariant named `claude.stop.background_state` and MUST clear prior pending-work confirmation and treat the active turn as finished, even if the remaining list contains pending work.
 
 #### Scenario: Older Claude Code without the lists
 
 - **WHEN** a Claude pane receives a `Stop` event that does not include `background_tasks` or `session_crons`
 - **THEN** the `claude.stop.background_state` warning is recorded, the pane becomes stopped, and the finished alert is sent after the existing grace period
 
+#### Scenario: Missing tasks with a pending cron
+
+- **WHEN** `background_tasks` is missing and `session_crons` is nonempty
+- **THEN** the warning is recorded, the active turn becomes stopped, and the finished alert fires after the grace period
+
+#### Scenario: Missing crons with a running task
+
+- **WHEN** `session_crons` is missing and `background_tasks` is nonempty
+- **THEN** the warning is recorded, the active turn becomes stopped, and the finished alert fires after the grace period
+
 ### Requirement: Decisions are traceable
 
-For each Claude `Stop`, the trace MUST record whether the alert was suppressed for background work, including the background task types and the session cron count, or fired. Each `idle_prompt` dropped because the pane is working MUST be traced with the reason `pane_working`.
+For each Claude `Stop`, the trace MUST record whether the alert was suppressed for background work, including the background task types and the session cron count, or fired. Each suppressed idle notification MUST be traced with reason `background_work_pending`. Idle recovery MUST record `statusline.attention.recovered` with reason `idle_without_background_work` and a pane lifecycle transition, with pane and tab context.
 
 #### Scenario: Suppressed Stop
 
@@ -86,5 +120,5 @@ For each Claude `Stop`, the trace MUST record whether the alert was suppressed f
 
 #### Scenario: Dropped idle notification
 
-- **WHEN** an `idle_prompt` is dropped because the pane is working
-- **THEN** the trace records a `statusline.attention.suppressed` event with reason `pane_working`
+- **WHEN** an `idle_prompt` is dropped because pending background work is confirmed
+- **THEN** the trace records a `statusline.attention.suppressed` event with reason `background_work_pending`

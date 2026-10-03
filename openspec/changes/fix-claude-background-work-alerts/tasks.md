@@ -1,14 +1,16 @@
 ## 1. Background-work detection on Stop
 
-- [ ] 1.1 Pass `background_tasks` and `session_crons` through the Claude hook log (keeping only `id`, `type`, `status` for tasks and `id`, `recurring` for crons), log the notification type as `notification_type`, remove the `PreToolUse` `Task|Agent` and `SubagentStop` hook registrations, and decode the new fields; verify with a test that runs the generated hook script on a real-shaped `Stop` payload and a hook settings test for the removed hooks.
-- [ ] 1.2 Replace the background agent counter with the reported lists: a `Stop` with any background task or session cron keeps the pane working and sends no alert, and a `Stop` with both lists empty stops the pane and alerts after the existing grace period; verify with tests for each of `subagent`, `shell`, `monitor`, a session cron, empty lists, and a prompt → pending `Stop` → `UserPromptSubmit` → empty `Stop` sequence that alerts exactly once.
-- [ ] 1.3 Add the `claude.stop.background_state` warning invariant and report it when a `Stop` lacks either list, treating the turn as finished; verify with a test that the invariant is recorded and the alert fires.
+- [ ] 1.1 Pass filtered `background_tasks` and `session_crons` through the hook log, record `notification_type`, remove only the counter's `Task|Agent` and `SubagentStop` registrations, and decode the new fields; verify the generated script and remaining attention matcher.
+- [ ] 1.2 Replace the counter with complete reported lists and independent pending-work confirmation retained across resumed prompts; test supported task types, persistent shells, recurring/nonrecurring crons, empty lists, StopFailure, teardown, and exactly-once completion.
+- [ ] 1.3 Report `claude.stop.background_state` when either list is absent, clear pending-work confirmation, and finish the active turn even if the remaining list is nonempty; test either/both missing lists and empty/nonempty remaining lists.
 
-## 2. Idle alert
+## 2. Attention and idle recovery
 
-- [ ] 2.1 Move the attention watcher body into `applyClaudeAttentionPayload(_:)` with a test hook, drop `idle_prompt` notifications while the pane is working, and trace the drop as `statusline.attention.suppressed` with reason `pane_working`; verify an `idle_prompt` produces no attention event while working and one after the pane has stopped.
+- [ ] 2.1 Suppress idle attention only for confirmed pending background work; otherwise recover a working pane to stopped and forward one idle event without a finished alert. Preserve deduplication, cancel delayed completion on recovery, and verify suppression/recovery traces with pane/tab context.
+- [ ] 2.2 Recognize `PreToolUse` `AskUserQuestion` and `ExitPlanMode` regardless of lifecycle or pending work, preserve the registration and deduplication, and test distinct sources/reasons and unrelated tools.
 
 ## 3. Documentation and validation
 
-- [ ] 3.1 Update the notifications, tab and pane activity indicator, tracing, and agent harness feature matrix documentation for the new behavior; verify with `make docs-check` and `scripts/test-release-publishing.sh`.
-- [ ] 3.2 Run the unit test suite, `make no-code-comments`, `make no-fixed-width-prose`, `openspec validate fix-claude-background-work-alerts --type change --strict`, and `git diff --check`; verify all pass.
+- [ ] 3.1 Update notifications, activity indicators, tracing, the harness matrix, canonical invariants, and the status-line invariant table; document v2.1.145 field introduction separately from tested versions, persistent servers, and stale-report cancellation limits. Verify `make docs-check` and `scripts/test-release-publishing.sh`.
+- [ ] 3.2 Run build, unit tests, format, lint, repository policies, strict change validation, and whitespace checks; record commands and tested commit SHAs in QA evidence.
+- [ ] 3.3 Add and run real-flow Dev UI coverage with actual Claude panes for pending background work, question/plan prompts, and Esc-to-idle recovery; run `make test-ui-dev` and capture real screenshots. Record authentication/environment blockers explicitly and leave this task incomplete if validation is blocked.
