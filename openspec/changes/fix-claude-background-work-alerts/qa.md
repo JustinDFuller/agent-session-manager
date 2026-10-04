@@ -2,7 +2,7 @@
 
 ## Reviewed implementation and validation boundary
 
-Implementation source, tests, and feature documentation are committed at `69c3bddd7094d0c197fbaf19413555cfba4d6d91`. The subsequent QA commit changes only this record and task completion. Validation ran against the identical source tree on 2026-10-03; the owned Dev window was inspected on 2026-10-04. Proposal corrections belong to `f07fdffee2b70996004658f3df45d6911b612c97` in #373. The isolated checkout preserves the unrelated dirty main checkout.
+Initial implementation validation and the owned Dev run used `69c3bddd7094d0c197fbaf19413555cfba4d6d91`. The final source/test revision is `55a2d065e8ade66d10c7ef5b3f1453e304030d89`, which distinguishes hook scheduling from notification delivery. Build, the full unit suite, focused activity tests, formatting, lint, policies, docs, strict change validation, and whitespace checks were repeated for that revision on 2026-10-04 and passed. The release-publishing check passed on the initial revision; release behavior is unchanged. Subsequent QA commits change only this record and task completion. Proposal corrections belong to `f07fdffee2b70996004658f3df45d6911b612c97` and `5f223ba2b2e9a93e9b075d1786fcad2ce102e4d6` in #373. The isolated checkout preserves the unrelated dirty main checkout.
 
 | Command | Result |
 | --- | --- |
@@ -18,7 +18,7 @@ Implementation source, tests, and feature documentation are committed at `69c3bd
 | `openspec validate fix-claude-background-work-alerts --strict --no-interactive` | Passed. |
 | `git diff --cached --check` | Passed. |
 
-The regression matrix covers either missing list with an empty/nonempty remaining list, both missing, null fields, complete empty lists, supported and future pending task types, recurring/nonrecurring crons, exactly-once completion, and StopFailure/teardown. Question/plan attention is tested while unknown, working, stopped, and waiting on background work. Direct `Stop(empty) → idle_prompt` and `Stop(empty) → Stop(pending)` during the completion grace period cancel the queued finished alert. Repeated idle events deduplicate within one turn and recover again after a new prompt.
+The regression matrix covers either missing list with an empty/nonempty remaining list, both missing, null fields, complete empty lists, supported and future pending task types, recurring/nonrecurring crons, exactly-once completion, and StopFailure/teardown. Question/plan attention is tested while unknown, working, stopped, and waiting on background work. Direct `Stop(empty) → idle_prompt` and `Stop(empty) → Stop(pending)` during the completion grace period cancel the queued finished alert. Repeated idle events deduplicate within one turn and recover again after a new prompt. The final trace-contract regressions confirm `scheduled` for a completion candidate even when the resumed prompt cancels delivery, and `ignored_not_working` for a duplicate Stop; they assert callback counts independently.
 
 ## Real-flow Dev validation: incomplete
 
