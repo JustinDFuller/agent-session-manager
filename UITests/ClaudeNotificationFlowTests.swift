@@ -93,7 +93,13 @@ final class ClaudeNotificationFlowTests: BaseTestCase {
         try launchBackgroundSleep()
         waitFor(
             app.descendants(matching: .any).matching(identifier: "pane-activity-working-background-alert").firstMatch)
-        XCTAssertFalse(app.buttons["notification-row-background-alert"].exists)
+        let unexpectedCompletion = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true"),
+            object: app.buttons["notification-row-background-alert"])
+        unexpectedCompletion.isInverted = true
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [unexpectedCompletion], timeout: 3), .completed,
+            "Pending work must keep notifications absent beyond the 1.8-second completion grace")
         screenshot("claude-background-work")
         _ = try waitForLiveRecord(at: hookLogURL, timeout: 120) { record in
             record["hook_event_name"] as? String == "Stop"

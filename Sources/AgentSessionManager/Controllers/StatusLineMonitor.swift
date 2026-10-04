@@ -707,7 +707,12 @@ final class StatusLineMonitor {
                     payload,
                     decision: "suppressed_background_work",
                     extraAttributes: [
-                        "background_task_types": backgroundTasks.map { $0.type ?? "unknown" }.joined(separator: ","),
+                        "background_task_types": backgroundTasks.prefix(16).map {
+                            var bytes = Array(($0.type ?? "unknown").utf8.prefix(64))
+                            while String(bytes: bytes, encoding: .utf8) == nil { bytes.removeLast() }
+                            return String(decoding: bytes, as: UTF8.self)
+                        }.joined(separator: ","),
+                        "background_task_count": "\(backgroundTasks.count)",
                         "session_cron_count": "\(sessionCrons.count)",
                     ])
                 return

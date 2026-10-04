@@ -533,6 +533,24 @@ final class PaneActivityInvariantTests: XCTestCase {
         XCTAssertTrue(types.contains("subagent"))
         XCTAssertTrue(types.contains("shell"))
         XCTAssertEqual(event?.attributes["session_cron_count"], "1")
+        XCTAssertEqual(event?.attributes["background_task_count"], "2")
+    }
+
+    func testSuppressedStopBoundsTaskTypeTelemetryAndRecordsTotalCount() {
+        let monitor = StatusLineMonitor(paneID: UUID(), harness: .claude)
+        monitor.testApplyClaudeActivityPayload(Self.userPromptSubmit)
+        let tasks = (0..<100).map { index in
+            Self.task(type: "type-\(index)-" + String(repeating: "e\u{301}", count: 300))
+        }.joined(separator: ",")
+        monitor.testApplyClaudeActivityPayload(Self.stop(tasks: "[\(tasks)]"))
+
+        let event = TracingService.shared.recordedEventsForTesting.last { $0.name == "statusline.hook.event" }
+        let types = (event?.attributes["background_task_types"] ?? "").split(separator: ",")
+        XCTAssertEqual(types.count, 16)
+        XCTAssertTrue(types.allSatisfy { $0.utf8.count <= 64 })
+        XCTAssertTrue(types.allSatisfy { !$0.contains("\u{FFFD}") })
+        XCTAssertEqual(event?.attributes["background_task_count"], "100")
+        XCTAssertTrue(monitor.isClaudeWorking)
     }
 
     func testStopTraceDecisionsAcrossSuppressedThenScheduledSequence() {
