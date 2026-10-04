@@ -80,7 +80,7 @@ The app MUST NOT show an alert or banner for `idle_prompt` while the latest `Sto
 
 ### Requirement: Questions and plan approvals request attention
 
-The app MUST recognize `PreToolUse` for `AskUserQuestion` and `ExitPlanMode` and produce question and plan approval attention events regardless of pane state or pending background work. Unrelated tools MUST NOT produce attention. The existing identical-payload deduplication MUST remain in effect.
+The app MUST recognize `PreToolUse` for `AskUserQuestion` and `ExitPlanMode` and produce question and plan approval attention events regardless of pane state or pending background work. Unrelated tools MUST NOT produce attention. The existing identical-payload deduplication MUST remain in effect. Attention transport MUST queue complete events so a later idle event cannot overwrite a question or plan event within the watcher debounce window.
 
 #### Scenario: Question while background work is pending
 
@@ -91,6 +91,11 @@ The app MUST recognize `PreToolUse` for `AskUserQuestion` and `ExitPlanMode` and
 
 - **WHEN** pending background work is confirmed and `PreToolUse` names `ExitPlanMode`
 - **THEN** plan approval attention is produced
+
+#### Scenario: Attention burst cannot erase a question
+
+- **WHEN** pending background work is confirmed and question attention is immediately followed by idle attention before the watcher reads
+- **THEN** the question is forwarded once and only the idle event is suppressed
 
 ### Requirement: A Stop without a background-work report is surfaced
 
@@ -134,3 +139,12 @@ For each decoded Claude `Stop`, the trace MUST record its processing decision: `
 
 - **WHEN** an active turn receives an empty Stop and a resumed prompt cancels its completion during the grace period
 - **THEN** the Stop trace records `scheduled`, and no finished-alert callback is delivered
+
+### Requirement: Hook records are bounded without losing pending state
+
+The app-owned hook script MUST bound logged task and cron entries and scalar field lengths, retain full list and omitted-entry counts, and exclude task commands/descriptions and cron prompts. The monitor MUST classify pending work using retained full counts when available; older records without those counts continue using the lists. Truncation MUST NOT make a pending report appear complete.
+
+#### Scenario: Large reported lists retain their pending meaning
+
+- **WHEN** a complete Stop report exceeds the hook-log sample limits
+- **THEN** bounded records and full counts are recorded, and the pane stays working without a finished alert
