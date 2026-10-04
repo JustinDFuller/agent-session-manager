@@ -113,7 +113,7 @@ When a Claude `Stop` event lacks either the `background_tasks` list or the `sess
 
 ### Requirement: Decisions are traceable
 
-For each Claude `Stop`, the trace MUST record whether the alert was suppressed for background work, including the background task types and the session cron count, or fired. Each suppressed idle notification MUST be traced with reason `background_work_pending`. Idle recovery MUST record `statusline.attention.recovered` with reason `idle_without_background_work` and a pane lifecycle transition, with pane and tab context.
+For each decoded Claude `Stop`, the trace MUST record its processing decision: `suppressed_background_work` with background task types and session cron count for a complete pending report, `ignored_not_working` when no active turn finishes, or `scheduled` when completion is queued for the grace period. These decisions MUST NOT claim that a notification was delivered: a resumed prompt, later pending Stop, forwarded idle event, or monitor teardown can cancel scheduled completion. Each suppressed idle notification MUST be traced with reason `background_work_pending`. Idle recovery MUST record `statusline.attention.recovered` with reason `idle_without_background_work` and a pane lifecycle transition, with pane and tab context.
 
 #### Scenario: Suppressed Stop
 
@@ -124,3 +124,13 @@ For each Claude `Stop`, the trace MUST record whether the alert was suppressed f
 
 - **WHEN** an `idle_prompt` is dropped because pending background work is confirmed
 - **THEN** the trace records a `statusline.attention.suppressed` event with reason `background_work_pending`
+
+#### Scenario: Duplicate Stop is ignored
+
+- **WHEN** an empty Stop arrives after the active turn has already transitioned to stopped
+- **THEN** its hook trace records `ignored_not_working` and does not claim an alert fired
+
+#### Scenario: Completion candidate is canceled during grace
+
+- **WHEN** an active turn receives an empty Stop and a resumed prompt cancels its completion during the grace period
+- **THEN** the Stop trace records `scheduled`, and no finished-alert callback is delivered
