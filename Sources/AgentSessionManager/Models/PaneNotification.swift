@@ -16,6 +16,8 @@ struct PaneAttentionEvent: Equatable {
         case osc777
         case claudeNotification = "claude_notification"
         case claudePermissionRequest = "claude_permission_request"
+        case claudeQuestion = "claude_question"
+        case claudePlanApproval = "claude_plan_approval"
         case claudeStop = "claude_stop"
         case cursorStop = "cursor_stop"
         case opencodeStop = "opencode_stop"
@@ -64,6 +66,15 @@ struct PaneAttentionEvent: Equatable {
                 source: .claudeNotification,
                 reason: string(payload["message"]) ?? string(payload["title"])
             )
+        case "PreToolUse":
+            switch payload["tool_name"] as? String {
+            case "AskUserQuestion":
+                return PaneAttentionEvent(source: .claudeQuestion, reason: "Claude has a question")
+            case "ExitPlanMode":
+                return PaneAttentionEvent(source: .claudePlanApproval, reason: "Claude needs plan approval")
+            default:
+                return nil
+            }
         case "PermissionRequest":
             let toolName = string(payload["tool_name"])
             return PaneAttentionEvent(

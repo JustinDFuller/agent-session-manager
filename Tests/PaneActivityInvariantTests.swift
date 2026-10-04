@@ -551,6 +551,26 @@ final class PaneActivityInvariantTests: XCTestCase {
             payload: #"{"hook_event_name":"Stop","background_tasks":[]}"#)
     }
 
+    func testStopMissingTasksWithPendingCronStillFinishes() {
+        assertMissingListReportsInvariantAndStillStops(
+            payload: #"{"hook_event_name":"Stop","session_crons":[{"id":"cron","recurring":true}]}"#)
+    }
+
+    func testStopMissingCronsWithRunningTaskStillFinishes() {
+        assertMissingListReportsInvariantAndStillStops(
+            payload: #"{"hook_event_name":"Stop","background_tasks":[{"id":"task","type":"shell","status":"running"}]}"#
+        )
+    }
+
+    func testStopMissingBothListsStillFinishes() {
+        assertMissingListReportsInvariantAndStillStops(payload: #"{"hook_event_name":"Stop"}"#)
+    }
+
+    func testStopNullListWithRunningTaskStillFinishes() {
+        assertMissingListReportsInvariantAndStillStops(
+            payload: #"{"hook_event_name":"Stop","background_tasks":[{"type":"subagent"}],"session_crons":null}"#)
+    }
+
     private func assertMissingListReportsInvariantAndStillStops(
         payload: String, file: StaticString = #filePath, line: UInt = #line
     ) {
@@ -617,7 +637,7 @@ final class PaneActivityInvariantTests: XCTestCase {
             $0.name == "statusline.attention.suppressed"
         }
         XCTAssertEqual(suppressed.count, 1)
-        XCTAssertEqual(suppressed.first?.attributes["reason"], "pane_working")
+        XCTAssertEqual(suppressed.first?.attributes["reason"], "background_work_pending")
     }
 
     func testIdlePromptAfterPaneStoppedProducesOneAttentionEvent() {
@@ -679,6 +699,179 @@ final class PaneActivityInvariantTests: XCTestCase {
 
         XCTAssertEqual(events.count, 1)
         XCTAssertEqual(events.first?.reason, "Claude needs your permission")
+    }
+
+    func testEveryOtherTaskTypeAndUnknownTypeKeepsPaneWorking() {
+        for type in ["workflow", "teammate", "cloud session", "MCP task", "future_task"] {
+            assertStopKeepsPaneWorking(tasks: "[\(Self.task(type: type))]")
+        }
+    }
+
+    func testIdleRecoversInterruptedForegroundTurnWithoutFinishedAlert() {
+        let paneID = UUID()
+        let tabID = UUID()
+        let monitor = StatusLineMonitor(
+            paneID: paneID, paneName: "worker", harness: .claude, tabID: tabID, tabName: "project")
+        var finishedCount = 0
+        var events: [PaneAttentionEvent] = []
+        monitor.onClaudeStopped = { finishedCount += 1 }
+        monitor.onClaudeHookAttention = { events.append($0) }
+        monitor.testApplyClaudeActivityPayload(Self.userPromptSubmit)
+        monitor.testApplyClaudeAttentionPayload(Self.idlePromptNotification)
+        monitor.testApplyClaudeAttentionPayload(Self.idlePromptNotification)
+
+        XCTAssertTrue(monitor.isClaudeStopped)
+        XCTAssertEqual(finishedCount, 0)
+        XCTAssertEqual(events.count, 1)
+        let recovery = TracingService.shared.recordedEventsForTesting.filter {
+            $0.name == "statusline.attention.recovered"
+        }
+        XCTAssertEqual(recovery.count, 1)
+        XCTAssertEqual(recovery.first?.attributes["reason"], "idle_without_background_work")
+        XCTAssertEqual(recovery.first?.attributes["pane.id"], paneID.uuidString)
+        XCTAssertEqual(recovery.first?.attributes["tab.id"], tabID.uuidString)
+        XCTAssertEqual(recovery.first?.attributes["pane.name"], "worker")
+        XCTAssertEqual(recovery.first?.attributes["tab.name"], "project")
+        let transition = TracingService.shared.recordedEventsForTesting.last { $0.name == "pane.activity.changed" }
+        XCTAssertEqual(transition?.attributes["state"], "stopped")
+        XCTAssertEqual(transition?.attributes["source"], "claude_idle_prompt")
+    }
+
+    func testSameIdlePayloadCanRecoverTwoDistinctInterruptedTurns() {
+        let monitor = StatusLineMonitor(paneID: UUID(), harness: .claude)
+        var events: [PaneAttentionEvent] = []
+        monitor.onClaudeHookAttention = { events.append($0) }
+        for _ in 0..<2 {
+            monitor.testApplyClaudeActivityPayload(Self.userPromptSubmit)
+            monitor.testApplyClaudeAttentionPayload(Self.idlePromptNotification)
+            monitor.testApplyClaudeAttentionPayload(Self.idlePromptNotification)
+            XCTAssertTrue(monitor.isClaudeStopped)
+        }
+        XCTAssertEqual(events.count, 2)
+    }
+
+    func testIdleAttentionCancelsCompletionDuringGrace() {
+        let monitor = StatusLineMonitor(paneID: UUID(), harness: .claude)
+        monitor.stopNotificationGracePeriod = 0.05
+        var finishedCount = 0
+        var events: [PaneAttentionEvent] = []
+        monitor.onClaudeStopped = { finishedCount += 1 }
+        monitor.onClaudeHookAttention = { events.append($0) }
+        monitor.testApplyClaudeActivityPayload(Self.userPromptSubmit)
+        monitor.testApplyClaudeActivityPayload(Self.emptyStop)
+        monitor.testApplyClaudeAttentionPayload(Self.idlePromptNotification)
+        let elapsed = XCTestExpectation(description: "completion grace period elapsed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { elapsed.fulfill() }
+        wait(for: [elapsed], timeout: 1)
+        XCTAssertTrue(monitor.isClaudeStopped)
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(finishedCount, 0)
+    }
+
+    func testPendingStopDuringCompletionGraceCancelsQueuedAlertAndReturnsToWorking() {
+        let monitor = StatusLineMonitor(paneID: UUID(), harness: .claude)
+        monitor.stopNotificationGracePeriod = 0.05
+        var finishedCount = 0
+        monitor.onClaudeStopped = { finishedCount += 1 }
+        monitor.testApplyClaudeActivityPayload(Self.userPromptSubmit)
+        monitor.testApplyClaudeActivityPayload(Self.emptyStop)
+        monitor.testApplyClaudeActivityPayload(Self.stop(tasks: "[\(Self.task(type: "shell"))]"))
+        XCTAssertTrue(monitor.isClaudeWorking)
+        let elapsed = XCTestExpectation(description: "superseded completion grace period elapsed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { elapsed.fulfill() }
+        wait(for: [elapsed], timeout: 1)
+        XCTAssertEqual(finishedCount, 0)
+        monitor.testApplyClaudeActivityPayload(Self.emptyStop)
+        let completion = XCTestExpectation(description: "final completion grace elapsed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { completion.fulfill() }
+        wait(for: [completion], timeout: 1)
+        XCTAssertEqual(finishedCount, 1)
+    }
+
+    func testIdleRemainsSuppressedAcrossResumedPromptWithConfirmedPendingWork() {
+        let monitor = makeWorkingMonitorWithRunningSubagent()
+        var events: [PaneAttentionEvent] = []
+        monitor.onClaudeHookAttention = { events.append($0) }
+        monitor.testApplyClaudeActivityPayload(Self.userPromptSubmit)
+        monitor.testApplyClaudeAttentionPayload(Self.idlePromptNotification)
+        XCTAssertTrue(monitor.isClaudeWorking)
+        XCTAssertTrue(events.isEmpty)
+    }
+
+    func testIncompleteReportClearsPriorBackgroundConfirmation() {
+        InvariantReporter.shared.enableTestCapture()
+        addTeardownBlock { InvariantReporter.shared.resetForTesting() }
+        let monitor = makeWorkingMonitorWithRunningSubagent()
+        var events: [PaneAttentionEvent] = []
+        monitor.onClaudeHookAttention = { events.append($0) }
+        monitor.testApplyClaudeActivityPayload(
+            Data(#"{"hook_event_name":"Stop","session_crons":[{"recurring":true}]}"#.utf8))
+        monitor.testApplyClaudeActivityPayload(Self.userPromptSubmit)
+        monitor.testApplyClaudeAttentionPayload(Self.idlePromptNotification)
+        XCTAssertTrue(monitor.isClaudeStopped)
+        XCTAssertEqual(events.count, 1)
+    }
+
+    func testStopFailureClearsBackgroundConfirmationEvenWithPendingFields() {
+        let monitor = makeWorkingMonitorWithRunningSubagent()
+        var events: [PaneAttentionEvent] = []
+        monitor.onClaudeHookAttention = { events.append($0) }
+        monitor.testApplyClaudeActivityPayload(
+            Data(#"{"hook_event_name":"StopFailure","background_tasks":[{"type":"shell"}],"session_crons":[]}"#.utf8))
+        XCTAssertTrue(monitor.isClaudeStopped)
+        monitor.testApplyClaudeActivityPayload(Self.userPromptSubmit)
+        monitor.testApplyClaudeAttentionPayload(Self.idlePromptNotification)
+        XCTAssertTrue(monitor.isClaudeStopped)
+        XCTAssertEqual(events.count, 1)
+    }
+
+    func testMonitorTeardownClearsBackgroundConfirmation() {
+        let monitor = makeWorkingMonitorWithRunningSubagent()
+        var events: [PaneAttentionEvent] = []
+        monitor.onClaudeHookAttention = { events.append($0) }
+        monitor.stop()
+        monitor.testApplyClaudeActivityPayload(Self.userPromptSubmit)
+        monitor.testApplyClaudeAttentionPayload(Self.idlePromptNotification)
+        XCTAssertTrue(monitor.isClaudeStopped)
+        XCTAssertEqual(events.count, 1)
+    }
+
+    func testQuestionAndPlanAttentionAcrossEveryLifecycleAndBackgroundState() {
+        for tool in ["AskUserQuestion", "ExitPlanMode"] {
+            for state in ["unknown", "working", "stopped", "background"] {
+                let monitor = StatusLineMonitor(paneID: UUID(), harness: .claude)
+                monitor.stopNotificationGracePeriod = 0
+                if state != "unknown" { monitor.testApplyClaudeActivityPayload(Self.userPromptSubmit) }
+                if state == "stopped" { monitor.testApplyClaudeActivityPayload(Self.emptyStop) }
+                if state == "background" {
+                    monitor.testApplyClaudeActivityPayload(Self.stop(tasks: "[\(Self.task(type: "shell"))]"))
+                }
+                var events: [PaneAttentionEvent] = []
+                monitor.onClaudeHookAttention = { events.append($0) }
+                let data = Data(#"{"hook_event_name":"PreToolUse","tool_name":"\#(tool)"}"#.utf8)
+                monitor.testApplyClaudeAttentionPayload(data)
+                monitor.testApplyClaudeAttentionPayload(data)
+                XCTAssertEqual(events.count, 1, "\(tool) in \(state)")
+                XCTAssertEqual(
+                    events.first?.source.rawValue,
+                    tool == "AskUserQuestion" ? "claude_question" : "claude_plan_approval")
+                XCTAssertEqual(
+                    events.first?.reason,
+                    tool == "AskUserQuestion" ? "Claude has a question" : "Claude needs plan approval")
+            }
+        }
+    }
+
+    func testUnrelatedPreToolUseDoesNotProduceAttention() {
+        let monitor = makeWorkingMonitorWithRunningSubagent()
+        var events: [PaneAttentionEvent] = []
+        monitor.onClaudeHookAttention = { events.append($0) }
+        for tool in ["Bash", "Agent", "Task", "Read", ""] {
+            monitor.testApplyClaudeAttentionPayload(
+                Data(#"{"hook_event_name":"PreToolUse","tool_name":"\#(tool)"}"#.utf8))
+        }
+        XCTAssertTrue(events.isEmpty)
+        XCTAssertTrue(monitor.isClaudeWorking)
     }
 
     func testClearNotificationEmitsTrace() {

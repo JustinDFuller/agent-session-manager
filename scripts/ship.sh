@@ -133,11 +133,11 @@ step "build-screenshots"
 EXPECTED_NAMES=()
 while IFS= read -r name; do
     [[ -n "$name" ]] && EXPECTED_NAMES+=("$name.png")
-done < <(grep -hoE 'screenshot\("[^"]+"' "$REPO_ROOT"/UITests/Screenshot*.swift | \
+done < <(grep -hoE 'screenshot\("[^"]+"' "$REPO_ROOT"/UITests/Screenshot*.swift "$REPO_ROOT"/UITests/ClaudeNotificationFlowTests.swift | \
          sed 's/screenshot("//;s/"$//' | sort -u)
 
 [[ ${#EXPECTED_NAMES[@]} -gt 0 ]] || \
-    die "build-screenshots: no screenshot(...) calls found in UITests/Screenshot*.swift"
+    die "build-screenshots: no screenshot(...) calls found in the screenshot test classes"
 
 run_xcode_step "screenshots" make -C "$REPO_ROOT" screenshots || \
     die "build-screenshots: xcodebuild failed; see .build/ship-screenshots.log"

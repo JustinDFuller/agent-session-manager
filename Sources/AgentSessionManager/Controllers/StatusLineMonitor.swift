@@ -57,6 +57,7 @@ final class StatusLineMonitor {
     private var attentionDebounceWork: DispatchWorkItem?
     private var lastAttentionPayloadFingerprint: Int?
     private var pendingStopWork: DispatchWorkItem?
+    private var hasConfirmedBackgroundWork = false
     var stopNotificationGracePeriod: TimeInterval = 1.8
     private var agnosticProvider: (any StatusLineDataProvider)?
     private var gitDiffTimer: Timer?
@@ -367,6 +368,7 @@ final class StatusLineMonitor {
                 "tab.name": tabName,
             ])
         stopAttentionWatcher()
+        hasConfirmedBackgroundWork = false
         pendingStopWork?.cancel()
         pendingStopWork = nil
         agnosticProvider?.stop()
@@ -656,6 +658,7 @@ final class StatusLineMonitor {
         guard let payload = try? JSONDecoder().decode(ClaudeActivityPayload.self, from: data) else { return }
         switch payload.hookEventName {
         case "UserPromptSubmit":
+            lastAttentionPayloadFingerprint = nil
             pendingStopWork?.cancel()
             pendingStopWork = nil
             recordHookEventSpan(payload, decision: nil)
@@ -680,13 +683,26 @@ final class StatusLineMonitor {
                         "has_session_crons": "\(payload.sessionCrons != nil)",
                     ])
             }
-            guard claudeLifecycle == .working else {
-                recordHookEventSpan(payload, decision: "ignored_not_working")
-                return
-            }
             let backgroundTasks = payload.backgroundTasks ?? []
             let sessionCrons = payload.sessionCrons ?? []
-            if !backgroundTasks.isEmpty || !sessionCrons.isEmpty {
+            hasConfirmedBackgroundWork =
+                payload.hookEventName == "Stop"
+                && payload.backgroundTasks != nil && payload.sessionCrons != nil
+                && (!backgroundTasks.isEmpty || !sessionCrons.isEmpty)
+            if hasConfirmedBackgroundWork {
+                pendingStopWork?.cancel()
+                pendingStopWork = nil
+                if claudeLifecycle != .working {
+                    claudeLifecycle = .working
+                    TracingService.shared.record(
+                        "pane.activity.changed",
+                        attributes: [
+                            "pane.name": paneName, "pane.id": paneID.uuidString,
+                            "tab.id": tabID.uuidString, "tab.name": tabName,
+                            "state": "working", "source": "claude_hook",
+                            "hook_event": payload.hookEventName,
+                        ])
+                }
                 recordHookEventSpan(
                     payload,
                     decision: "suppressed_background_work",
@@ -694,6 +710,10 @@ final class StatusLineMonitor {
                         "background_task_types": backgroundTasks.map { $0.type ?? "unknown" }.joined(separator: ","),
                         "session_cron_count": "\(sessionCrons.count)",
                     ])
+                return
+            }
+            guard claudeLifecycle == .working else {
+                recordHookEventSpan(payload, decision: "ignored_not_working")
                 return
             }
             claudeLifecycle = .stopped
@@ -717,17 +737,37 @@ final class StatusLineMonitor {
     private func applyClaudeAttentionPayload(_ data: Data) {
         if let payload = try? JSONDecoder().decode(ClaudeActivityPayload.self, from: data),
             payload.hookEventName == "Notification",
-            payload.notificationType == "idle_prompt",
-            claudeLifecycle == .working
+            payload.notificationType == "idle_prompt"
         {
-            TracingService.shared.record(
-                "statusline.attention.suppressed",
-                attributes: [
-                    "pane.name": paneName, "pane.id": paneID.uuidString,
-                    "tab.id": tabID.uuidString, "tab.name": tabName,
-                    "reason": "pane_working",
-                ])
-            return
+            if hasConfirmedBackgroundWork {
+                TracingService.shared.record(
+                    "statusline.attention.suppressed",
+                    attributes: [
+                        "pane.name": paneName, "pane.id": paneID.uuidString,
+                        "tab.id": tabID.uuidString, "tab.name": tabName,
+                        "reason": "background_work_pending",
+                    ])
+                return
+            }
+            pendingStopWork?.cancel()
+            pendingStopWork = nil
+            if claudeLifecycle == .working {
+                claudeLifecycle = .stopped
+                TracingService.shared.record(
+                    "pane.activity.changed",
+                    attributes: [
+                        "pane.name": paneName, "pane.id": paneID.uuidString,
+                        "tab.id": tabID.uuidString, "tab.name": tabName,
+                        "state": "stopped", "source": "claude_idle_prompt",
+                    ])
+                TracingService.shared.record(
+                    "statusline.attention.recovered",
+                    attributes: [
+                        "pane.name": paneName, "pane.id": paneID.uuidString,
+                        "tab.id": tabID.uuidString, "tab.name": tabName,
+                        "reason": "idle_without_background_work",
+                    ])
+            }
         }
         var hasher = Hasher()
         hasher.combine(data)

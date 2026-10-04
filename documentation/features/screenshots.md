@@ -51,7 +51,7 @@ For the macOS 26 visual baseline, the walkthrough prepares the default branch fi
 
     make screenshots
 
-This runs only ScreenshotTests and writes PNGs to screenshots/. The directory is gitignored; the workflow force-adds it when creating a PR.
+This runs `ScreenshotTests` and `ClaudeNotificationFlowTests` and writes PNGs to `screenshots/`. The Claude notification scenarios require an installed, authenticated Claude Code and exercise real background work, question/plan attention, and interrupted-turn recovery. Skipped or failed scenarios are not screenshot evidence; the shipment inventory requires all expected captures. The directory is gitignored; the workflow force-adds it when creating a PR.
 
 ## Multi-worktree safety
 

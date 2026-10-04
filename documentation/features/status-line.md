@@ -119,6 +119,7 @@ When an invariant is violated, the app reports it through `InvariantReporter`, r
 |-------|-------------|---|
 | `statusline.worktree.name` | `statusline.worktree.name_mismatch` | Claude JSON `worktree.name` or `workspace.git_worktree` disagrees with the app's computed worktree name (I1) |
 | `statusline.lines.source` | `statusline.lines.source_mismatch` | Claude JSON `cost.total_lines_added`/`total_lines_removed` disagrees with cached `git diff --shortstat HEAD` (I3) |
+| `claude.stop.background_state` | `statusline.claude.stop_background_state_missing` | A Claude `Stop` omits either background-work list; report a warning and finish the active turn even if the remaining list is nonempty |
 
 Migration-only events remain trace events:
 
