@@ -373,6 +373,11 @@ final class PaneActivityInvariantTests: XCTestCase {
 
         monitor.testApplyClaudeActivityPayload(Self.emptyStop)
         XCTAssertEqual(callCount, 1)
+        XCTAssertEqual(
+            TracingService.shared.recordedEventsForTesting
+                .filter { $0.name == "statusline.hook.event" && $0.attributes["hook_event"] == "Stop" }
+                .map { $0.attributes["decision"] },
+            ["scheduled", "ignored_not_working"])
     }
 
     func testOnClaudeStoppedCallbackNotFiredForLoneStop() {
@@ -412,6 +417,11 @@ final class PaneActivityInvariantTests: XCTestCase {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { expectation.fulfill() }
         wait(for: [expectation], timeout: 1)
         XCTAssertEqual(callCount, 0)
+        XCTAssertEqual(
+            TracingService.shared.recordedEventsForTesting
+                .filter { $0.name == "statusline.hook.event" && $0.attributes["hook_event"] == "Stop" }
+                .map { $0.attributes["decision"] },
+            ["scheduled"])
 
         monitor.testApplyClaudeActivityPayload(Self.emptyStop)
         let realStopExpectation = XCTestExpectation(description: "real stop fires after grace period")
@@ -525,7 +535,7 @@ final class PaneActivityInvariantTests: XCTestCase {
         XCTAssertEqual(event?.attributes["session_cron_count"], "1")
     }
 
-    func testStopTraceDecisionsAcrossSuppressedThenFiredSequence() {
+    func testStopTraceDecisionsAcrossSuppressedThenScheduledSequence() {
         let monitor = StatusLineMonitor(paneID: UUID(), harness: .claude)
         monitor.stopNotificationGracePeriod = 0
 
@@ -538,7 +548,7 @@ final class PaneActivityInvariantTests: XCTestCase {
             TracingService.shared.recordedEventsForTesting
                 .filter { $0.name == "statusline.hook.event" && $0.attributes["hook_event"] == "Stop" }
                 .map { $0.attributes["decision"] },
-            ["suppressed_background_work", "fired"])
+            ["suppressed_background_work", "scheduled"])
     }
 
     func testStopMissingBackgroundTasksReportsInvariantAndStillStops() {

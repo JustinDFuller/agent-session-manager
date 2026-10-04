@@ -725,7 +725,7 @@ final class StatusLineMonitor {
                     "state": "stopped", "source": "claude_hook",
                     "hook_event": payload.hookEventName,
                 ])
-            recordHookEventSpan(payload, decision: "fired")
+            recordHookEventSpan(payload, decision: "scheduled")
             scheduleClaudeStoppedNotification()
         case "Notification":
             recordHookEventSpan(payload, decision: nil)
