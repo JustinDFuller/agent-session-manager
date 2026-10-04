@@ -45,7 +45,7 @@ The attention watcher body moves into `applyClaudeAttentionPayload(_:)`, with th
 
 ### Trace vocabulary
 
-The `Stop` trace decision becomes `suppressed_background_work` with `background_task_types` and `session_cron_count` attributes replacing `outstanding_count`. A complete pending report records `suppressed_background_work` with `background_task_types` and `session_cron_count`. A Stop outside an active turn records `ignored_not_working`; an active finishing Stop records `scheduled`, indicating only a completion candidate queued for the grace period. A resumed prompt, later pending Stop, forwarded idle event, or teardown can cancel that candidate. Hook-processing decisions do not claim notification delivery; exactly-once callback tests validate delivery separately.
+A complete pending report records `suppressed_background_work` with `background_task_types`, `background_task_count`, and `session_cron_count` attributes replacing `outstanding_count`. Record only the first 16 task types, each truncated to at most 64 UTF-8 bytes at a valid character boundary; the full task count preserves report size without unbounded telemetry. These trace bounds do not alter pending-work classification. A Stop outside an active turn records `ignored_not_working`; an active finishing Stop records `scheduled`, indicating only a completion candidate queued for the grace period. A resumed prompt, later pending Stop, forwarded idle event, or teardown can cancel that candidate. Hook-processing decisions do not claim notification delivery; exactly-once callback tests validate delivery separately.
 
 ## Risks / Trade-offs
 

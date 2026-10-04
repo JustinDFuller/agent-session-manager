@@ -35,11 +35,11 @@ When a Claude pane receives a `Stop` event whose `background_tasks` and `session
 
 ### Requirement: A Stop with nothing pending is finished
 
-When a Claude pane receives a `Stop` event whose `background_tasks` and `session_crons` lists are both present and empty, the pane MUST become stopped and the app MUST send the "finished" alert after the existing grace period.
+When a working Claude pane receives a `Stop` event whose `background_tasks` and `session_crons` lists are both present and empty, the pane MUST become stopped and the app MUST send the "finished" alert after the existing grace period.
 
 #### Scenario: Plain prompt with no background work
 
-- **WHEN** a Claude pane receives a `Stop` event with empty `background_tasks` and empty `session_crons`
+- **WHEN** a working Claude pane receives a `Stop` event with empty `background_tasks` and empty `session_crons`
 - **THEN** the pane becomes stopped and the finished alert is sent after the existing grace period
 
 #### Scenario: Background work completes and the session resumes
@@ -96,27 +96,27 @@ When a Claude `Stop` event lacks either the `background_tasks` list or the `sess
 
 #### Scenario: Older Claude Code without the lists
 
-- **WHEN** a Claude pane receives a `Stop` event that does not include `background_tasks` or `session_crons`
+- **WHEN** a working Claude pane receives a `Stop` event that does not include `background_tasks` or `session_crons`
 - **THEN** the `claude.stop.background_state` warning is recorded, the pane becomes stopped, and the finished alert is sent after the existing grace period
 
 #### Scenario: Missing tasks with a pending cron
 
-- **WHEN** `background_tasks` is missing and `session_crons` is nonempty
+- **WHEN** an active working turn reports missing `background_tasks` and nonempty `session_crons`
 - **THEN** the warning is recorded, the active turn becomes stopped, and the finished alert fires after the grace period
 
 #### Scenario: Missing crons with a running task
 
-- **WHEN** `session_crons` is missing and `background_tasks` is nonempty
+- **WHEN** an active working turn reports missing `session_crons` and nonempty `background_tasks`
 - **THEN** the warning is recorded, the active turn becomes stopped, and the finished alert fires after the grace period
 
 ### Requirement: Decisions are traceable
 
-For each decoded Claude `Stop`, the trace MUST record its processing decision: `suppressed_background_work` with background task types and session cron count for a complete pending report, `ignored_not_working` when no active turn finishes, or `scheduled` when completion is queued for the grace period. These decisions MUST NOT claim that a notification was delivered: a resumed prompt, later pending Stop, forwarded idle event, or monitor teardown can cancel scheduled completion. Each suppressed idle notification MUST be traced with reason `background_work_pending`. Idle recovery MUST record `statusline.attention.recovered` with reason `idle_without_background_work` and a pane lifecycle transition, with pane and tab context.
+For each decoded Claude `Stop`, the trace MUST record its processing decision: `suppressed_background_work` with a bounded sample of background task types, the total background task count, and session cron count for a complete pending report, `ignored_not_working` when no active turn finishes, or `scheduled` when completion is queued for the grace period. These decisions MUST NOT claim that a notification was delivered: a resumed prompt, later pending Stop, forwarded idle event, or monitor teardown can cancel scheduled completion. Each suppressed idle notification MUST be traced with reason `background_work_pending`. Idle recovery MUST record `statusline.attention.recovered` with reason `idle_without_background_work` and a pane lifecycle transition, with pane and tab context.
 
 #### Scenario: Suppressed Stop
 
 - **WHEN** a `Stop` is withheld because background work is pending
-- **THEN** the trace records the decision `suppressed_background_work` with the pending task types and session cron count
+- **THEN** the trace records the decision `suppressed_background_work` with at most 16 task types of at most 64 UTF-8 bytes each, the total background task count, and session cron count
 
 #### Scenario: Dropped idle notification
 
