@@ -80,7 +80,7 @@ The app MUST NOT show an alert or banner for `idle_prompt` while the latest `Sto
 
 ### Requirement: Questions and plan approvals request attention
 
-The app MUST recognize `PreToolUse` for `AskUserQuestion` and `ExitPlanMode` and produce question and plan approval attention events regardless of pane state or pending background work. Unrelated tools MUST NOT produce attention. The existing identical-payload deduplication MUST remain in effect. Attention transport MUST queue complete events so a later idle event cannot overwrite a question or plan event within the watcher debounce window.
+The app MUST recognize `PreToolUse` for `AskUserQuestion` and `ExitPlanMode` and produce question and plan approval attention events regardless of pane state or pending background work. Unrelated tools MUST NOT produce attention. The existing identical-payload deduplication MUST remain in effect. Attention transport MUST queue complete events so a later idle event cannot overwrite a question or plan event within the watcher debounce window. The reader MUST compact consumed records under the same exclusive lock as appenders, preserving unread and partial records on the same inode so persistent panes do not retain consumed history indefinitely.
 
 #### Scenario: Question while background work is pending
 
@@ -96,6 +96,11 @@ The app MUST recognize `PreToolUse` for `AskUserQuestion` and `ExitPlanMode` and
 
 - **WHEN** pending background work is confirmed and question attention is immediately followed by idle attention before the watcher reads
 - **THEN** the question is forwarded once and only the idle event is suppressed
+
+#### Scenario: Compaction preserves a partial next event
+
+- **WHEN** the reader drains complete attention events while a following record is incomplete and writers append further records
+- **THEN** consumed records are removed under the shared lock, the partial suffix and subsequent appends remain intact, and every completed event is forwarded once
 
 ### Requirement: A Stop without a background-work report is surfaced
 
