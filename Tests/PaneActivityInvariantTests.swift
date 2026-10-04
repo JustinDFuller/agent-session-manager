@@ -921,4 +921,30 @@ final class PaneActivityInvariantTests: XCTestCase {
         XCTAssertEqual(cleared?.attributes["reason"], "cleared")
         XCTAssertEqual(cleared?.attributes["pane.name"], "test-pane")
     }
+    func testFullCountsKeepPendingEvenWhenSamplesAreEmpty() {
+        let monitor = StatusLineMonitor(paneID: UUID(), harness: .claude)
+        monitor.testApplyClaudeActivityPayload(Self.userPromptSubmit)
+        monitor.testApplyClaudeActivityPayload(
+            Data(
+                #"{"hook_event_name":"Stop","background_tasks":[],"session_crons":[],"background_tasks_total_count":100,"session_crons_total_count":80}"#
+                    .utf8))
+        XCTAssertTrue(monitor.isClaudeWorking)
+        let event = TracingService.shared.recordedEventsForTesting.last { $0.name == "statusline.hook.event" }
+        XCTAssertEqual(event?.attributes["background_task_count"], "100")
+        XCTAssertEqual(event?.attributes["session_cron_count"], "80")
+    }
+
+    func testFullCountsDoNotOverrideIncompleteReportFallback() {
+        let monitor = StatusLineMonitor(paneID: UUID(), harness: .claude)
+        monitor.stopNotificationGracePeriod = 0
+        var count = 0
+        monitor.onClaudeStopped = { count += 1 }
+        monitor.testApplyClaudeActivityPayload(Self.userPromptSubmit)
+        monitor.testApplyClaudeActivityPayload(
+            Data(
+                #"{"hook_event_name":"Stop","background_tasks":[],"background_tasks_total_count":100,"session_crons_total_count":80}"#
+                    .utf8))
+        XCTAssertTrue(monitor.isClaudeStopped)
+        XCTAssertEqual(count, 1)
+    }
 }

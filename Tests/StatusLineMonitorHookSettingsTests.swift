@@ -47,7 +47,7 @@ final class StatusLineMonitorHookSettingsTests: XCTestCase {
         )
         for event in ["PreToolUse", "PermissionRequest", "Notification", "Elicitation"] {
             let entry = try firstEntry(for: event, in: hooks)
-            XCTAssertEqual(try command(in: entry), "cat > '/tmp/attention.json'")
+            XCTAssertEqual(try command(in: entry), "'/tmp/hooklog.py' --attention '/tmp/attention.json'")
         }
     }
 
@@ -61,7 +61,7 @@ final class StatusLineMonitorHookSettingsTests: XCTestCase {
         let preToolUseEntries = try entries(for: "PreToolUse", in: hooks)
         XCTAssertEqual(preToolUseEntries.count, 1)
         XCTAssertEqual(preToolUseEntries.first?["matcher"] as? String, "AskUserQuestion|ExitPlanMode")
-        XCTAssertEqual(try command(in: preToolUseEntries[0]), "cat > '/tmp/attention.json'")
+        XCTAssertEqual(try command(in: preToolUseEntries[0]), "'/tmp/hooklog.py' --attention '/tmp/attention.json'")
     }
 
     func testMakeClaudeSettingsLogsAllNotificationTypesForObservability() throws {

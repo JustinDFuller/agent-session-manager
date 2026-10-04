@@ -52,6 +52,8 @@ final class StatusLineMonitor {
     private var statusWatcher: FileSystemEventWatcher?
     private var attentionWatcher: FileSystemEventWatcher?
     private var hookLogWatcher: FileSystemEventWatcher?
+    private var attentionOffset: UInt64 = 0
+    private var attentionLineBuffer = Data()
     private var hookLogOffset: UInt64 = 0
     private var hookLogLineBuffer = Data()
     private var attentionDebounceWork: DispatchWorkItem?
@@ -110,7 +112,7 @@ final class StatusLineMonitor {
         filePath = NSTemporaryDirectory() + "agent-session-manager-status-\(paneID.uuidString).json"
         settingsFilePath = NSTemporaryDirectory() + "agent-session-manager-settings-\(paneID.uuidString).json"
         attentionSignalFilePath =
-            NSTemporaryDirectory() + "agent-session-manager-claude-attention-\(paneID.uuidString).json"
+            NSTemporaryDirectory() + "agent-session-manager-claude-attention-\(paneID.uuidString).jsonl"
         hookLogFilePath =
             NSTemporaryDirectory() + "agent-session-manager-claude-hooklog-\(paneID.uuidString).jsonl"
         hookLogScriptFilePath =
@@ -239,7 +241,8 @@ final class StatusLineMonitor {
                     "tab.name": tabName,
                 ])
             FileManager.default.createFile(atPath: filePath, contents: nil)
-            FileManager.default.createFile(atPath: hookLogFilePath, contents: nil)
+            FileManager.default.createFile(
+                atPath: hookLogFilePath, contents: nil, attributes: [.posixPermissions: 0o600])
             writeHookLogScript()
 
             statusWatcher = makeFileWatcher(
@@ -264,16 +267,16 @@ final class StatusLineMonitor {
                 defer { try? handle.close() }
                 do {
                     try handle.seek(toOffset: hookLogOffset)
-                    let data = try handle.readToEnd() ?? Data()
-                    guard !data.isEmpty else { return }
-                    hookLogOffset += UInt64(data.count)
-                    hookLogLineBuffer.append(data)
-                    while let newlineIndex = hookLogLineBuffer.firstIndex(of: UInt8(ascii: "\n")) {
-                        let lineData = Data(hookLogLineBuffer[..<newlineIndex])
-                        let afterNewline = hookLogLineBuffer.index(after: newlineIndex)
-                        hookLogLineBuffer = Data(hookLogLineBuffer[afterNewline...])
-                        guard !lineData.isEmpty else { continue }
-                        applyClaudeActivityPayload(lineData)
+                    while let data = try handle.read(upToCount: 65_536), !data.isEmpty {
+                        hookLogOffset += UInt64(data.count)
+                        hookLogLineBuffer.append(data)
+                        while let newlineIndex = hookLogLineBuffer.firstIndex(of: UInt8(ascii: "\n")) {
+                            let lineData = Data(hookLogLineBuffer[..<newlineIndex])
+                            let afterNewline = hookLogLineBuffer.index(after: newlineIndex)
+                            hookLogLineBuffer = Data(hookLogLineBuffer[afterNewline...])
+                            guard !lineData.isEmpty else { continue }
+                            applyClaudeActivityPayload(lineData)
+                        }
                     }
                 } catch {}
             }
@@ -300,20 +303,42 @@ final class StatusLineMonitor {
             }
 
             stopAttentionWatcher()
-            FileManager.default.createFile(atPath: attentionSignalFilePath, contents: nil)
+            FileManager.default.createFile(
+                atPath: attentionSignalFilePath, contents: nil, attributes: [.posixPermissions: 0o600])
             attentionWatcher = makeFileWatcher(
                 path: attentionSignalFilePath,
                 role: "attention",
                 followsReplacement: false
             ) { [weak self] _ in
                 guard let self else { return }
-                attentionDebounceWork?.cancel()
+                guard attentionDebounceWork == nil else { return }
                 let work = DispatchWorkItem { [weak self] in
-                    guard let self,
-                        let data = try? Data(contentsOf: URL(filePath: attentionSignalFilePath)),
-                        !data.isEmpty
-                    else { return }
-                    applyClaudeAttentionPayload(data)
+                    guard let self else { return }
+                    attentionDebounceWork = nil
+                    guard let handle = FileHandle(forReadingAtPath: attentionSignalFilePath) else { return }
+                    defer { try? handle.close() }
+                    do {
+                        try handle.seek(toOffset: attentionOffset)
+                        while let data = try handle.read(upToCount: 65_536), !data.isEmpty {
+                            attentionOffset += UInt64(data.count)
+                            attentionLineBuffer.append(data)
+                            while let newline = attentionLineBuffer.firstIndex(of: UInt8(ascii: "\n")) {
+                                let line = Data(attentionLineBuffer[..<newline])
+                                let next = attentionLineBuffer.index(after: newline)
+                                attentionLineBuffer = Data(attentionLineBuffer[next...])
+                                guard !line.isEmpty else { continue }
+                                applyClaudeAttentionPayload(line)
+                            }
+                        }
+                    } catch {
+                        TracingService.shared.record(
+                            "statusline.attention.read_failed",
+                            attributes: [
+                                "pane.name": paneName, "pane.id": paneID.uuidString,
+                                "tab.id": tabID.uuidString, "tab.name": tabName,
+                                "error_code": "\((error as NSError).code)",
+                            ])
+                    }
                 }
                 attentionDebounceWork = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
@@ -685,10 +710,12 @@ final class StatusLineMonitor {
             }
             let backgroundTasks = payload.backgroundTasks ?? []
             let sessionCrons = payload.sessionCrons ?? []
+            let taskCount = max(backgroundTasks.count, payload.backgroundTaskCount ?? 0)
+            let cronCount = max(sessionCrons.count, payload.sessionCronCount ?? 0)
             hasConfirmedBackgroundWork =
                 payload.hookEventName == "Stop"
                 && payload.backgroundTasks != nil && payload.sessionCrons != nil
-                && (!backgroundTasks.isEmpty || !sessionCrons.isEmpty)
+                && (taskCount > 0 || cronCount > 0)
             if hasConfirmedBackgroundWork {
                 pendingStopWork?.cancel()
                 pendingStopWork = nil
@@ -712,8 +739,8 @@ final class StatusLineMonitor {
                             while String(bytes: bytes, encoding: .utf8) == nil { bytes.removeLast() }
                             return String(decoding: bytes, as: UTF8.self)
                         }.joined(separator: ","),
-                        "background_task_count": "\(backgroundTasks.count)",
-                        "session_cron_count": "\(sessionCrons.count)",
+                        "background_task_count": "\(taskCount)",
+                        "session_cron_count": "\(cronCount)",
                     ])
                 return
             }
@@ -809,6 +836,8 @@ final class StatusLineMonitor {
         attentionWatcher?.cancel()
         attentionWatcher = nil
         lastAttentionPayloadFingerprint = nil
+        attentionOffset = 0
+        attentionLineBuffer = Data()
     }
 
     @MainActor
@@ -1142,7 +1171,9 @@ extension StatusLineMonitor {
             settings["prStatusFooterEnabled"] = false
         }
         let hookLogHook: [[String: Any]] = [["type": "command", "command": "'\(hookLogScriptPath)'"]]
-        let attentionHook: [[String: Any]] = [["type": "command", "command": "cat > '\(attentionOutputPath)'"]]
+        let attentionHook: [[String: Any]] = [
+            ["type": "command", "command": "'\(hookLogScriptPath)' --attention '\(attentionOutputPath)'"]
+        ]
         settings["hooks"] = [
             "UserPromptSubmit": [["hooks": hookLogHook]],
             "Stop": [["hooks": hookLogHook]],
@@ -1200,39 +1231,60 @@ extension StatusLineMonitor {
     func writeHookLogScript() {
         let script = """
             #!/usr/bin/env python3
+            import fcntl
+            import hashlib
             import json
             import os
             import sys
             import time
 
-            payload = json.load(sys.stdin)
+            def bounded(value, limit=64):
+                if not isinstance(value, str):
+                    return None
+                return value.encode("utf-8", errors="replace")[:limit].decode("utf-8", errors="ignore")
+
+            raw = sys.stdin.buffer.read()
+            payload = json.loads(raw)
+            attention = len(sys.argv) > 1 and sys.argv[1] == "--attention"
             record = {
-                "hook_event_name": payload.get("hook_event_name", ""),
-                "notification_type": payload.get("notification_type"),
-                "message": payload.get("message"),
-                "agent_id": payload.get("agent_id"),
-                "agent_type": payload.get("agent_type"),
-                "transcript_path": payload.get("transcript_path"),
-                "session_id": payload.get("session_id"),
-                "timestamp": time.time()
+                "hook_event_name": bounded(payload.get("hook_event_name")) or "",
+                "notification_type": bounded(payload.get("notification_type")),
+                "tool_name": bounded(payload.get("tool_name")),
+                "title": bounded(payload.get("title"), 1024),
+                "message": bounded(payload.get("message"), 1024),
+                "agent_id": bounded(payload.get("agent_id")),
+                "agent_type": bounded(payload.get("agent_type")),
+                "transcript_path": bounded(payload.get("transcript_path"), 1024),
+                "session_id": bounded(payload.get("session_id"), 128)
             }
-            tasks = payload.get("background_tasks")
-            if isinstance(tasks, list):
-                record["background_tasks"] = [
-                    {"id": t.get("id"), "type": t.get("type"), "status": t.get("status")}
-                    for t in tasks if isinstance(t, dict)
-                ]
-            crons = payload.get("session_crons")
-            if isinstance(crons, list):
-                record["session_crons"] = [
-                    {"id": c.get("id"), "recurring": c.get("recurring")}
-                    for c in crons if isinstance(c, dict)
-                ]
-            line = json.dumps(record, separators=(",", ":")) + "\\n"
-            path = '\(hookLogFilePath)'
+            if attention:
+                record["payload_fingerprint"] = hashlib.sha256(raw).hexdigest()
+            else:
+                record["timestamp"] = time.time()
+                tasks = payload.get("background_tasks")
+                if isinstance(tasks, list):
+                    record["background_tasks"] = [
+                        {"id": bounded(t.get("id")), "type": bounded(t.get("type")), "status": bounded(t.get("status"), 32)}
+                        for t in tasks[:32] if isinstance(t, dict)
+                    ]
+                    record["background_tasks_total_count"] = len(tasks)
+                    record["background_tasks_omitted_count"] = len(tasks) - len(record["background_tasks"])
+                crons = payload.get("session_crons")
+                if isinstance(crons, list):
+                    record["session_crons"] = [
+                        {"id": bounded(c.get("id")), "recurring": c.get("recurring") if isinstance(c.get("recurring"), bool) else None}
+                        for c in crons[:32] if isinstance(c, dict)
+                    ]
+                    record["session_crons_total_count"] = len(crons)
+                    record["session_crons_omitted_count"] = len(crons) - len(record["session_crons"])
+            line = (json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\\n").encode("utf-8")
+            path = sys.argv[2] if attention else '\(hookLogFilePath)'
             fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
             try:
-                os.write(fd, line.encode("utf-8"))
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                offset = 0
+                while offset < len(line):
+                    offset += os.write(fd, line[offset:])
             finally:
                 os.close(fd)
             """
@@ -1277,6 +1329,8 @@ private struct ClaudeActivityPayload: Decodable {
     let sessionID: String?
     let backgroundTasks: [BackgroundTask]?
     let sessionCrons: [SessionCron]?
+    let backgroundTaskCount: Int?
+    let sessionCronCount: Int?
 
     enum CodingKeys: String, CodingKey {
         case hookEventName = "hook_event_name"
@@ -1288,5 +1342,7 @@ private struct ClaudeActivityPayload: Decodable {
         case sessionID = "session_id"
         case backgroundTasks = "background_tasks"
         case sessionCrons = "session_crons"
+        case backgroundTaskCount = "background_tasks_total_count"
+        case sessionCronCount = "session_crons_total_count"
     }
 }
