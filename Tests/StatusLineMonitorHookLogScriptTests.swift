@@ -362,5 +362,4 @@ final class StatusLineMonitorHookLogScriptTests: XCTestCase {
             XCTAssertNotNil(event.attributes[key])
         }
     }
-
 }
