@@ -52,3 +52,9 @@ A complete pending report records `suppressed_background_work` with `background_
 - If previously reported background work is cancelled without a later lifecycle report, idle alerts remain suppressed until a new report or monitor teardown clears the confirmation. Accepted and documented.
 - A long-lived recurring schedule or persistent background shell such as a dev server keeps the pane working indefinitely, by design.
 - [Claude Code v2.1.145 introduced the two lists](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#21145). Reports depend on registry availability, so newer versions can also omit fields. Existing live evidence is limited to v2.1.286; the documented introduction version is not a claim of a live test on v2.1.145.
+
+### Bounded hook records and lossless attention transport
+
+Hook records retain at most 32 task entries and 32 cron entries, with bounded identifier/type/status strings. Full list counts and omitted-entry counts are recorded separately; the monitor uses full counts when available so truncation never turns pending work into completion. Both lists must still be present. Scalar diagnostic fields are bounded, and task descriptions/commands and cron prompts are excluded.
+
+The existing attention registrations invoke the generated hook script in attention mode. It appends bounded JSONL records to the per-pane attention file under a writer lock, with a stable fingerprint of the original input and no generated timestamp in the attention record. The watcher consumes every complete record by byte offset, retains an unfinished line, and applies the existing payload deduplication and idle gate independently. Debounce coalesces reads, never events. Teardown clears offsets and buffers. This preserves a question or plan request even when a subsequent idle event is suppressed.
