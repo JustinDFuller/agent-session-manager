@@ -7,7 +7,7 @@
 ## 2. Attention and idle recovery
 
 - [ ] 2.1 Suppress idle attention only for confirmed pending background work; otherwise recover a working pane to stopped and forward one idle event without a finished alert. Preserve deduplication, cancel delayed completion on recovery, and verify suppression/recovery traces with pane/tab context.
-- [ ] 2.2 Recognize `PreToolUse` `AskUserQuestion` and `ExitPlanMode` regardless of lifecycle or pending work, preserve the registration and deduplication, and test distinct sources/reasons and unrelated tools. Queue every complete attention record by offset; test bursts, split records, and deduplication without overwriting earlier events.
+- [ ] 2.2 Recognize `PreToolUse` `AskUserQuestion` and `ExitPlanMode` regardless of lifecycle or pending work, preserve the registration and deduplication, and test distinct sources/reasons and unrelated tools. Queue every complete attention record by offset; test bursts, split records, and deduplication without overwriting earlier events. Compact consumed records under the writer lock, preserve partial/unread data, and test sustained concurrent appends and read-failure diagnostics.
 
 ## 3. Documentation and validation
 
