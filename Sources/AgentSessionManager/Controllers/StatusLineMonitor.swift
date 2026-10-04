@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import Observation
 
@@ -315,9 +316,13 @@ final class StatusLineMonitor {
                 let work = DispatchWorkItem { [weak self] in
                     guard let self else { return }
                     attentionDebounceWork = nil
-                    guard let handle = FileHandle(forReadingAtPath: attentionSignalFilePath) else { return }
-                    defer { try? handle.close() }
                     do {
+                        let handle = try FileHandle(forUpdating: URL(filePath: attentionSignalFilePath))
+                        defer { try? handle.close() }
+                        guard flock(handle.fileDescriptor, LOCK_EX) == 0 else {
+                            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                        }
+                        defer { _ = flock(handle.fileDescriptor, LOCK_UN) }
                         try handle.seek(toOffset: attentionOffset)
                         while let data = try handle.read(upToCount: 65_536), !data.isEmpty {
                             attentionOffset += UInt64(data.count)
@@ -329,6 +334,12 @@ final class StatusLineMonitor {
                                 guard !line.isEmpty else { continue }
                                 applyClaudeAttentionPayload(line)
                             }
+                        }
+                        if attentionOffset > UInt64(attentionLineBuffer.count) {
+                            try handle.seek(toOffset: 0)
+                            try handle.write(contentsOf: attentionLineBuffer)
+                            try handle.truncate(atOffset: UInt64(attentionLineBuffer.count))
+                            attentionOffset = UInt64(attentionLineBuffer.count)
                         }
                     } catch {
                         TracingService.shared.record(
@@ -802,7 +813,7 @@ final class StatusLineMonitor {
             }
         }
         var hasher = Hasher()
-        hasher.combine(data)
+        data.withUnsafeBytes { hasher.combine(bytes: $0) }
         let fingerprint = hasher.finalize()
         guard fingerprint != lastAttentionPayloadFingerprint else { return }
         lastAttentionPayloadFingerprint = fingerprint

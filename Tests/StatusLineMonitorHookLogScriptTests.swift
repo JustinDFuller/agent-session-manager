@@ -18,7 +18,7 @@ final class StatusLineMonitorHookLogScriptTests: XCTestCase {
         super.tearDown()
     }
 
-    private func runScript(stdin: String, attention: Bool = false, expectedLines: Int = 1) throws -> [String: Any] {
+    private func runScript(stdin: String, attention: Bool = false, expectedLines: Int? = 1) throws -> [String: Any] {
         let process = Process()
         process.executableURL = URL(filePath: monitor.hookLogScriptFilePath)
         if attention { process.arguments = ["--attention", monitor.attentionSignalFilePath] }
@@ -30,6 +30,7 @@ final class StatusLineMonitorHookLogScriptTests: XCTestCase {
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0)
 
+        guard let expectedLines else { return [:] }
         let log = try String(
             contentsOfFile: attention ? monitor.attentionSignalFilePath : monitor.hookLogFilePath, encoding: .utf8)
         let lines = log.split(separator: "\n")
@@ -161,10 +162,12 @@ final class StatusLineMonitorHookLogScriptTests: XCTestCase {
             sources.append(event.source)
             delivered.fulfill()
         }
-        _ = try runScript(stdin: #"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}"#, attention: true)
+        _ = try runScript(
+            stdin: #"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}"#, attention: true,
+            expectedLines: nil)
         _ = try runScript(
             stdin: #"{"hook_event_name":"Notification","notification_type":"idle_prompt"}"#, attention: true,
-            expectedLines: 2)
+            expectedLines: nil)
         wait(for: [delivered], timeout: 3)
         let drained = expectation(description: "burst drained")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { drained.fulfill() }
@@ -183,14 +186,21 @@ final class StatusLineMonitorHookLogScriptTests: XCTestCase {
             sources.append(event.source)
             delivered.fulfill()
         }
-        _ = try runScript(stdin: #"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}"#, attention: true)
         _ = try runScript(
-            stdin: #"{"hook_event_name":"PreToolUse","tool_name":"ExitPlanMode"}"#, attention: true, expectedLines: 2)
+            stdin: #"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}"#, attention: true,
+            expectedLines: nil)
+        _ = try runScript(
+            stdin: #"{"hook_event_name":"PreToolUse","tool_name":"ExitPlanMode"}"#, attention: true, expectedLines: nil)
         wait(for: [delivered], timeout: 3)
         XCTAssertEqual(sources, [.claudeQuestion, .claudePlanApproval])
     }
 
     func testAttentionQueueDeduplicatesRepeatedInputAndDoesNotReplayConsumedLines() throws {
+        let input = #"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}"#
+        let first = try runScript(stdin: input, attention: true)
+        let second = try runScript(stdin: input, attention: true, expectedLines: 2)
+        XCTAssertEqual(first["payload_fingerprint"] as? String, second["payload_fingerprint"] as? String)
+        XCTAssertNil(first["timestamp"])
         monitor.start()
         let delivered = expectation(description: "one event delivered")
         delivered.assertForOverFulfill = true
@@ -199,11 +209,8 @@ final class StatusLineMonitorHookLogScriptTests: XCTestCase {
             count += 1
             delivered.fulfill()
         }
-        let input = #"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}"#
-        let first = try runScript(stdin: input, attention: true)
-        let second = try runScript(stdin: input, attention: true, expectedLines: 2)
-        XCTAssertEqual(first["payload_fingerprint"] as? String, second["payload_fingerprint"] as? String)
-        XCTAssertNil(first["timestamp"])
+        _ = try runScript(stdin: input, attention: true, expectedLines: nil)
+        _ = try runScript(stdin: input, attention: true, expectedLines: nil)
         wait(for: [delivered], timeout: 3)
         let handle = try FileHandle(forWritingTo: URL(filePath: monitor.attentionSignalFilePath))
         try handle.seekToEnd()
@@ -247,13 +254,16 @@ final class StatusLineMonitorHookLogScriptTests: XCTestCase {
             XCTAssertEqual(event.source, .claudeQuestion)
             delivered.fulfill()
         }
-        _ = try runScript(stdin: #"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}"#, attention: true)
+        _ = try runScript(
+            stdin: #"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}"#, attention: true,
+            expectedLines: nil)
         let handle = try FileHandle(forWritingTo: URL(filePath: monitor.attentionSignalFilePath))
         try handle.seekToEnd()
         let finished = expectation(description: "all later writes completed")
         let idle = Data((#"{"hook_event_name":"Notification","notification_type":"idle_prompt"}"# + "\n").utf8)
         for index in 1...20 {
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * 0.05) {
+                try? handle.seekToEnd()
                 try? handle.write(contentsOf: idle)
                 if index == 20 { finished.fulfill() }
             }
@@ -262,4 +272,95 @@ final class StatusLineMonitorHookLogScriptTests: XCTestCase {
         wait(for: [finished], timeout: 2)
         try handle.close()
     }
+    func testAttentionCompactionPreservesPartialSuffixAndFutureAppends() throws {
+        monitor.start()
+        let delivered = expectation(description: "complete records delivered once")
+        delivered.expectedFulfillmentCount = 3
+        delivered.assertForOverFulfill = true
+        var sources: [PaneAttentionEvent.Source] = []
+        monitor.onClaudeHookAttention = { event in
+            sources.append(event.source)
+            delivered.fulfill()
+        }
+        let first = Data((#"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}"# + "\n").utf8)
+        let partial = Data(#"{"hook_event_name":"PreToolUse","tool_name":"Exit"#.utf8)
+        let handle = try FileHandle(forWritingTo: URL(filePath: monitor.attentionSignalFilePath))
+        defer { try? handle.close() }
+        try handle.write(contentsOf: first + partial)
+        let compacted = expectation(description: "first record compacted")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { compacted.fulfill() }
+        wait(for: [compacted], timeout: 2)
+        XCTAssertEqual(sources, [.claudeQuestion])
+        XCTAssertEqual(try Data(contentsOf: URL(filePath: monitor.attentionSignalFilePath)), partial)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("PlanMode\"}\n".utf8) + first)
+        wait(for: [delivered], timeout: 3)
+        let drained = expectation(description: "all consumed history removed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { drained.fulfill() }
+        wait(for: [drained], timeout: 2)
+        XCTAssertEqual(sources, [.claudeQuestion, .claudePlanApproval, .claudeQuestion])
+        XCTAssertTrue(try Data(contentsOf: URL(filePath: monitor.attentionSignalFilePath)).isEmpty)
+    }
+
+    func testConcurrentHookAppendsSurviveReaderCompaction() throws {
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+        monitor.start()
+        let delivered = expectation(description: "all locked appends delivered")
+        delivered.expectedFulfillmentCount = 30
+        delivered.assertForOverFulfill = true
+        var messages: [String] = []
+        monitor.onClaudeHookAttention = { event in
+            messages.append(event.reason)
+            delivered.fulfill()
+        }
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/python3")
+        process.arguments = [
+            "-c",
+            """
+            import json, subprocess, sys, time
+            for index in range(30):
+                payload = json.dumps({"hook_event_name": "Notification", "notification_type": "permission_prompt", "message": str(index)})
+                subprocess.run([sys.argv[1], "--attention", sys.argv[2]], input=payload.encode(), check=True)
+                time.sleep(0.02)
+            """,
+            monitor.hookLogScriptFilePath, monitor.attentionSignalFilePath,
+        ]
+        try process.run()
+        wait(for: [delivered], timeout: 10)
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        XCTAssertEqual(messages, (0..<30).map(String.init))
+        XCTAssertEqual(
+            TracingService.shared.recordedEventsForTesting.filter { $0.name == "statusline.attention.read_failed" }.map
+            { $0.attributes }, [])
+        let drained = expectation(description: "queue compacted")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { drained.fulfill() }
+        wait(for: [drained], timeout: 2)
+        XCTAssertTrue(try Data(contentsOf: URL(filePath: monitor.attentionSignalFilePath)).isEmpty)
+    }
+
+    func testAttentionOpenFailureRecordsDiagnosticWithContext() throws {
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+        monitor.start()
+        let path = monitor.attentionSignalFilePath
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path) }
+        _ = try runScript(
+            stdin: #"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}"#, attention: true,
+            expectedLines: nil)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: path)
+        let read = expectation(description: "failed open observed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { read.fulfill() }
+        wait(for: [read], timeout: 2)
+        let event = try XCTUnwrap(
+            TracingService.shared.recordedEventsForTesting.last {
+                $0.name == "statusline.attention.read_failed"
+            })
+        for key in ["pane.id", "pane.name", "tab.id", "tab.name", "error_code"] {
+            XCTAssertNotNil(event.attributes[key])
+        }
+    }
+
 }

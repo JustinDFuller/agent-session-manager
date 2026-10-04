@@ -41,6 +41,13 @@ ScreenshotTests captures all 34 views:
 - trace-waterfall
 - invariant-dashboard
 
+`ClaudeNotificationFlowTests` adds four captures from actual Claude panes:
+
+- claude-background-work
+- claude-question-attention
+- claude-plan-approval-attention
+- claude-interrupted-idle-recovery
+
 `testWalkthrough` captures 31 screenshots in one continuous app session. The trace-dashboard and invariant-dashboard screenshots each run in their own clean session.
 
 BaseTestCase.screenshot() writes PNG files only when SCREENSHOTS_OUTPUT_PATH is set. Normal make test-ui-dev runs retain screenshots as XCTest attachments; make screenshots additionally writes them to screenshots/ in the repository root.
