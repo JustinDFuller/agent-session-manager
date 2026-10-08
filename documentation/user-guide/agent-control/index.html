@@ -182,8 +182,7 @@
     </ul>
   </li>
   <li>Open <strong>New Pane</strong> and select Claude Code, Cursor, Codex, or OpenCode in <strong>Harness</strong>.</li>
-  <li>Open <strong>New Pane → More Settings</strong>. If you chose an ask policy, enable or
-disable <strong>Agent Session Manager control</strong> in the <strong>Agent Control</strong> section.</li>
+  <li>Open <strong>New Pane → More Settings</strong>. If you chose an ask policy, enable or disable <strong>Agent Session Manager control</strong> in the <strong>Agent Control</strong> section.</li>
   <li>Choose <strong>Create Pane</strong>.</li>
 </ol>
 
@@ -234,19 +233,14 @@ disable <strong>Agent Session Manager control</strong> in the <strong>Agent Cont
 
 <h2 id="what-you-should-see">What you should see</h2>
 
-<p>With an ask policy, <strong>New Pane → More Settings</strong> shows the <strong>Agent Session
-Manager control</strong> checkbox and the current scope. With <strong>Always</strong> or <strong>Never</strong>,
-the sheet shows whether control will be enabled or disabled instead of showing
-a checkbox.</p>
+<p>With an ask policy, <strong>New Pane → More Settings</strong> shows the <strong>Agent Session Manager control</strong> checkbox and the current scope. With <strong>Always</strong> or <strong>Never</strong>, the sheet shows whether control will be enabled or disabled instead of showing a checkbox.</p>
 
 <p>After the pane starts, the supported agent can use Agent Control within the selected scope. The pane continues to run the selected agent tool in its prepared Git worktree.</p>
 
 <h2 id="if-it-does-not-work">If it does not work</h2>
 
 <ul>
-  <li>If the control checkbox is not shown, open <strong>New Pane → More Settings</strong> and
-check <strong>Settings → Panes → Injection Policy</strong>. <strong>Always</strong> and <strong>Never</strong> show
-a status message instead of a checkbox.</li>
+  <li>If the control checkbox is not shown, open <strong>New Pane → More Settings</strong> and check <strong>Settings → Panes → Injection Policy</strong>. <strong>Always</strong> and <strong>Never</strong> show a status message instead of a checkbox.</li>
   <li>A Cursor pane prompts to approve the Agent Session Manager server unless you enable <strong>Approve MCPs</strong> (<code class="language-plaintext highlighter-rouge">--approve-mcps</code>) under <strong>New Pane → Cursor CLI options</strong>. That option auto-approves every MCP server the pane sees, not only Agent Control’s, so enable it only if that fits your workflow.</li>
   <li>If a policy or scope change has no effect on a running pane, restart the pane.</li>
   <li>If an action is unavailable, choose <strong>Global</strong> scope when the action needs access beyond the current pane or tab.</li>

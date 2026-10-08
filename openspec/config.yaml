@@ -1,0 +1,28 @@
+schema: spec-driven
+
+context: |
+  Documentation authoring rules and public/internal documentation boundaries: CLAUDE.md
+  Repository conventions, architecture, build/test commands, and feature skills: AGENTS.md
+  How this repo runs the opsx workflow, archive timing, and reviewer expectations: openspec/README.md
+
+rules:
+  proposal:
+    - State what is deliberately out of scope
+  specs:
+    - Describe observable behavior only
+    - Stand on your own without design.md or tasks.md — a reviewer reads only this file
+  tasks:
+    - Every task must be completable and verifiable before the change is archived — never write a task whose completion depends on the pull request being marked ready for review, merged, or observed after merge
+    - Workflow steps are not tasks — verifying, archiving, marking the pull request ready, and merging are the workflow itself
+    - Record work that can only happen after merge under `## Follow-ups after merge` in proposal.md, not here
+
+operations:
+  apply:
+    guidance:
+      - On a non-top stacked pull request, preserve the shared active change and continue implementation or QA without archiving; only the current top layer or a standalone pull request performs finalization
+      - The intended sequence is OpenSpec -> implementation 1..n -> QA -> archive, with the final archive pull request containing only the archive transition and synchronized main specifications
+  archive:
+    guidance:
+      - Archive only the exact shared change set in the current top stacked pull request or standalone pull request; lower layers must leave the change active
+      - Archiving happens after review feedback on the change itself has been resolved
+      - Archiving is the last step before the archive pull request is marked ready for review, not part of implementation or QA

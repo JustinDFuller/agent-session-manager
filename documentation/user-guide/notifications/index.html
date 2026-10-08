@@ -193,6 +193,7 @@
   <li>If in-app notifications appear but macOS banners do not, allow notifications for the correct Agent Session Manager app in <strong>System Settings → Notifications</strong>.</li>
   <li>If the sidebar is hidden, enable <strong>Always Show Notifications Bar</strong> or wait for a pending notification. If a pane is focused, also check <strong>Settings → Panes → Focus Mode → Hide Notification Sidebar</strong>.</li>
   <li>If a tool completion alert is missing, check its tool-specific setting in <strong>Settings → Notifications</strong> and reopen the pane after changing hook-related settings.</li>
+  <li>If Claude does not send a finished alert, it may still have a background agent, command, or repeating <code class="language-plaintext highlighter-rouge">/loop</code> schedule. Persistent commands such as dev servers can keep the pane working indefinitely. Background-work reporting was added in Claude Code v2.1.145. If you cancel reported background work by hand, the pane may stay working until Claude reports its state again. If you interrupt a foreground turn with Esc and no background work was reported, Claude’s later idle notification recovers the pane and requests your attention. Questions and plan approvals still request attention while background work is running.</li>
 </ul>
 
 <h2 id="related-tasks">Related tasks</h2>

@@ -155,10 +155,15 @@
   <li>Within a row, choose <strong>Add Item</strong> and select the facts you want to see.</li>
   <li>Use the up and down controls to reorder rows and the minus controls to remove items.</li>
   <li>Optionally choose <strong>Add Custom Field</strong> to run a command that supplies a value for the status line.</li>
-  <li>Changes are saved as you edit the layout.</li>
+  <li>Open <strong>SF Symbol</strong> and type a label, keyword, or symbol name to filter the suggestions. If an SF Symbol available on this version of macOS is not suggested, enter its exact name and choose **Use exact symbol name “<symbol name="">”**.</symbol></li>
+  <li>Open <strong>Harnesses</strong> and select every harness that should run the field. The checklist stays open while you make selections; choose <strong>Done</strong> or click outside it when finished. New custom fields target all harnesses by default.</li>
+  <li>Select <strong>Add</strong> or <strong>Save</strong>. Reopen a saved field without changing it and choose <strong>Run Now</strong> to run the saved command in matching panes that use the saved configuration and selected harness.</li>
+  <li>Global Status Line changes are saved as you edit the layout. In a profile editor, choose the profile’s <strong>Save</strong> button when you are finished.</li>
 </ol>
 
-<p>Facts that are not supported by a pane’s harness are omitted. A supported fact with no current value may show a dash until data is available.</p>
+<p>Facts and custom fields that are not supported by a pane’s harness are omitted. A supported fact with no current value may show a dash until data is available.</p>
+
+<p>Custom fields in a profile status-line override are independent from the global status line. When <strong>Custom Status Line</strong> is enabled for a profile, its panes use that profile’s saved custom field command; otherwise they inherit the global command. Run <strong>Run Now</strong> from the matching saved configuration when you want to refresh those panes.</p>
 
 <h3 id="show-pull-request-status">Show pull-request status</h3>
 
@@ -179,7 +184,9 @@
 <ul>
   <li>If an item is missing from <strong>Add Item</strong>, it may not be supported for the selected harness or may already be in a row.</li>
   <li>If the status line is not visible, add at least one row and one item in <strong>Settings → Status Line</strong>.</li>
-  <li>If a custom field does not produce a value, use its preview in the editor and check the command, refresh interval, and timeout.</li>
+  <li>If a custom field does not produce a value, check that its harness selection includes the pane’s harness, that the field is saved, and that the command, refresh interval, and timeout are correct. A profile status line can use a different saved command from the global status line.</li>
+  <li>If <strong>Run Now</strong> starts a command but the displayed value does not change, check whether the command uses its own cache or refresh interval. <strong>Run Now</strong> starts the command immediately but does not bypass a cache policy implemented by the command.</li>
+  <li>If an exact SF Symbol name is not available on this version of macOS, select a suggested icon instead.</li>
   <li>If pull-request status is missing, confirm that <code class="language-plaintext highlighter-rouge">gh</code> is installed, authenticated, and that <strong>Track pull requests</strong> is enabled.</li>
 </ul>
 

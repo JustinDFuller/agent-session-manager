@@ -1,5 +1,5 @@
-<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<?xml version='1.0' encoding='utf-8'?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
   <channel>
     <title>Agent Session Manager Changelog</title>
     <link>https://agent-session-manager.justindfuller.com/</link>
@@ -38,8 +38,14 @@
       <pubDate>Tue, 18 Aug 2026 01:49:43 +0000</pubDate>
       <sparkle:version>252</sparkle:version>
       <sparkle:shortVersionString>0.0.5</sparkle:shortVersionString>
-      <enclosure url="https://agent-session-manager.justindfuller.com/downloads/AgentSessionManager-0.0.5-252.dmg" length="13287175" type="application/octet-stream" sparkle:edSignature="Sparkle key validation passed.
-nYi3RF0c11+UsTvhXH40SQZ0kCN4JKaRljgtbh4MfYfjF4+tghq4EiHVyAmhssMkLG7Z9iRDwpRTHtg4mREYCw==" />
+      <enclosure url="https://agent-session-manager.justindfuller.com/downloads/AgentSessionManager-0.0.5-252.dmg" length="13287175" type="application/octet-stream" sparkle:edSignature="Sparkle key validation passed. nYi3RF0c11+UsTvhXH40SQZ0kCN4JKaRljgtbh4MfYfjF4+tghq4EiHVyAmhssMkLG7Z9iRDwpRTHtg4mREYCw==" />
+    </item>
+    <item>
+      <title>Agent Session Manager 0.0.6</title>
+      <pubDate>Thu, 08 Oct 2026 13:53:35 +0000</pubDate>
+      <sparkle:version>273</sparkle:version>
+      <sparkle:shortVersionString>0.0.6</sparkle:shortVersionString>
+      <enclosure url="https://agent-session-manager.justindfuller.com/downloads/AgentSessionManager-0.0.6-273.dmg" length="13345317" type="application/octet-stream" sparkle:edSignature="GYIu3rvXvE6hdK6VfpRAeAlrHpc32VjvAlIp0X2xSTxLnfLRt1uw1VGym7VgyETA96GxnNq7gP0Hr8cDMA3DDw==" />
     </item>
 </channel>
 </rss>
