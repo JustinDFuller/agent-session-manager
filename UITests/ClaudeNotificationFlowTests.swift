@@ -6,6 +6,49 @@ final class ClaudeNotificationFlowTests: BaseTestCase {
 
     override var appLaunchArguments: [String] { ["--uitesting-skip-restore"] + additionalLaunchArguments }
 
+    private func createRealTab(named name: String) {
+        app.typeKey("t", modifierFlags: .command)
+        let nameField = app.textFields["new-tab-name-field"]
+        waitFor(nameField)
+        nameField.click()
+        nameField.typeText(name)
+        app.buttons["new-tab-choose-dir-button"].click()
+        let picker = app.dialogs["open-panel"]
+        let selectDirectory = picker.buttons["OKButton"]
+        waitFor(selectDirectory)
+        let pickerInitiallyReady = expectation(
+            for: NSPredicate(format: "hittable == true"), evaluatedWith: selectDirectory)
+        wait(for: [pickerInitiallyReady], timeout: 15)
+        picker.typeKey("g", modifierFlags: [.command, .shift])
+        let folderEntryReady = expectation(
+            for: NSPredicate(format: "hittable == false"), evaluatedWith: selectDirectory)
+        wait(for: [folderEntryReady], timeout: 15)
+        picker.typeKey("a", modifierFlags: .command)
+        picker.typeText(GitUITestWorkspace.directoryURL.path)
+        picker.typeKey(.enter, modifierFlags: [])
+        let pickerReady = expectation(
+            for: NSPredicate(format: "hittable == true"), evaluatedWith: selectDirectory)
+        wait(for: [pickerReady], timeout: 15)
+        selectDirectory.click()
+        let directoryLabel = app.staticTexts["new-tab-directory-label"]
+        waitFor(directoryLabel)
+        XCTAssertEqual(
+            (directoryLabel.value as? String).map { URL(filePath: $0).resolvingSymlinksInPath().path },
+            GitUITestWorkspace.directoryURL.resolvingSymlinksInPath().path)
+        let createButton = app.buttons["new-tab-create-button"]
+        XCTAssertTrue(createButton.isEnabled)
+        createButton.click()
+        waitFor(app.buttons["tab-button-\(name)"].firstMatch)
+    }
+
+    func testRealWorkspacePickerCreatesTab() {
+        let onboardingSkipButton = app.buttons["onboarding-skip-button"]
+        waitFor(onboardingSkipButton)
+        onboardingSkipButton.click()
+        createRealTab(named: "ClaudePicker")
+        XCTAssertFalse(app.textFields["new-tab-name-field"].exists)
+    }
+
     private func openClaudePane(named name: String) throws {
         let status = Process()
         let output = Pipe()
@@ -33,7 +76,7 @@ final class ClaudeNotificationFlowTests: BaseTestCase {
         waitFor(debugToggle)
         if debugToggle.value as? Int != 1 { debugToggle.click() }
         app.typeKey("w", modifierFlags: .command)
-        createTab(named: "ClaudeAlerts")
+        createRealTab(named: "ClaudeAlerts")
         app.typeKey("p", modifierFlags: .command)
         let nameField = app.textFields["new-pane-name-field"]
         waitFor(nameField)
