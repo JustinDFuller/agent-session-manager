@@ -80,7 +80,7 @@ The app MUST NOT show an alert or banner for `idle_prompt` while the latest `Sto
 
 ### Requirement: Questions and plan approvals request attention
 
-The app MUST recognize `PreToolUse` for `AskUserQuestion` and `ExitPlanMode` and produce question and plan approval attention events regardless of pane state or pending background work. Unrelated tools MUST NOT produce attention. The existing identical-payload deduplication MUST remain in effect. Attention transport MUST queue complete events so a later idle event cannot overwrite a question or plan event within the watcher debounce window. The reader MUST compact consumed records under the same exclusive lock as appenders, preserving unread and partial records on the same inode so persistent panes do not retain consumed history indefinitely.
+The app MUST recognize `PreToolUse` for `AskUserQuestion` and `ExitPlanMode` and produce question and plan approval attention events regardless of pane state or pending background work. Unrelated tools MUST NOT produce attention. The existing identical-payload deduplication MUST remain in effect. Attention transport MUST queue complete events so a later idle event cannot overwrite a question or plan event within the watcher debounce window. The reader MUST compact consumed records under the same exclusive lock as appenders, preserving unread and partial records on the same inode so persistent panes do not retain consumed history indefinitely. Transient open, lock, read, or compaction failures MUST preserve pending reader state and retry with bounded backoff while the watcher is active, without requiring another append or blocking the main queue. Successful drains MUST reset retry backoff, and teardown MUST cancel retries.
 
 #### Scenario: Question while background work is pending
 
@@ -101,6 +101,16 @@ The app MUST recognize `PreToolUse` for `AskUserQuestion` and `ExitPlanMode` and
 
 - **WHEN** the reader drains complete attention events while a following record is incomplete and writers append further records
 - **THEN** consumed records are removed under the shared lock, the partial suffix and subsequent appends remain intact, and every completed event is forwarded once
+
+#### Scenario: A queued question survives a transient read failure
+
+- **WHEN** a queued question cannot be drained because of a transient file-access or lock failure and no more records are appended
+- **THEN** the watcher retries with bounded backoff and forwards the preserved question once after access becomes available
+
+#### Scenario: Teardown cancels pending attention retries
+
+- **WHEN** the monitor tears down while an attention read retry is pending
+- **THEN** the retry is cancelled and no attention event is delivered by that stopped watcher
 
 ### Requirement: A Stop without a background-work report is surfaced
 
