@@ -332,9 +332,12 @@ final class StatusLineMonitorHookLogScriptTests: XCTestCase {
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0)
         XCTAssertEqual(messages, (0..<30).map(String.init))
-        XCTAssertEqual(
-            TracingService.shared.recordedEventsForTesting.filter { $0.name == "statusline.attention.read_failed" }.map
-            { $0.attributes }, [])
+        for failure in TracingService.shared.recordedEventsForTesting.filter({
+            $0.name == "statusline.attention.read_failed"
+        }) {
+            XCTAssertTrue((100...1000).contains(Int(failure.attributes["retry_delay_ms"] ?? "0") ?? 0))
+            XCTAssertGreaterThanOrEqual(Int(failure.attributes["retry_attempt"] ?? "0") ?? 0, 1)
+        }
         let drained = expectation(description: "queue compacted")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { drained.fulfill() }
         wait(for: [drained], timeout: 2)
@@ -347,6 +350,12 @@ final class StatusLineMonitorHookLogScriptTests: XCTestCase {
         monitor.start()
         let path = monitor.attentionSignalFilePath
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path) }
+        let delivered = expectation(description: "permission-recovered event delivered without another append")
+        delivered.assertForOverFulfill = true
+        monitor.onClaudeHookAttention = { event in
+            XCTAssertEqual(event.source, .claudeQuestion)
+            delivered.fulfill()
+        }
         _ = try runScript(
             stdin: #"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}"#, attention: true,
             expectedLines: nil)
@@ -361,5 +370,182 @@ final class StatusLineMonitorHookLogScriptTests: XCTestCase {
         for key in ["pane.id", "pane.name", "tab.id", "tab.name", "error_code"] {
             XCTAssertNotNil(event.attributes[key])
         }
+        XCTAssertGreaterThanOrEqual(Int(event.attributes["retry_attempt"] ?? "0") ?? 0, 1)
+        XCTAssertTrue((100...1000).contains(Int(event.attributes["retry_delay_ms"] ?? "0") ?? 0))
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+        wait(for: [delivered], timeout: 3)
+    }
+
+    func testAttentionRetryIsCanceledWhenWatcherRestarts() throws {
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+        monitor.start()
+        let path = monitor.attentionSignalFilePath
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path) }
+        let delivered = expectation(description: "event from restarted watcher")
+        var events: [PaneAttentionEvent.Source] = []
+        monitor.onClaudeHookAttention = { event in
+            events.append(event.source)
+            delivered.fulfill()
+        }
+        _ = try runScript(
+            stdin: #"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}"#, attention: true,
+            expectedLines: nil)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: path)
+        let failedRead = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                TracingService.shared.recordedEventsForTesting.contains {
+                    $0.name == "statusline.attention.read_failed"
+                }
+            }, object: nil)
+        wait(for: [failedRead], timeout: 2)
+        let failureCountBeforeStop = TracingService.shared.recordedEventsForTesting.filter {
+            $0.name == "statusline.attention.read_failed"
+        }.count
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+        monitor.stop()
+        monitor.start()
+        let quiet = expectation(description: "canceled retry stays inactive after restart")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { quiet.fulfill() }
+        wait(for: [quiet], timeout: 1)
+        XCTAssertEqual(
+            TracingService.shared.recordedEventsForTesting.filter { $0.name == "statusline.attention.read_failed" }
+                .count, failureCountBeforeStop)
+        _ = try runScript(
+            stdin: #"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}"#, attention: true,
+            expectedLines: nil)
+        wait(for: [delivered], timeout: 2)
+        XCTAssertEqual(events, [.claudeQuestion])
+    }
+
+    func testAttentionQueueRetriesAfterLockContentionWithoutNewFileEvent() throws {
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+        monitor.start()
+        let delivered = expectation(description: "locked queue record delivered once")
+        delivered.assertForOverFulfill = true
+        var events: [PaneAttentionEvent.Source] = []
+        monitor.onClaudeHookAttention = { event in
+            events.append(event.source)
+            delivered.fulfill()
+        }
+        let readyURL = FileManager.default.temporaryDirectory
+            .appending(path: "agent-session-manager-attention-lock-ready-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: readyURL) }
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/python3")
+        process.arguments = [
+            "-c",
+            """
+            import fcntl, os, sys, time
+            fd = os.open(sys.argv[1], os.O_WRONLY | os.O_APPEND)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            os.write(fd, sys.stdin.buffer.read())
+            open(sys.argv[2], "wb").close()
+            time.sleep(2.8)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+            """,
+            monitor.attentionSignalFilePath,
+            readyURL.path,
+        ]
+        let input = Pipe()
+        process.standardInput = input
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        input.fileHandleForWriting.write(
+            Data((#"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}"# + "\n").utf8))
+        try input.fileHandleForWriting.close()
+        let writerHoldingLock = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in FileManager.default.fileExists(atPath: readyURL.path) }, object: nil)
+        wait(for: [writerHoldingLock], timeout: 2)
+        let failedRead = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                TracingService.shared.recordedEventsForTesting.contains {
+                    $0.name == "statusline.attention.read_failed"
+                }
+            }, object: nil)
+        wait(for: [failedRead], timeout: 2)
+        let failure = try XCTUnwrap(
+            TracingService.shared.recordedEventsForTesting.first {
+                $0.name == "statusline.attention.read_failed"
+            })
+        XCTAssertGreaterThanOrEqual(Int(failure.attributes["retry_attempt"] ?? "0") ?? 0, 1)
+        XCTAssertTrue((100...1000).contains(Int(failure.attributes["retry_delay_ms"] ?? "0") ?? 0))
+        wait(for: [delivered], timeout: 6)
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        let failures = TracingService.shared.recordedEventsForTesting.filter {
+            $0.name == "statusline.attention.read_failed"
+        }
+        let delays = failures.compactMap { Int($0.attributes["retry_delay_ms"] ?? "") }
+        XCTAssertTrue(delays.contains(1000))
+        XCTAssertTrue(delays.allSatisfy { (100...1000).contains($0) })
+        XCTAssertEqual(failures.compactMap { Int($0.attributes["retry_attempt"] ?? "") }, Array(1...failures.count))
+        let quiet = expectation(description: "retry does not redeliver the event")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { quiet.fulfill() }
+        wait(for: [quiet], timeout: 1)
+        XCTAssertEqual(events, [.claudeQuestion])
+        XCTAssertTrue(try Data(contentsOf: URL(filePath: monitor.attentionSignalFilePath)).isEmpty)
+    }
+    func testAttentionRetryBackoffResetsAfterSuccessfulDrain() throws {
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+        monitor.start()
+        let path = monitor.attentionSignalFilePath
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path) }
+        let firstDelivered = expectation(description: "first blocked event recovered")
+        let secondDelivered = expectation(description: "second blocked event recovered")
+        firstDelivered.assertForOverFulfill = true
+        secondDelivered.assertForOverFulfill = true
+        monitor.onClaudeHookAttention = { event in
+            if event.source == .claudeQuestion {
+                firstDelivered.fulfill()
+            } else {
+                XCTAssertEqual(event.source, .claudePermissionRequest)
+                secondDelivered.fulfill()
+            }
+        }
+        _ = try runScript(
+            stdin: #"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}"#, attention: true,
+            expectedLines: nil)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: path)
+        let capped = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                TracingService.shared.recordedEventsForTesting.contains {
+                    $0.name == "statusline.attention.read_failed" && $0.attributes["retry_delay_ms"] == "1000"
+                }
+            }, object: nil)
+        wait(for: [capped], timeout: 6)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+        wait(for: [firstDelivered], timeout: 3)
+        let compacted = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                (try? Data(contentsOf: URL(filePath: path)).isEmpty) == true
+            }, object: nil)
+        wait(for: [compacted], timeout: 3)
+        let failureCount = TracingService.shared.recordedEventsForTesting.filter {
+            $0.name == "statusline.attention.read_failed"
+        }.count
+        _ = try runScript(
+            stdin: #"{"hook_event_name":"PermissionRequest","tool_name":"Bash"}"#,
+            attention: true, expectedLines: nil)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: path)
+        let failedAgain = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                TracingService.shared.recordedEventsForTesting.filter {
+                    $0.name == "statusline.attention.read_failed"
+                }.count > failureCount
+            }, object: nil)
+        wait(for: [failedAgain], timeout: 3)
+        let nextFailure = try XCTUnwrap(
+            TracingService.shared.recordedEventsForTesting.filter {
+                $0.name == "statusline.attention.read_failed"
+            }.dropFirst(failureCount).first)
+        XCTAssertEqual(nextFailure.attributes["retry_attempt"], "1")
+        XCTAssertEqual(nextFailure.attributes["retry_delay_ms"], "100")
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+        wait(for: [secondDelivered], timeout: 3)
     }
 }

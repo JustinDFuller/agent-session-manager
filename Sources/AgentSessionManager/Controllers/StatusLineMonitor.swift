@@ -58,6 +58,9 @@ final class StatusLineMonitor {
     private var hookLogOffset: UInt64 = 0
     private var hookLogLineBuffer = Data()
     private var attentionDebounceWork: DispatchWorkItem?
+    private var attentionRetryDelay: TimeInterval = 0.1
+    private var attentionRetryAttempt = 0
+    private var attentionWatcherGeneration = 0
     private var lastAttentionPayloadFingerprint: Int?
     private var pendingStopWork: DispatchWorkItem?
     private var hasConfirmedBackgroundWork = false
@@ -311,48 +314,7 @@ final class StatusLineMonitor {
                 role: "attention",
                 followsReplacement: false
             ) { [weak self] _ in
-                guard let self else { return }
-                guard attentionDebounceWork == nil else { return }
-                let work = DispatchWorkItem { [weak self] in
-                    guard let self else { return }
-                    attentionDebounceWork = nil
-                    do {
-                        let handle = try FileHandle(forUpdating: URL(filePath: attentionSignalFilePath))
-                        defer { try? handle.close() }
-                        guard flock(handle.fileDescriptor, LOCK_EX) == 0 else {
-                            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-                        }
-                        defer { _ = flock(handle.fileDescriptor, LOCK_UN) }
-                        try handle.seek(toOffset: attentionOffset)
-                        while let data = try handle.read(upToCount: 65_536), !data.isEmpty {
-                            attentionOffset += UInt64(data.count)
-                            attentionLineBuffer.append(data)
-                            while let newline = attentionLineBuffer.firstIndex(of: UInt8(ascii: "\n")) {
-                                let line = Data(attentionLineBuffer[..<newline])
-                                let next = attentionLineBuffer.index(after: newline)
-                                attentionLineBuffer = Data(attentionLineBuffer[next...])
-                                guard !line.isEmpty else { continue }
-                                applyClaudeAttentionPayload(line)
-                            }
-                        }
-                        if attentionOffset > UInt64(attentionLineBuffer.count) {
-                            try handle.seek(toOffset: 0)
-                            try handle.write(contentsOf: attentionLineBuffer)
-                            try handle.truncate(atOffset: UInt64(attentionLineBuffer.count))
-                            attentionOffset = UInt64(attentionLineBuffer.count)
-                        }
-                    } catch {
-                        TracingService.shared.record(
-                            "statusline.attention.read_failed",
-                            attributes: [
-                                "pane.name": paneName, "pane.id": paneID.uuidString,
-                                "tab.id": tabID.uuidString, "tab.name": tabName,
-                                "error_code": "\((error as NSError).code)",
-                            ])
-                    }
-                }
-                attentionDebounceWork = work
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+                self?.scheduleAttentionDrain(after: 0.15)
             }
             attentionWatcher?.start()
         } else {
@@ -842,13 +804,70 @@ final class StatusLineMonitor {
     }
 
     private func stopAttentionWatcher() {
+        attentionWatcherGeneration += 1
         attentionDebounceWork?.cancel()
         attentionDebounceWork = nil
         attentionWatcher?.cancel()
         attentionWatcher = nil
+        attentionRetryDelay = 0.1
+        attentionRetryAttempt = 0
         lastAttentionPayloadFingerprint = nil
         attentionOffset = 0
         attentionLineBuffer = Data()
+    }
+
+    private func scheduleAttentionDrain(after delay: TimeInterval) {
+        guard attentionWatcher != nil, attentionDebounceWork == nil else { return }
+        let generation = attentionWatcherGeneration
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard attentionWatcher != nil, attentionWatcherGeneration == generation else { return }
+            attentionDebounceWork = nil
+            do {
+                let handle = try FileHandle(forUpdating: URL(filePath: attentionSignalFilePath))
+                defer { try? handle.close() }
+                guard flock(handle.fileDescriptor, LOCK_EX | LOCK_NB) == 0 else {
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                }
+                defer { _ = flock(handle.fileDescriptor, LOCK_UN) }
+                try handle.seek(toOffset: attentionOffset)
+                while let data = try handle.read(upToCount: 65_536), !data.isEmpty {
+                    attentionOffset += UInt64(data.count)
+                    attentionLineBuffer.append(data)
+                    while let newline = attentionLineBuffer.firstIndex(of: UInt8(ascii: "\n")) {
+                        let line = Data(attentionLineBuffer[..<newline])
+                        let next = attentionLineBuffer.index(after: newline)
+                        attentionLineBuffer = Data(attentionLineBuffer[next...])
+                        guard !line.isEmpty else { continue }
+                        applyClaudeAttentionPayload(line)
+                    }
+                }
+                if attentionOffset > UInt64(attentionLineBuffer.count) {
+                    try handle.seek(toOffset: 0)
+                    try handle.write(contentsOf: attentionLineBuffer)
+                    try handle.truncate(atOffset: UInt64(attentionLineBuffer.count))
+                    attentionOffset = UInt64(attentionLineBuffer.count)
+                }
+                attentionRetryDelay = 0.1
+                attentionRetryAttempt = 0
+            } catch {
+                let retryDelay = attentionRetryDelay
+                attentionRetryDelay = min(retryDelay * 2, 1.0)
+                attentionRetryAttempt = min(attentionRetryAttempt + 1, 99)
+                TracingService.shared.record(
+                    "statusline.attention.read_failed",
+                    attributes: [
+                        "pane.name": paneName, "pane.id": paneID.uuidString,
+                        "tab.id": tabID.uuidString, "tab.name": tabName,
+                        "error_code": "\((error as NSError).code)",
+                        "retry_attempt": String(attentionRetryAttempt),
+                        "retry_delay_ms": String(Int((retryDelay * 1000).rounded(.up))),
+                    ])
+                scheduleAttentionDrain(after: retryDelay)
+            }
+        }
+        attentionDebounceWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     @MainActor
