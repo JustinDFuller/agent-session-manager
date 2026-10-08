@@ -54,7 +54,7 @@ struct PaneView: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(
                     isActive ? Theme.accent.opacity(0.6) : Color.primary.opacity(0.1),
-                    lineWidth: isActive ? 1.5 : 1
+                    lineWidth: isActive ? 3 : 1
                 )
         )
         .onChange(of: pane.terminalController?.processState) { _, newState in

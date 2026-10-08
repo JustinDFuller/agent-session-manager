@@ -36,6 +36,8 @@ Each pane shows a configurable status bar at the bottom (model, cost, context us
 
 ## Focus mode
 
+The active pane has a 3-point accent-colored border so it is easier to identify in the grid. Click a pane to make it active.
+
 When a tab contains multiple panes, double-click a pane header or right-click and choose **Focus This Pane** to give that terminal the full tab body while keeping the tab bar visible. See [focus-pane.md]({{ '/documentation/features/focus-pane/' | relative_url }}).
 
 ## Clipboard
