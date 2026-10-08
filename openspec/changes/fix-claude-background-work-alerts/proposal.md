@@ -15,6 +15,7 @@ Claude Code now reports background work directly. A complete `Stop` hook report 
 - A `Stop` that omits either list reports the warning invariant `claude.stop.background_state` and finishes the active turn, even if the remaining list is nonempty. This clears any prior pending-work confirmation.
 - Remove the `PreToolUse` `Task|Agent` and `SubagentStop` hooks that only fed the count.
 - Fix the hook log so it records the notification type under the key Claude Code actually sends (`notification_type`), and keeps the task and cron details needed for tracing.
+- Retry transient attention queue failures with bounded backoff while the watcher is active, retaining queued records without requiring another append; teardown cancels retries.
 - Handle the registered `PreToolUse` `AskUserQuestion|ExitPlanMode` attention events so questions and plan approvals alert regardless of background work.
 - Update notifications, pane activity indicators, tracing, the harness feature matrix, the canonical invariant catalog, and the status-line invariant table.
 
