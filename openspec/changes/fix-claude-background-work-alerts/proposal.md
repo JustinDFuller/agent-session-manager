@@ -41,3 +41,7 @@ Code changes are limited to the Claude hook script and registration, Claude hook
 - Changing the existing grace period before a finished alert fires.
 - Excluding persistent background shell commands such as dev servers. All background shells remain pending work and can suppress completion indefinitely.
 - A distinct pane indicator for "waiting on background work". The existing working indicator is used.
+
+## Validation handoff
+
+On 2026-10-08, Justin Fuller requested that live Claude testing take place after merge and release. Implementation supplies real-flow Dev UI coverage, records the actual automated results and authentication skips, and prepares a four-scenario acceptance and real screenshot checklist in QA. Live acceptance and feature screenshots are a human post-release follow-up rather than an archive prerequisite. Failed automated tests remain documented with their attribution; this deferral does not turn failures or skipped scenarios into passes.
