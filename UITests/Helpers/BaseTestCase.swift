@@ -5,6 +5,7 @@ class BaseTestCase: XCTestCase {
 
     var additionalLaunchArguments: [String] { [] }
     var additionalLaunchEnvironment: [String: String] { [:] }
+    var appLaunchArguments: [String] { ["--uitesting", "--uitesting-skip-restore"] + additionalLaunchArguments }
 
     func prepareTestWorkspace() {}
 
@@ -21,7 +22,7 @@ class BaseTestCase: XCTestCase {
         prepareTestWorkspace()
 
         app = XCUIApplication()
-        app.launchArguments = ["--uitesting", "--uitesting-skip-restore"] + additionalLaunchArguments
+        app.launchArguments = appLaunchArguments
         app.launchEnvironment = additionalLaunchEnvironment
         addUIInterruptionMonitor(withDescription: "Notification permission") { alert in
             for label in ["Allow", "Don’t Allow", "Don't Allow"] {

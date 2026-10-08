@@ -4,6 +4,8 @@ import XCTest
 final class ClaudeNotificationFlowTests: BaseTestCase {
     private var hookLogURL: URL!
 
+    override var appLaunchArguments: [String] { ["--uitesting-skip-restore"] + additionalLaunchArguments }
+
     private func openClaudePane(named name: String) throws {
         let status = Process()
         let output = Pipe()
@@ -20,6 +22,10 @@ final class ClaudeNotificationFlowTests: BaseTestCase {
         else {
             throw XCTSkip("Real Claude notification flows require an installed, authenticated Claude Code")
         }
+
+        let onboardingSkipButton = app.buttons["onboarding-skip-button"]
+        waitFor(onboardingSkipButton)
+        onboardingSkipButton.click()
 
         app.typeKey(",", modifierFlags: .command)
         app.buttons["Debug"].click()
