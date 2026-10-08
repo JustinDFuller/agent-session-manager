@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import Observation
 
@@ -52,12 +53,17 @@ final class StatusLineMonitor {
     private var statusWatcher: FileSystemEventWatcher?
     private var attentionWatcher: FileSystemEventWatcher?
     private var hookLogWatcher: FileSystemEventWatcher?
+    private var attentionOffset: UInt64 = 0
+    private var attentionLineBuffer = Data()
     private var hookLogOffset: UInt64 = 0
     private var hookLogLineBuffer = Data()
-    private var outstandingBackgroundAgents = 0
     private var attentionDebounceWork: DispatchWorkItem?
+    private var attentionRetryDelay: TimeInterval = 0.1
+    private var attentionRetryAttempt = 0
+    private var attentionWatcherGeneration = 0
     private var lastAttentionPayloadFingerprint: Int?
     private var pendingStopWork: DispatchWorkItem?
+    private var hasConfirmedBackgroundWork = false
     var stopNotificationGracePeriod: TimeInterval = 1.8
     private var agnosticProvider: (any StatusLineDataProvider)?
     private var gitDiffTimer: Timer?
@@ -110,7 +116,7 @@ final class StatusLineMonitor {
         filePath = NSTemporaryDirectory() + "agent-session-manager-status-\(paneID.uuidString).json"
         settingsFilePath = NSTemporaryDirectory() + "agent-session-manager-settings-\(paneID.uuidString).json"
         attentionSignalFilePath =
-            NSTemporaryDirectory() + "agent-session-manager-claude-attention-\(paneID.uuidString).json"
+            NSTemporaryDirectory() + "agent-session-manager-claude-attention-\(paneID.uuidString).jsonl"
         hookLogFilePath =
             NSTemporaryDirectory() + "agent-session-manager-claude-hooklog-\(paneID.uuidString).jsonl"
         hookLogScriptFilePath =
@@ -239,7 +245,8 @@ final class StatusLineMonitor {
                     "tab.name": tabName,
                 ])
             FileManager.default.createFile(atPath: filePath, contents: nil)
-            FileManager.default.createFile(atPath: hookLogFilePath, contents: nil)
+            FileManager.default.createFile(
+                atPath: hookLogFilePath, contents: nil, attributes: [.posixPermissions: 0o600])
             writeHookLogScript()
 
             statusWatcher = makeFileWatcher(
@@ -264,16 +271,16 @@ final class StatusLineMonitor {
                 defer { try? handle.close() }
                 do {
                     try handle.seek(toOffset: hookLogOffset)
-                    let data = try handle.readToEnd() ?? Data()
-                    guard !data.isEmpty else { return }
-                    hookLogOffset += UInt64(data.count)
-                    hookLogLineBuffer.append(data)
-                    while let newlineIndex = hookLogLineBuffer.firstIndex(of: UInt8(ascii: "\n")) {
-                        let lineData = Data(hookLogLineBuffer[..<newlineIndex])
-                        let afterNewline = hookLogLineBuffer.index(after: newlineIndex)
-                        hookLogLineBuffer = Data(hookLogLineBuffer[afterNewline...])
-                        guard !lineData.isEmpty else { continue }
-                        applyClaudeActivityPayload(lineData)
+                    while let data = try handle.read(upToCount: 65_536), !data.isEmpty {
+                        hookLogOffset += UInt64(data.count)
+                        hookLogLineBuffer.append(data)
+                        while let newlineIndex = hookLogLineBuffer.firstIndex(of: UInt8(ascii: "\n")) {
+                            let lineData = Data(hookLogLineBuffer[..<newlineIndex])
+                            let afterNewline = hookLogLineBuffer.index(after: newlineIndex)
+                            hookLogLineBuffer = Data(hookLogLineBuffer[afterNewline...])
+                            guard !lineData.isEmpty else { continue }
+                            applyClaudeActivityPayload(lineData)
+                        }
                     }
                 } catch {}
             }
@@ -300,36 +307,14 @@ final class StatusLineMonitor {
             }
 
             stopAttentionWatcher()
-            FileManager.default.createFile(atPath: attentionSignalFilePath, contents: nil)
+            FileManager.default.createFile(
+                atPath: attentionSignalFilePath, contents: nil, attributes: [.posixPermissions: 0o600])
             attentionWatcher = makeFileWatcher(
                 path: attentionSignalFilePath,
                 role: "attention",
                 followsReplacement: false
             ) { [weak self] _ in
-                guard let self else { return }
-                attentionDebounceWork?.cancel()
-                let work = DispatchWorkItem { [weak self] in
-                    guard let self,
-                        let data = try? Data(contentsOf: URL(filePath: attentionSignalFilePath)),
-                        !data.isEmpty
-                    else { return }
-                    var hasher = Hasher()
-                    hasher.combine(data)
-                    let fingerprint = hasher.finalize()
-                    guard fingerprint != lastAttentionPayloadFingerprint else { return }
-                    lastAttentionPayloadFingerprint = fingerprint
-                    guard let event = PaneAttentionEvent.claudeHook(data) else { return }
-                    TracingService.shared.record(
-                        "statusline.attention.received",
-                        attributes: [
-                            "pane.name": paneName, "pane.id": paneID.uuidString,
-                            "tab.id": tabID.uuidString, "tab.name": tabName,
-                            "source": event.source.rawValue, "reason": event.reason,
-                        ])
-                    onClaudeHookAttention?(event)
-                }
-                attentionDebounceWork = work
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+                self?.scheduleAttentionDrain(after: 0.15)
             }
             attentionWatcher?.start()
         } else {
@@ -381,6 +366,7 @@ final class StatusLineMonitor {
                 "tab.name": tabName,
             ])
         stopAttentionWatcher()
+        hasConfirmedBackgroundWork = false
         pendingStopWork?.cancel()
         pendingStopWork = nil
         agnosticProvider?.stop()
@@ -670,6 +656,7 @@ final class StatusLineMonitor {
         guard let payload = try? JSONDecoder().decode(ClaudeActivityPayload.self, from: data) else { return }
         switch payload.hookEventName {
         case "UserPromptSubmit":
+            lastAttentionPayloadFingerprint = nil
             pendingStopWork?.cancel()
             pendingStopWork = nil
             recordHookEventSpan(payload, decision: nil)
@@ -684,12 +671,54 @@ final class StatusLineMonitor {
                     "hook_event": payload.hookEventName,
                 ])
         case "Stop", "StopFailure":
-            guard claudeLifecycle == .working else {
-                recordHookEventSpan(payload, decision: "ignored_not_working")
+            if payload.hookEventName == "Stop", payload.backgroundTasks == nil || payload.sessionCrons == nil {
+                InvariantReporter.shared.violated(
+                    .claudeStopBackgroundState,
+                    context: [
+                        "pane.name": paneName, "pane.id": paneID.uuidString,
+                        "tab.id": tabID.uuidString, "tab.name": tabName,
+                        "has_background_tasks": "\(payload.backgroundTasks != nil)",
+                        "has_session_crons": "\(payload.sessionCrons != nil)",
+                    ])
+            }
+            let backgroundTasks = payload.backgroundTasks ?? []
+            let sessionCrons = payload.sessionCrons ?? []
+            let taskCount = max(backgroundTasks.count, payload.backgroundTaskCount ?? 0)
+            let cronCount = max(sessionCrons.count, payload.sessionCronCount ?? 0)
+            hasConfirmedBackgroundWork =
+                payload.hookEventName == "Stop"
+                && payload.backgroundTasks != nil && payload.sessionCrons != nil
+                && (taskCount > 0 || cronCount > 0)
+            if hasConfirmedBackgroundWork {
+                pendingStopWork?.cancel()
+                pendingStopWork = nil
+                if claudeLifecycle != .working {
+                    claudeLifecycle = .working
+                    TracingService.shared.record(
+                        "pane.activity.changed",
+                        attributes: [
+                            "pane.name": paneName, "pane.id": paneID.uuidString,
+                            "tab.id": tabID.uuidString, "tab.name": tabName,
+                            "state": "working", "source": "claude_hook",
+                            "hook_event": payload.hookEventName,
+                        ])
+                }
+                recordHookEventSpan(
+                    payload,
+                    decision: "suppressed_background_work",
+                    extraAttributes: [
+                        "background_task_types": backgroundTasks.prefix(16).map {
+                            var bytes = Array(($0.type ?? "unknown").utf8.prefix(64))
+                            while String(bytes: bytes, encoding: .utf8) == nil { bytes.removeLast() }
+                            return String(decoding: bytes, as: UTF8.self)
+                        }.joined(separator: ","),
+                        "background_task_count": "\(taskCount)",
+                        "session_cron_count": "\(cronCount)",
+                    ])
                 return
             }
-            guard outstandingBackgroundAgents == 0 else {
-                recordHookEventSpan(payload, decision: "suppressed_background_agents")
+            guard claudeLifecycle == .working else {
+                recordHookEventSpan(payload, decision: "ignored_not_working")
                 return
             }
             claudeLifecycle = .stopped
@@ -701,19 +730,64 @@ final class StatusLineMonitor {
                     "state": "stopped", "source": "claude_hook",
                     "hook_event": payload.hookEventName,
                 ])
-            recordHookEventSpan(payload, decision: "fired")
+            recordHookEventSpan(payload, decision: "scheduled")
             scheduleClaudeStoppedNotification()
-        case "SubagentStop":
-            outstandingBackgroundAgents = max(0, outstandingBackgroundAgents - 1)
-            recordHookEventSpan(payload, decision: nil)
-        case "PreToolUse":
-            outstandingBackgroundAgents += 1
-            recordHookEventSpan(payload, decision: nil)
         case "Notification":
             recordHookEventSpan(payload, decision: nil)
         default:
             return
         }
+    }
+
+    private func applyClaudeAttentionPayload(_ data: Data) {
+        if let payload = try? JSONDecoder().decode(ClaudeActivityPayload.self, from: data),
+            payload.hookEventName == "Notification",
+            payload.notificationType == "idle_prompt"
+        {
+            if hasConfirmedBackgroundWork {
+                TracingService.shared.record(
+                    "statusline.attention.suppressed",
+                    attributes: [
+                        "pane.name": paneName, "pane.id": paneID.uuidString,
+                        "tab.id": tabID.uuidString, "tab.name": tabName,
+                        "reason": "background_work_pending",
+                    ])
+                return
+            }
+            pendingStopWork?.cancel()
+            pendingStopWork = nil
+            if claudeLifecycle == .working {
+                claudeLifecycle = .stopped
+                TracingService.shared.record(
+                    "pane.activity.changed",
+                    attributes: [
+                        "pane.name": paneName, "pane.id": paneID.uuidString,
+                        "tab.id": tabID.uuidString, "tab.name": tabName,
+                        "state": "stopped", "source": "claude_idle_prompt",
+                    ])
+                TracingService.shared.record(
+                    "statusline.attention.recovered",
+                    attributes: [
+                        "pane.name": paneName, "pane.id": paneID.uuidString,
+                        "tab.id": tabID.uuidString, "tab.name": tabName,
+                        "reason": "idle_without_background_work",
+                    ])
+            }
+        }
+        var hasher = Hasher()
+        data.withUnsafeBytes { hasher.combine(bytes: $0) }
+        let fingerprint = hasher.finalize()
+        guard fingerprint != lastAttentionPayloadFingerprint else { return }
+        lastAttentionPayloadFingerprint = fingerprint
+        guard let event = PaneAttentionEvent.claudeHook(data) else { return }
+        TracingService.shared.record(
+            "statusline.attention.received",
+            attributes: [
+                "pane.name": paneName, "pane.id": paneID.uuidString,
+                "tab.id": tabID.uuidString, "tab.name": tabName,
+                "source": event.source.rawValue, "reason": event.reason,
+            ])
+        onClaudeHookAttention?(event)
     }
 
     private func scheduleClaudeStoppedNotification() {
@@ -730,11 +804,70 @@ final class StatusLineMonitor {
     }
 
     private func stopAttentionWatcher() {
+        attentionWatcherGeneration += 1
         attentionDebounceWork?.cancel()
         attentionDebounceWork = nil
         attentionWatcher?.cancel()
         attentionWatcher = nil
+        attentionRetryDelay = 0.1
+        attentionRetryAttempt = 0
         lastAttentionPayloadFingerprint = nil
+        attentionOffset = 0
+        attentionLineBuffer = Data()
+    }
+
+    private func scheduleAttentionDrain(after delay: TimeInterval) {
+        guard attentionWatcher != nil, attentionDebounceWork == nil else { return }
+        let generation = attentionWatcherGeneration
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard attentionWatcher != nil, attentionWatcherGeneration == generation else { return }
+            attentionDebounceWork = nil
+            do {
+                let handle = try FileHandle(forUpdating: URL(filePath: attentionSignalFilePath))
+                defer { try? handle.close() }
+                guard flock(handle.fileDescriptor, LOCK_EX | LOCK_NB) == 0 else {
+                    throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                }
+                defer { _ = flock(handle.fileDescriptor, LOCK_UN) }
+                try handle.seek(toOffset: attentionOffset)
+                while let data = try handle.read(upToCount: 65_536), !data.isEmpty {
+                    attentionOffset += UInt64(data.count)
+                    attentionLineBuffer.append(data)
+                    while let newline = attentionLineBuffer.firstIndex(of: UInt8(ascii: "\n")) {
+                        let line = Data(attentionLineBuffer[..<newline])
+                        let next = attentionLineBuffer.index(after: newline)
+                        attentionLineBuffer = Data(attentionLineBuffer[next...])
+                        guard !line.isEmpty else { continue }
+                        applyClaudeAttentionPayload(line)
+                    }
+                }
+                if attentionOffset > UInt64(attentionLineBuffer.count) {
+                    try handle.seek(toOffset: 0)
+                    try handle.write(contentsOf: attentionLineBuffer)
+                    try handle.truncate(atOffset: UInt64(attentionLineBuffer.count))
+                    attentionOffset = UInt64(attentionLineBuffer.count)
+                }
+                attentionRetryDelay = 0.1
+                attentionRetryAttempt = 0
+            } catch {
+                let retryDelay = attentionRetryDelay
+                attentionRetryDelay = min(retryDelay * 2, 1.0)
+                attentionRetryAttempt = min(attentionRetryAttempt + 1, 99)
+                TracingService.shared.record(
+                    "statusline.attention.read_failed",
+                    attributes: [
+                        "pane.name": paneName, "pane.id": paneID.uuidString,
+                        "tab.id": tabID.uuidString, "tab.name": tabName,
+                        "error_code": "\((error as NSError).code)",
+                        "retry_attempt": String(attentionRetryAttempt),
+                        "retry_delay_ms": String(Int((retryDelay * 1000).rounded(.up))),
+                    ])
+                scheduleAttentionDrain(after: retryDelay)
+            }
+        }
+        attentionDebounceWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     @MainActor
@@ -1042,6 +1175,11 @@ extension StatusLineMonitor {
     }
 
     @MainActor
+    func testApplyClaudeAttentionPayload(_ data: Data) {
+        applyClaudeAttentionPayload(data)
+    }
+
+    @MainActor
     func testApplyCursorActivity(isWorking: Bool) {
         applyCursorActivity(isWorking: isWorking)
     }
@@ -1063,15 +1201,15 @@ extension StatusLineMonitor {
             settings["prStatusFooterEnabled"] = false
         }
         let hookLogHook: [[String: Any]] = [["type": "command", "command": "'\(hookLogScriptPath)'"]]
-        let attentionHook: [[String: Any]] = [["type": "command", "command": "cat > '\(attentionOutputPath)'"]]
+        let attentionHook: [[String: Any]] = [
+            ["type": "command", "command": "'\(hookLogScriptPath)' --attention '\(attentionOutputPath)'"]
+        ]
         settings["hooks"] = [
             "UserPromptSubmit": [["hooks": hookLogHook]],
             "Stop": [["hooks": hookLogHook]],
             "StopFailure": [["hooks": hookLogHook]],
-            "SubagentStop": [["hooks": hookLogHook]],
             "PreToolUse": [
-                ["matcher": "AskUserQuestion|ExitPlanMode", "hooks": attentionHook],
-                ["matcher": "Task|Agent", "hooks": hookLogHook],
+                ["matcher": "AskUserQuestion|ExitPlanMode", "hooks": attentionHook]
             ],
             "PermissionRequest": [["hooks": attentionHook]],
             "Notification": [
@@ -1123,32 +1261,60 @@ extension StatusLineMonitor {
     func writeHookLogScript() {
         let script = """
             #!/usr/bin/env python3
+            import fcntl
+            import hashlib
             import json
             import os
             import sys
             import time
 
-            payload = json.load(sys.stdin)
-            tool_input = payload.get("tool_input")
-            if not isinstance(tool_input, dict):
-                tool_input = {}
+            def bounded(value, limit=64):
+                if not isinstance(value, str):
+                    return None
+                return value.encode("utf-8", errors="replace")[:limit].decode("utf-8", errors="ignore")
+
+            raw = sys.stdin.buffer.read()
+            payload = json.loads(raw)
+            attention = len(sys.argv) > 1 and sys.argv[1] == "--attention"
             record = {
-                "hook_event_name": payload.get("hook_event_name", ""),
-                "type": payload.get("type"),
-                "message": payload.get("message"),
-                "agent_id": payload.get("agent_id"),
-                "agent_type": payload.get("agent_type"),
-                "tool_name": payload.get("tool_name"),
-                "subagent_type": tool_input.get("subagent_type"),
-                "transcript_path": payload.get("transcript_path"),
-                "session_id": payload.get("session_id"),
-                "timestamp": time.time()
+                "hook_event_name": bounded(payload.get("hook_event_name")) or "",
+                "notification_type": bounded(payload.get("notification_type")),
+                "tool_name": bounded(payload.get("tool_name")),
+                "title": bounded(payload.get("title"), 1024),
+                "message": bounded(payload.get("message"), 1024),
+                "agent_id": bounded(payload.get("agent_id")),
+                "agent_type": bounded(payload.get("agent_type")),
+                "transcript_path": bounded(payload.get("transcript_path"), 1024),
+                "session_id": bounded(payload.get("session_id"), 128)
             }
-            line = json.dumps(record, separators=(",", ":")) + "\\n"
-            path = '\(hookLogFilePath)'
+            if attention:
+                record["payload_fingerprint"] = hashlib.sha256(raw).hexdigest()
+            else:
+                record["timestamp"] = time.time()
+                tasks = payload.get("background_tasks")
+                if isinstance(tasks, list):
+                    record["background_tasks"] = [
+                        {"id": bounded(t.get("id")), "type": bounded(t.get("type")), "status": bounded(t.get("status"), 32)}
+                        for t in tasks[:32] if isinstance(t, dict)
+                    ]
+                    record["background_tasks_total_count"] = len(tasks)
+                    record["background_tasks_omitted_count"] = len(tasks) - len(record["background_tasks"])
+                crons = payload.get("session_crons")
+                if isinstance(crons, list):
+                    record["session_crons"] = [
+                        {"id": bounded(c.get("id")), "recurring": c.get("recurring") if isinstance(c.get("recurring"), bool) else None}
+                        for c in crons[:32] if isinstance(c, dict)
+                    ]
+                    record["session_crons_total_count"] = len(crons)
+                    record["session_crons_omitted_count"] = len(crons) - len(record["session_crons"])
+            line = (json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\\n").encode("utf-8")
+            path = sys.argv[2] if attention else '\(hookLogFilePath)'
             fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
             try:
-                os.write(fd, line.encode("utf-8"))
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                offset = 0
+                while offset < len(line):
+                    offset += os.write(fd, line[offset:])
             finally:
                 os.close(fd)
             """
@@ -1160,48 +1326,53 @@ extension StatusLineMonitor {
 }
 
 extension StatusLineMonitor {
-    private func recordHookEventSpan(_ payload: ClaudeActivityPayload, decision: String?) {
+    private func recordHookEventSpan(
+        _ payload: ClaudeActivityPayload, decision: String?, extraAttributes: [String: String] = [:]
+    ) {
+        let attributes: [String: String] = [
+            "pane.name": paneName, "pane.id": paneID.uuidString,
+            "tab.id": tabID.uuidString, "tab.name": tabName,
+            "hook_event": payload.hookEventName,
+            "notification_type": payload.notificationType ?? "nil",
+            "agent_type": payload.agentType ?? "nil",
+            "decision": decision ?? "n/a",
+        ]
         TracingService.shared.record(
             "statusline.hook.event",
-            attributes: [
-                "pane.name": paneName, "pane.id": paneID.uuidString,
-                "tab.id": tabID.uuidString, "tab.name": tabName,
-                "hook_event": payload.hookEventName,
-                "notification_type": payload.notificationType ?? "nil",
-                "agent_type": payload.agentType ?? "nil",
-                "outstanding_count": "\(outstandingBackgroundAgents)",
-                "decision": decision ?? "n/a",
-            ])
+            attributes: attributes.merging(extraAttributes) { _, extra in extra })
     }
 }
 
 private struct ClaudeActivityPayload: Decodable {
-    struct ToolInput: Decodable {
-        let subagentType: String?
-        enum CodingKeys: String, CodingKey {
-            case subagentType = "subagent_type"
-        }
+    struct BackgroundTask: Decodable {
+        let type: String?
     }
+
+    struct SessionCron: Decodable {}
 
     let hookEventName: String
     let notificationType: String?
     let message: String?
     let agentID: String?
     let agentType: String?
-    let toolName: String?
-    let toolInput: ToolInput?
     let transcriptPath: String?
     let sessionID: String?
+    let backgroundTasks: [BackgroundTask]?
+    let sessionCrons: [SessionCron]?
+    let backgroundTaskCount: Int?
+    let sessionCronCount: Int?
 
     enum CodingKeys: String, CodingKey {
         case hookEventName = "hook_event_name"
-        case notificationType = "type"
+        case notificationType = "notification_type"
         case message
         case agentID = "agent_id"
         case agentType = "agent_type"
-        case toolName = "tool_name"
-        case toolInput = "tool_input"
         case transcriptPath = "transcript_path"
         case sessionID = "session_id"
+        case backgroundTasks = "background_tasks"
+        case sessionCrons = "session_crons"
+        case backgroundTaskCount = "background_tasks_total_count"
+        case sessionCronCount = "session_crons_total_count"
     }
 }

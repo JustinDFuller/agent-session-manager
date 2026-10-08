@@ -119,8 +119,9 @@ When an invariant is violated, the app reports it through `InvariantReporter`, r
 |-------|-------------|---|
 | `statusline.worktree.name` | `statusline.worktree.name_mismatch` | Claude JSON `worktree.name` or `workspace.git_worktree` disagrees with the app's computed worktree name (I1) |
 | `statusline.lines.source` | `statusline.lines.source_mismatch` | Claude JSON `cost.total_lines_added`/`total_lines_removed` disagrees with cached `git diff --shortstat HEAD` (I3) |
+| `claude.stop.background_state` | `statusline.claude.stop_background_state_missing` | A Claude `Stop` omits either background-work list; report a warning and finish the active turn even if the remaining list is nonempty |
 
-Migration-only events remain trace events:
+Other status-line events remain trace events:
 
 | Event | When emitted |
 |-------|-------------|
@@ -136,6 +137,7 @@ Migration-only events remain trace events:
 | `statusline.custom_field.exec_stale` | A result for an outdated field generation was ignored; includes pane/tab identity, field id, and trigger |
 | `statusline.custom_field.run_now` | A saved field was dispatched to matching panes; includes scope, target, started/coalesced counts, result, and profile id for profile scope |
 | `statusline.watcher.lifecycle` | A Claude status payload, attention, or hook-log watcher starts, waits for its file, recovers, or stops |
+| `statusline.attention.read_failed` | Claude attention queue open, nonblocking lock, read, or compaction failure; includes pane/tab context, bounded error code, and retry delay/attempt context. Pending state retries with backoff capped at one second while the watcher is active; success resets backoff and teardown cancels retries. |
 | `statusline.cursor.<role>_watcher.<state>` | A Cursor hook, lifecycle, or attention watcher starts, fails to attach, recovers, or stops |
 | `statusline.codex.hook_waiting` | Codex provider is still waiting for a hook record; includes retry attempt, late-binding state, and hook availability |
 | `statusline.codex.hook_bound` | Codex hook record bound the pane to a session; includes hook availability, event name, session id prefix, retry attempt, late-binding state, and transcript availability |

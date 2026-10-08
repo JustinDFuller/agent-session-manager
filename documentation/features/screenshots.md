@@ -41,6 +41,13 @@ ScreenshotTests captures all 34 views:
 - trace-waterfall
 - invariant-dashboard
 
+`ClaudeNotificationFlowTests` adds four captures from actual Claude panes:
+
+- claude-background-work
+- claude-question-attention
+- claude-plan-approval-attention
+- claude-interrupted-idle-recovery
+
 `testWalkthrough` captures 31 screenshots in one continuous app session. The trace-dashboard and invariant-dashboard screenshots each run in their own clean session.
 
 BaseTestCase.screenshot() writes PNG files only when SCREENSHOTS_OUTPUT_PATH is set. Normal make test-ui-dev runs retain screenshots as XCTest attachments; make screenshots additionally writes them to screenshots/ in the repository root.
@@ -51,7 +58,7 @@ For the macOS 26 visual baseline, the walkthrough prepares the default branch fi
 
     make screenshots
 
-This runs only ScreenshotTests and writes PNGs to screenshots/. The directory is gitignored; the workflow force-adds it when creating a PR.
+This runs `ScreenshotTests` and `ClaudeNotificationFlowTests` and writes PNGs to `screenshots/`. The Claude notification scenarios require an installed, authenticated Claude Code and exercise real background work, question/plan attention, and interrupted-turn recovery. Skipped or failed scenarios are not screenshot evidence; the shipment inventory requires all expected captures. The directory is gitignored; the workflow force-adds it when creating a PR.
 
 ## Multi-worktree safety
 

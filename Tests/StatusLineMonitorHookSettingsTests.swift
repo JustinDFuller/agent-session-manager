@@ -28,7 +28,7 @@ final class StatusLineMonitorHookSettingsTests: XCTestCase {
         let settings = makeSettings()
         let hooks = try XCTUnwrap(settings["hooks"] as? [String: Any])
 
-        for event in ["UserPromptSubmit", "Stop", "StopFailure", "SubagentStop"] {
+        for event in ["UserPromptSubmit", "Stop", "StopFailure"] {
             let entry = try firstEntry(for: event, in: hooks)
             XCTAssertEqual(try command(in: entry), "'/tmp/hooklog.py'")
         }
@@ -47,16 +47,21 @@ final class StatusLineMonitorHookSettingsTests: XCTestCase {
         )
         for event in ["PreToolUse", "PermissionRequest", "Notification", "Elicitation"] {
             let entry = try firstEntry(for: event, in: hooks)
-            XCTAssertEqual(try command(in: entry), "cat > '/tmp/attention.json'")
+            XCTAssertEqual(try command(in: entry), "'/tmp/hooklog.py' --attention '/tmp/attention.json'")
         }
     }
 
-    func testMakeClaudeSettingsRoutesBackgroundAgentLaunchesToHookLog() throws {
+    func testMakeClaudeSettingsDoesNotRegisterSubagentStopHook() throws {
+        let hooks = try XCTUnwrap(makeSettings()["hooks"] as? [String: Any])
+        XCTAssertNil(hooks["SubagentStop"])
+    }
+
+    func testMakeClaudeSettingsPreToolUseHasOnlyAttentionEntry() throws {
         let hooks = try XCTUnwrap(makeSettings()["hooks"] as? [String: Any])
         let preToolUseEntries = try entries(for: "PreToolUse", in: hooks)
-        XCTAssertEqual(preToolUseEntries.count, 2)
-        let agentLaunchEntry = try XCTUnwrap(preToolUseEntries.first { ($0["matcher"] as? String) == "Task|Agent" })
-        XCTAssertEqual(try command(in: agentLaunchEntry), "'/tmp/hooklog.py'")
+        XCTAssertEqual(preToolUseEntries.count, 1)
+        XCTAssertEqual(preToolUseEntries.first?["matcher"] as? String, "AskUserQuestion|ExitPlanMode")
+        XCTAssertEqual(try command(in: preToolUseEntries[0]), "'/tmp/hooklog.py' --attention '/tmp/attention.json'")
     }
 
     func testMakeClaudeSettingsLogsAllNotificationTypesForObservability() throws {

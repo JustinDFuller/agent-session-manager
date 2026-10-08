@@ -372,6 +372,20 @@ final class NotificationTests: XCTestCase {
         XCTAssertEqual(claudeEvent(#"{"hook_event_name":"PermissionRequest"}"#)?.reason, "Permission needed")
     }
 
+    func testClaudeQuestionAndPlanPreToolUseAttention() {
+        let question = claudeEvent(#"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}"#)
+        XCTAssertEqual(question?.source.rawValue, "claude_question")
+        XCTAssertEqual(question?.reason, "Claude has a question")
+        let plan = claudeEvent(#"{"hook_event_name":"PreToolUse","tool_name":"ExitPlanMode"}"#)
+        XCTAssertEqual(plan?.source.rawValue, "claude_plan_approval")
+        XCTAssertEqual(plan?.reason, "Claude needs plan approval")
+    }
+
+    func testClaudePreToolUseIgnoresUnrelatedAndMissingTools() {
+        XCTAssertNil(claudeEvent(#"{"hook_event_name":"PreToolUse","tool_name":"Bash"}"#))
+        XCTAssertNil(claudeEvent(#"{"hook_event_name":"PreToolUse"}"#))
+    }
+
     func testCursorStopReason() {
         XCTAssertEqual(PaneAttentionEvent.cursorStop.reason, "Agent turn completed")
     }
