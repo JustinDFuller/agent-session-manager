@@ -77,6 +77,8 @@ final class ScreenshotTests: BaseTestCase {
         let featureAHeader = app.descendants(matching: .any)
             .matching(identifier: "pane-header-feature-a").firstMatch
         waitFor(featureAHeader)
+        featureAHeader.click()
+        screenshot("split-panes-first-active")
         featureAHeader.rightClick()
         let scrollbackMenu = app.windows.firstMatch.menuItems["Scrollback History"]
         waitFor(scrollbackMenu)
