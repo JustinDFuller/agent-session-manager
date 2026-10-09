@@ -709,7 +709,9 @@ final class CodexStatusProviderTests: XCTestCase {
                     && $0.attributes["tab.name"] == "repo"
                     && $0.attributes["pane.id"] == "11111111-1111-1111-1111-111111111111"
                     && $0.attributes["tab.id"] == "22222222-2222-2222-2222-222222222222"
-            })
+            },
+            "Captured Codex contexts: \(codexEvents.prefix(20).map { "\($0.name): \($0.attributes["pane.name"] ?? "missing") / \($0.attributes["pane.id"] ?? "missing") / \($0.attributes["tab.name"] ?? "missing") / \($0.attributes["tab.id"] ?? "missing")" })"
+        )
     }
 
     func testBuildCodexCommandRegistersAppOwnedHooks() {

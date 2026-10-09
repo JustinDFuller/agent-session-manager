@@ -1,17 +1,6 @@
 import XCTest
 
 final class StatusLineCustomFieldFlowTests: BaseTestCase {
-    override func prepareTestWorkspace() {
-        let file = UITestAppSupport.directory.appending(path: "default-branch.json")
-        try? FileManager.default.removeItem(at: file)
-    }
-
-    override func tearDown() {
-        let file = UITestAppSupport.directory.appending(path: "default-branch.json")
-        try? FileManager.default.removeItem(at: file)
-        super.tearDown()
-    }
-
     func testSavedCustomFieldRunNowUpdatesRealPaneStatusLine() {
         createTab(named: "CustomStatus")
         createPane(named: "custom-pane")
@@ -32,7 +21,9 @@ final class StatusLineCustomFieldFlowTests: BaseTestCase {
         let commandField = app.textViews["custom-statusline-command-field"]
         waitFor(labelField)
         waitFor(commandField)
+        labelField.click()
         labelField.typeText("Live")
+        commandField.click()
         commandField.typeText(
             "if [[ -o interactive ]]; then printf live; else printf noninteractive; fi"
         )
@@ -47,6 +38,13 @@ final class StatusLineCustomFieldFlowTests: BaseTestCase {
         let percentOption = app.descendants(matching: .any)
             .matching(identifier: "custom-statusline-icon-option-percent").firstMatch
         waitFor(percentOption)
+        let iconScroll = app.scrollViews.containing(.button, identifier: "custom-statusline-icon-option-percent")
+            .firstMatch
+        waitFor(iconScroll)
+        for _ in 0..<20 where !iconScroll.frame.contains(percentOption.frame) {
+            iconScroll.scroll(byDeltaX: 0, deltaY: -80)
+        }
+        XCTAssertTrue(iconScroll.frame.contains(percentOption.frame))
         percentOption.click()
         waitForDisappear(iconSearchField)
 
@@ -59,7 +57,14 @@ final class StatusLineCustomFieldFlowTests: BaseTestCase {
         app.buttons["custom-statusline-save-button"].click()
         waitForDisappear(labelField)
 
-        let addItem = settingsWindow.buttons.matching(NSPredicate(format: "label == 'Add Item'")).firstMatch
+        let addItem = settingsWindow.descendants(matching: .any)
+            .matching(identifier: "settings-statusline-add-item-3").firstMatch
+        let contentScroll = settingsWindow.scrollViews
+            .containing(.button, identifier: "settings-statusline-add-custom-field-button").firstMatch
+        waitFor(contentScroll)
+        for _ in 0..<40 where !addItem.exists || !addItem.isHittable {
+            contentScroll.scroll(byDeltaX: 0, deltaY: 120)
+        }
         waitFor(addItem)
         addItem.click()
         waitFor(app.menuItems["Live"])
@@ -107,7 +112,9 @@ final class StatusLineCustomFieldFlowTests: BaseTestCase {
         let commandField = app.textViews["custom-statusline-command-field"]
         waitFor(labelField)
         waitFor(commandField)
+        labelField.click()
         labelField.typeText("Selector")
+        commandField.click()
         commandField.typeText("printf selector")
 
         let iconPicker = app.descendants(matching: .any)
@@ -121,6 +128,13 @@ final class StatusLineCustomFieldFlowTests: BaseTestCase {
         let percentOption = app.descendants(matching: .any)
             .matching(identifier: "custom-statusline-icon-option-percent").firstMatch
         waitFor(percentOption)
+        let iconScroll = app.scrollViews.containing(.button, identifier: "custom-statusline-icon-option-percent")
+            .firstMatch
+        waitFor(iconScroll)
+        for _ in 0..<20 where !iconScroll.frame.contains(percentOption.frame) {
+            iconScroll.scroll(byDeltaX: 0, deltaY: -80)
+        }
+        XCTAssertTrue(iconScroll.frame.contains(percentOption.frame))
         percentOption.click()
         waitForDisappear(iconSearchField)
         XCTAssertEqual(iconPicker.value as? String, "percent")

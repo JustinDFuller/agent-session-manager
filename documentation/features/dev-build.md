@@ -44,6 +44,8 @@ Swift package lower bounds live in `Package.swift`, while `Package.resolved` loc
 
 When a toolchain or dependency update is accepted, regenerate the Xcode project with `make xcodeproj`, run the complete Dev validation suite, and update the recorded validated versions if the support policy changes.
 
+`make xcodeproj` copies the root `Package.resolved` into the generated Xcode workspace. Dev test builds, UI test runs, and screenshots require those locked versions so SwiftPM and Xcode validate the same dependency graph. Run `bash scripts/test-xcodeproj.sh` to check fresh generation, regeneration over a stale workspace lockfile, and failure when the root lockfile is missing.
+
 Packaged apps always stage into the shared git common root, even when the command runs inside a worktree:
 
 | Build | Canonical bundle |
@@ -62,6 +64,10 @@ The project includes three build configurations. Their products use `.xcode-*` b
 
 Use the `Dev` configuration in Xcode to build the dev variant.
 
+Local validation hooks clear inherited Git repository and command-configuration variables before running checks, so disposable Git fixtures do not inherit the invoking hook path. Run `bash scripts/test-git-hooks.sh` to exercise real nested fixture commits and local pushes under both Git configuration mechanisms; lightweight command shims isolate this shell regression from native test execution. The full unit and Dev UI suites remain separate required evidence.
+
+The pre-push hook delegates to `make test-ui-dev-launch`, which runs the current launch and settings test classes with the Dev configuration and isolated state directory.
+
 ## UI Test Safety
 
 UITests must run against the Dev configuration, never production. The approved default command is `make test-ui-dev`. If you need a focused `xcodebuild test` invocation, it must still pass `-configuration Dev` so `DEV_BUILD` is compiled in and `UITestAppSupport.directory` resolves to `~/Library/Application Support/agent-session-manager.dev/`.
@@ -72,3 +78,5 @@ Treat any of these as a blocking misconfiguration and stop before running the su
 - The test run would read or write `~/Library/Application Support/agent-session-manager/`.
 
 If a dev UITest run is interrupted before teardown, clean up with `make reset-app-state-dev` before the next run.
+
+Dev UI tests pass `DISABLE_AUTO_UPDATE=true` to their app process so Oh My Zsh does not pause harness startup at its maintenance prompt. This uses the shell’s normal environment setting and does not change the user’s shell configuration or replace the real harness.

@@ -15,6 +15,8 @@ Press **⌘⇧D** or use the menu **Window → Open Trace Dashboard**.
 
 The Trace Dashboard opens as a separate auxiliary macOS window with the standard traffic-light controls. Close it with the window close button or **⌘W**; that dismissal does not target the active pane in the main window.
 
+Both diagnostic dashboards use explicitly created AppKit windows with saved-window restoration disabled. Open a dashboard explicitly each time it is needed. Closing and reopening a dashboard reuses its window during the current app session.
+
 ## Layout
 
 The dashboard uses a fixed-width custom sidebar plus a detail column so the screenshot baseline does not drift with SDK sidebar materials.

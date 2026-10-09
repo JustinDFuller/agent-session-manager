@@ -10,38 +10,18 @@ struct AgentSessionManagerApp: App {
         Settings {
             EmptyView()
         }
-
-        Window(AuxiliaryWindow.traceDashboard.title, id: AuxiliaryWindow.traceDashboard.rawValue) {
-            TraceDashboardView(
-                tracesDirectory: appDelegate.appSettings.resolvedTracingDirectoryURL
-            )
-            .preferredColorScheme(.dark)
-            .tint(Theme.accent)
-            .pinnedWindowChrome(Theme.dashboardWindowChrome)
-        }
-        .defaultSize(width: 900, height: 600)
-        .commands { AppCommands(appState: appDelegate.appState) }
-
-        Window(AuxiliaryWindow.invariantDashboard.title, id: AuxiliaryWindow.invariantDashboard.rawValue) {
-            InvariantDashboardView(
-                directory: appDelegate.appSettings.resolvedInvariantDirectoryURL
-            )
-            .preferredColorScheme(.dark)
-            .tint(Theme.accent)
-            .pinnedWindowChrome(Theme.dashboardWindowChrome)
-        }
-        .defaultSize(width: 900, height: 600)
+        .commands { AppCommands(appState: appDelegate.appState, appSettings: appDelegate.appSettings) }
     }
 }
 
 private struct AppCommands: Commands {
     let appState: AppState
+    let appSettings: AppSettings
     @AppStorage("keyBinding.newTabKey") var newTabKey = "t"
     @AppStorage("keyBinding.newPaneKey") var newPaneKey = "p"
     @AppStorage("keyBinding.closeTabKey") var closeTabKey = "k"
     @AppStorage("keyBinding.openShellHereKey") var openShellHereKey = "s"
     @AppStorage("keyBinding.viewPaneSettingsKey") var viewPaneSettingsKey = "i"
-    @Environment(\.openWindow) var openWindow
 
     var body: some Commands {
         CommandGroup(replacing: .appSettings) {
@@ -53,12 +33,16 @@ private struct AppCommands: Commands {
 
         CommandGroup(after: .windowSize) {
             Button("Open Trace Dashboard") {
-                AuxiliaryWindowRegistry.open(.traceDashboard, using: openWindow)
+                AuxiliaryWindowRegistry.open(
+                    .traceDashboard, tracesDirectory: appSettings.resolvedTracingDirectoryURL,
+                    invariantsDirectory: appSettings.resolvedInvariantDirectoryURL)
             }
             .keyboardShortcut("d", modifiers: [.command, .shift])
 
             Button("Open Invariant Dashboard") {
-                AuxiliaryWindowRegistry.open(.invariantDashboard, using: openWindow)
+                AuxiliaryWindowRegistry.open(
+                    .invariantDashboard, tracesDirectory: appSettings.resolvedTracingDirectoryURL,
+                    invariantsDirectory: appSettings.resolvedInvariantDirectoryURL)
             }
             .keyboardShortcut("i", modifiers: [.command, .shift])
         }

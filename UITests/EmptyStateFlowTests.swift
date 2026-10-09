@@ -1,6 +1,17 @@
 import XCTest
 
 final class EmptyStateFlowTests: BaseTestCase {
+    func testDashboardsRemainClosedAfterRelaunch() {
+        app.typeKey("d", modifierFlags: [.command, .shift])
+        waitFor(app.windows["Trace Dashboard"])
+        app.terminate()
+        app.launch()
+        app.activate()
+        waitFor(app.windows[mainWindowTitle])
+        XCTAssertFalse(app.windows["Trace Dashboard"].exists)
+        XCTAssertFalse(app.windows["Invariant Dashboard"].exists)
+    }
+
     func testEmptyStateFlow() {
         waitFor(emptyStateHint)
         XCTAssertEqual(emptyStateHint.value as? String, "Press ⌘T to create a tab")
@@ -22,7 +33,7 @@ final class EmptyStateFlowTests: BaseTestCase {
         let appMenu = app.menuBars.menuBarItems.element(boundBy: 1)
         appMenu.click()
         let settingsMenuItems = appMenu.menuItems.matching(
-            NSPredicate(format: "label BEGINSWITH 'Settings'")
+            NSPredicate(format: "title BEGINSWITH 'Settings'")
         )
         XCTAssertEqual(settingsMenuItems.count, 1, "Expected exactly one Settings… menu item")
         app.typeKey(.escape, modifierFlags: [])

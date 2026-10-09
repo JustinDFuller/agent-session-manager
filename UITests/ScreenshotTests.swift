@@ -14,7 +14,64 @@ final class ScreenshotTests: BaseTestCase {
     }
 
     func testWalkthrough() throws {
-        captureOnboarding()
+        do {
+            let setupButton = app.buttons["onboarding-setup-button"]
+            waitFor(setupButton)
+            screenshot("onboarding-welcome")
+            setupButton.click()
+
+            let shellPicker = app.popUpButtons["onboarding-shell-picker"]
+            waitFor(shellPicker)
+            screenshot("onboarding-shell")
+            app.buttons["onboarding-shell-continue-button"].click()
+            waitForDisappear(shellPicker, timeout: 10)
+
+            let doneButton = app.buttons["onboarding-done-button"]
+            waitFor(doneButton, timeout: 10)
+            let enabled = expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: doneButton)
+            wait(for: [enabled], timeout: 15)
+            screenshot("onboarding-tools")
+            doneButton.click()
+
+            let onboardingSheet = app.sheets.firstMatch
+            waitFor(onboardingSheet)
+            waitFor(app.buttons["onboarding-statusline-skip-button"], timeout: 10)
+            waitFor(
+                app.descendants(matching: .any)
+                    .matching(identifier: "settings-statusline-percentages-text-toggle").firstMatch
+            )
+            XCTAssertGreaterThan(onboardingSheet.frame.width, 520)
+            XCTAssertGreaterThan(onboardingSheet.frame.height, 360)
+            screenshot("onboarding-status-line")
+
+            let statusLineSaveButton = app.buttons["onboarding-statusline-save-button"]
+            let statusLineHittable = expectation(
+                for: NSPredicate(format: "hittable == true"),
+                evaluatedWith: statusLineSaveButton
+            )
+            wait(for: [statusLineHittable], timeout: 5)
+            statusLineSaveButton.click()
+
+            let cliFlagsSaveButton = app.buttons["onboarding-cliflags-save-button"]
+            waitFor(cliFlagsSaveButton)
+            let cliFlagsHittable = expectation(
+                for: NSPredicate(format: "hittable == true"),
+                evaluatedWith: cliFlagsSaveButton
+            )
+            wait(for: [cliFlagsHittable], timeout: 5)
+            waitFor(
+                app.descendants(matching: .any)
+                    .matching(identifier: "settings-cli-option-show---continue").firstMatch
+            )
+            screenshot("onboarding-cli-flags")
+            cliFlagsSaveButton.click()
+
+            let finishButton = app.buttons["onboarding-profiles-finish-button"]
+            waitFor(finishButton)
+            waitFor(app.descendants(matching: .any).matching(identifier: "profile-new-button").firstMatch)
+            screenshot("onboarding-profiles")
+            finishButton.click()
+        }
 
         waitFor(emptyStateHint)
         screenshot("empty-state")
@@ -118,194 +175,139 @@ final class ScreenshotTests: BaseTestCase {
         XCTAssertLessThan(secondPane.frame.minX, firstPane.frame.minX)
         screenshot("reordered-tabs-and-panes")
 
-        captureSettings()
-        captureStatusIndicators()
-        captureFocusedPane()
-    }
+        do {
+            app.typeKey(",", modifierFlags: .command)
+            let settingsWindow = app.windows["AgentSessionManager Settings"]
+            waitFor(settingsWindow)
+            XCTAssertEqual(round(settingsWindow.frame.width), 900)
+            XCTAssertEqual(round(settingsWindow.frame.height), 584)
 
-    private func captureOnboarding() {
-        let setupButton = app.buttons["onboarding-setup-button"]
-        waitFor(setupButton)
-        screenshot("onboarding-welcome")
-        setupButton.click()
+            let panesTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-panes").firstMatch
+            waitFor(panesTab)
+            panesTab.click()
+            screenshot("settings-panes")
 
-        let shellPicker = app.popUpButtons["onboarding-shell-picker"]
-        waitFor(shellPicker)
-        screenshot("onboarding-shell")
-        app.buttons["onboarding-shell-continue-button"].click()
-        waitForDisappear(shellPicker, timeout: 10)
+            let injectionPolicyPicker = settingsWindow.descendants(matching: .any)
+                .matching(identifier: "settings-agent-control-injection-policy-picker").firstMatch
+            waitFor(injectionPolicyPicker)
+            screenshot("settings-agent-control")
 
-        let doneButton = app.buttons["onboarding-done-button"]
-        waitFor(doneButton, timeout: 10)
-        let enabled = expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: doneButton)
-        wait(for: [enabled], timeout: 15)
-        screenshot("onboarding-tools")
-        doneButton.click()
-
-        let onboardingSheet = app.sheets.firstMatch
-        waitFor(onboardingSheet)
-        waitFor(app.buttons["onboarding-statusline-skip-button"], timeout: 10)
-        waitFor(
-            app.descendants(matching: .any)
-                .matching(identifier: "settings-statusline-percentages-text-toggle").firstMatch
-        )
-        XCTAssertGreaterThan(onboardingSheet.frame.width, 520)
-        XCTAssertGreaterThan(onboardingSheet.frame.height, 360)
-        screenshot("onboarding-status-line")
-
-        let statusLineSaveButton = app.buttons["onboarding-statusline-save-button"]
-        let statusLineHittable = expectation(
-            for: NSPredicate(format: "hittable == true"),
-            evaluatedWith: statusLineSaveButton
-        )
-        wait(for: [statusLineHittable], timeout: 5)
-        statusLineSaveButton.click()
-
-        let cliFlagsSaveButton = app.buttons["onboarding-cliflags-save-button"]
-        waitFor(cliFlagsSaveButton)
-        let cliFlagsHittable = expectation(
-            for: NSPredicate(format: "hittable == true"),
-            evaluatedWith: cliFlagsSaveButton
-        )
-        wait(for: [cliFlagsHittable], timeout: 5)
-        waitFor(
-            app.descendants(matching: .any)
-                .matching(identifier: "settings-cli-option-show---continue").firstMatch
-        )
-        screenshot("onboarding-cli-flags")
-        cliFlagsSaveButton.click()
-
-        let finishButton = app.buttons["onboarding-profiles-finish-button"]
-        waitFor(finishButton)
-        waitFor(app.descendants(matching: .any).matching(identifier: "profile-new-button").firstMatch)
-        screenshot("onboarding-profiles")
-        finishButton.click()
-    }
-
-    private func captureSettings() {
-        app.typeKey(",", modifierFlags: .command)
-        let settingsWindow = app.windows["AgentSessionManager Settings"]
-        waitFor(settingsWindow)
-        XCTAssertEqual(round(settingsWindow.frame.width), 900)
-        XCTAssertEqual(round(settingsWindow.frame.height), 584)
-
-        let panesTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-panes").firstMatch
-        waitFor(panesTab)
-        panesTab.click()
-        screenshot("settings-panes")
-
-        let injectionPolicyPicker = settingsWindow.descendants(matching: .any)
-            .matching(identifier: "settings-agent-control-injection-policy-picker").firstMatch
-        waitFor(injectionPolicyPicker)
-        screenshot("settings-agent-control")
-
-        let notificationsTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-notifications")
+            let notificationsTab = app.descendants(matching: .any).matching(
+                identifier: "settings-sidebar-notifications"
+            )
             .firstMatch
-        waitFor(notificationsTab)
-        notificationsTab.click()
-        screenshot("settings-notifications")
+            waitFor(notificationsTab)
+            notificationsTab.click()
+            screenshot("settings-notifications")
 
-        let profilesTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-profiles").firstMatch
-        waitFor(profilesTab)
-        profilesTab.click()
-        let newProfileButton = app.buttons["New Profile"]
-        waitFor(newProfileButton)
-        newProfileButton.click()
-        let profileNameField = app.textFields["profile-editor-name-field"]
-        waitFor(profileNameField)
-        profileNameField.click()
-        profileNameField.typeText("Docs Profile")
-        app.buttons["Save"].click()
-        waitFor(app.staticTexts["Docs Profile"])
-        screenshot("settings-profiles")
+            let profilesTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-profiles")
+                .firstMatch
+            waitFor(profilesTab)
+            profilesTab.click()
+            let newProfileButton = app.buttons["New Profile"]
+            waitFor(newProfileButton)
+            newProfileButton.click()
+            let profileNameField = app.textFields["profile-editor-name-field"]
+            waitFor(profileNameField)
+            profileNameField.click()
+            profileNameField.typeText("Docs Profile")
+            app.buttons["Save"].click()
+            waitFor(app.staticTexts["Docs Profile"])
+            screenshot("settings-profiles")
 
-        let toolsTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-tools").firstMatch
-        waitFor(toolsTab)
-        toolsTab.click()
-        screenshot("settings-tools")
+            let toolsTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-tools").firstMatch
+            waitFor(toolsTab)
+            toolsTab.click()
+            screenshot("settings-tools")
 
-        let shortcutsTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-shortcuts").firstMatch
-        waitFor(shortcutsTab)
-        shortcutsTab.click()
-        screenshot("settings-shortcuts")
+            let shortcutsTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-shortcuts")
+                .firstMatch
+            waitFor(shortcutsTab)
+            shortcutsTab.click()
+            screenshot("settings-shortcuts")
 
-        let statusLineTab = app.descendants(matching: .any)
-            .matching(identifier: "settings-sidebar-status-line").firstMatch
-        waitFor(statusLineTab)
-        statusLineTab.click()
-        screenshot("settings-status-line")
+            let statusLineTab = app.descendants(matching: .any)
+                .matching(identifier: "settings-sidebar-status-line").firstMatch
+            waitFor(statusLineTab)
+            statusLineTab.click()
+            screenshot("settings-status-line")
 
-        let addCustomField = settingsWindow.buttons["settings-statusline-add-custom-field-button"]
-        waitFor(addCustomField)
-        addCustomField.click()
-        let customFieldLabel = app.textFields["custom-statusline-label-field"]
-        let customFieldCommand = app.textViews["custom-statusline-command-field"]
-        waitFor(customFieldLabel)
-        waitFor(customFieldCommand)
-        customFieldLabel.typeText("Connection")
-        customFieldCommand.typeText("printf connected")
-        let iconPicker = app.buttons["custom-statusline-icon-picker"]
-        let harnessMenu = app.descendants(matching: .any)
-            .matching(identifier: "custom-statusline-harness-menu").firstMatch
-        waitFor(iconPicker)
-        waitFor(harnessMenu)
-        iconPicker.click()
-        let iconSearch = app.textFields["custom-statusline-icon-search-field"]
-        waitFor(iconSearch)
-        iconSearch.typeText("network")
-        screenshot("settings-status-line-custom-field-selector")
-        app.typeKey(.escape, modifierFlags: [])
-        waitForDisappear(iconSearch)
-        harnessMenu.click()
-        let claudeHarness = app.descendants(matching: .any)
-            .matching(identifier: "custom-statusline-harness-claude").firstMatch
-        waitFor(claudeHarness)
-        screenshot("settings-status-line-custom-field-harnesses")
-        app.buttons["custom-statusline-harness-done-button"].click()
-        waitForDisappear(claudeHarness)
-        app.buttons["Cancel"].click()
-        waitForDisappear(customFieldLabel)
+            let addCustomField = settingsWindow.buttons["settings-statusline-add-custom-field-button"]
+            waitFor(addCustomField)
+            addCustomField.click()
+            let customFieldLabel = app.textFields["custom-statusline-label-field"]
+            let customFieldCommand = app.textViews["custom-statusline-command-field"]
+            waitFor(customFieldLabel)
+            waitFor(customFieldCommand)
+            customFieldLabel.click()
+            customFieldLabel.typeText("Connection")
+            customFieldCommand.click()
+            customFieldCommand.typeText("printf connected")
+            let iconPicker = app.buttons["custom-statusline-icon-picker"]
+            let harnessMenu = app.descendants(matching: .any)
+                .matching(identifier: "custom-statusline-harness-menu").firstMatch
+            waitFor(iconPicker)
+            waitFor(harnessMenu)
+            iconPicker.click()
+            let iconSearch = app.textFields["custom-statusline-icon-search-field"]
+            waitFor(iconSearch)
+            iconSearch.typeText("network")
+            screenshot("settings-status-line-custom-field-selector")
+            app.typeKey(.escape, modifierFlags: [])
+            waitForDisappear(iconSearch)
+            harnessMenu.click()
+            let claudeHarness = app.descendants(matching: .any)
+                .matching(identifier: "custom-statusline-harness-claude").firstMatch
+            waitFor(claudeHarness)
+            screenshot("settings-status-line-custom-field-harnesses")
+            app.buttons["custom-statusline-harness-done-button"].click()
+            waitForDisappear(claudeHarness)
+            app.buttons["Cancel"].click()
+            waitForDisappear(customFieldLabel)
 
-        let debugTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-debug").firstMatch
-        waitFor(debugTab)
-        debugTab.click()
-        screenshot("settings-debug")
-        app.typeKey("w", modifierFlags: .command)
-        waitForDisappear(settingsWindow)
-    }
+            let debugTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-debug").firstMatch
+            waitFor(debugTab)
+            debugTab.click()
+            screenshot("settings-debug")
+            app.typeKey("w", modifierFlags: .command)
+            waitForDisappear(settingsWindow)
+        }
+        do {
+            createTab(named: "Status")
+            createPane(named: "idle-pane")
+            waitFor(
+                app.descendants(matching: .any)
+                    .matching(identifier: "pane-activity-idle-idle-pane").firstMatch,
+                timeout: 15
+            )
+            waitFor(app.descendants(matching: .any).matching(identifier: "status-line-row").firstMatch)
+            screenshot("pane-status-indicators")
 
-    private func captureStatusIndicators() {
-        createTab(named: "Status")
-        createPane(named: "idle-pane")
-        waitFor(
-            app.descendants(matching: .any)
-                .matching(identifier: "pane-activity-idle-idle-pane").firstMatch,
-            timeout: 15
-        )
-        waitFor(app.descendants(matching: .any).matching(identifier: "status-line-row").firstMatch)
-        screenshot("pane-status-indicators")
-
-        let shellName = openShellHere(from: "idle-pane")
-        app.staticTexts["pane-name-\(shellName)"].firstMatch.click()
-        app.typeText("printf '\\a'")
-        app.typeKey(.enter, modifierFlags: [])
-        app.staticTexts["pane-name-idle-pane"].firstMatch.click()
-        let notificationSidebar = app.descendants(matching: .any)
-            .matching(identifier: "notification-sidebar").firstMatch
-        waitFor(notificationSidebar, timeout: 10)
-        screenshot("notification-sidebar")
-    }
-
-    private func captureFocusedPane() {
-        createTab(named: "Focus")
-        createPane(named: "reader")
-        createPane(named: "worker")
-        let readerHeader = app.descendants(matching: .any).matching(identifier: "pane-header-reader").firstMatch
-        waitFor(readerHeader)
-        readerHeader.doubleClick()
-        waitFor(app.buttons["pane-show-all-reader"].firstMatch)
-        screenshot("focused-pane")
-        app.buttons["pane-show-all-reader"].click()
+            let shellName = openShellHere(from: "idle-pane")
+            let terminal = app.descendants(matching: .any)
+                .matching(identifier: "pane-terminal-\(shellName)").firstMatch
+            waitFor(terminal)
+            terminal.click()
+            typeTerminalCommand("printf '\\033]777;notify;Agent Session Manager;Permission needed for Bash\\007'")
+            let notificationSidebar = app.descendants(matching: .any)
+                .matching(identifier: "notification-sidebar").firstMatch
+            waitFor(notificationSidebar, timeout: 10)
+            waitFor(
+                app.descendants(matching: .any).matching(identifier: "notification-row-\(shellName)").firstMatch,
+                timeout: 10)
+            screenshot("notification-sidebar")
+        }
+        do {
+            createTab(named: "Focus")
+            createPane(named: "reader")
+            createPane(named: "worker")
+            let readerHeader = app.descendants(matching: .any).matching(identifier: "pane-header-reader").firstMatch
+            waitFor(readerHeader)
+            readerHeader.doubleClick()
+            waitFor(app.buttons["pane-show-all-reader"].firstMatch)
+            screenshot("focused-pane")
+            app.buttons["pane-show-all-reader"].click()
+        }
     }
 
     func testTraceDashboard() {

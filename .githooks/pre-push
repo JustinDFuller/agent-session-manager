@@ -2,15 +2,5 @@
 set -e
 echo "==> Running UI smoke tests..."
 cd "$(git rev-parse --show-toplevel)"
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
-rm -rf .build/TestResults.xcresult
-make xcodeproj >/dev/null 2>&1
-xcodebuild test \
-  -project AgentSessionManager.xcodeproj \
-  -scheme AgentSessionManager \
-  -destination 'platform=macOS' \
-  -only-testing:AgentSessionManagerUITests/AppLaunchTests \
-  -only-testing:AgentSessionManagerUITests/NewTabTests \
-  -only-testing:AgentSessionManagerUITests/NewPaneTests \
-  -resultBundlePath .build/TestResults.xcresult \
-  -derivedDataPath .build/DerivedData
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
+make test-ui-dev-launch

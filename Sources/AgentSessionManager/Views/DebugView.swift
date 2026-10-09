@@ -2,7 +2,6 @@ import SwiftUI
 
 struct DebugView: View {
     @Environment(AppSettings.self) private var appSettings
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         @Bindable var appSettings = appSettings
@@ -28,11 +27,15 @@ struct DebugView: View {
             }
             Section("Dashboards") {
                 Button("Open Trace Dashboard") {
-                    AuxiliaryWindowRegistry.open(.traceDashboard, using: openWindow)
+                    AuxiliaryWindowRegistry.open(
+                        .traceDashboard, tracesDirectory: appSettings.resolvedTracingDirectoryURL,
+                        invariantsDirectory: appSettings.resolvedInvariantDirectoryURL)
                 }
                 .accessibilityIdentifier("settings-open-trace-dashboard-button")
                 Button("Open Invariant Dashboard") {
-                    AuxiliaryWindowRegistry.open(.invariantDashboard, using: openWindow)
+                    AuxiliaryWindowRegistry.open(
+                        .invariantDashboard, tracesDirectory: appSettings.resolvedTracingDirectoryURL,
+                        invariantsDirectory: appSettings.resolvedInvariantDirectoryURL)
                 }
                 .accessibilityIdentifier("settings-open-invariant-dashboard-button")
             }

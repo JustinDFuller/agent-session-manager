@@ -23,6 +23,9 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Check generated dependency lockfile
+        run: bash scripts/test-xcodeproj.sh
+
       - name: Run launch-behavior UI tests
         run: make test-ui-dev-launch
 

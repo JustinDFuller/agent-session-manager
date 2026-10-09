@@ -343,6 +343,7 @@ private struct ProfileEditorSheet: View {
                                         }
                                     }
                                     .frame(maxHeight: 160)
+                                    .accessibilityIdentifier("profile-editor-hidden-options-scroll-view")
                                 }
                             }
                         }
@@ -431,6 +432,7 @@ private struct ProfileEditorSheet: View {
                                             }
                                         }
                                         .frame(maxHeight: 120)
+                                        .accessibilityIdentifier("profile-editor-hidden-env-vars-scroll-view")
                                     }
                                 }
                             }

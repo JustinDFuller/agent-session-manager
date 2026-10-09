@@ -183,6 +183,7 @@ struct StatusLineConfigLayoutEditor: View {
                             Label("Add Item", systemImage: "plus")
                         }
                         .buttonStyle(.borderless)
+                        .accessibilityIdentifier("settings-statusline-add-item-\(rowIndex)")
                     } header: {
                         HStack {
                             Text("Row \(rowIndex + 1)")
@@ -949,10 +950,15 @@ struct AddCustomStatusLineFieldSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button(editingField == nil ? "Add" : "Save") { submit() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!isValid)
-                    .accessibilityIdentifier("custom-statusline-save-button")
+                Button(editingField == nil ? "Add" : "Save") {
+                    guard isValid else { return }
+                    let field = makeField(id: editingField?.id ?? "custom:\(UUID().uuidString)")
+                    onSave(field)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!isValid)
+                .accessibilityIdentifier("custom-statusline-save-button")
             }
         }
         .padding(24)
@@ -990,13 +996,6 @@ struct AddCustomStatusLineFieldSheet: View {
             return false
         }
         return persistedDraft == editingField
-    }
-
-    private func submit() {
-        guard isValid else { return }
-        let field = makeField(id: editingField?.id ?? "custom:\(UUID().uuidString)")
-        onSave(field)
-        dismiss()
     }
 
     private func makeField(id: String) -> CustomStatusLineField {
@@ -1076,6 +1075,7 @@ private struct CustomStatusLineIconOptionRow: View {
                         .foregroundStyle(Color.accentColor)
                 }
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("custom-statusline-icon-option-\(option.symbol)")

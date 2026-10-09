@@ -18,6 +18,12 @@ The New Pane sheet keeps the common path visible:
 
 Only tools enabled in **Settings → Harnesses** appear when selecting a custom harness. Switching tools preserves the session field.
 
+The CLI Options and More Settings sheets expose their controls as children of an accessibility container, preserving each control's identifier. Choosing **Done** returns to New Pane; choose **Cancel** there to abandon pane creation.
+
+Pane settings presentation uses the selected pane as its data source so the first opening contains that pane's settings. Closing the sheet clears the selection; reopening it reads the current pane state.
+
+Refreshing a pane first opens its confirmation sheet. **Refresh with New Settings…** opens the configuration sheet after that confirmation dismisses, preserving the selected pane and its current scrollback override.
+
 ### CLI options
 
 The **CLI Options** surface shows options enabled in the selected profile or marked **Show on new pane**. When using **Custom**, it shows the active catalog. Presets, custom values, multi-select MCP options, and supported environment variables remain editable there.
@@ -51,6 +57,8 @@ Right-click anywhere on a pane to open the context menu. **Copy** and **Paste** 
 ## Open Shell Here
 
 Right-click a pane header and choose **Open Shell Here** to create a plain shell pane in the same working directory. The new shell pane is named from the source pane so you can tell where it came from, for example `shell:reader`, `shell:reader-2`, and so on.
+
+Shell panes use the same terminal notification handlers as harness panes. A real terminal bell or OSC 777 notification creates a sidebar row, and terminal input acknowledges that row.
 
 ## Session persistence
 
@@ -105,3 +113,5 @@ macOS stores TCC decisions per app bundle. If permissions don't stick:
 | ⌘1–⌘9 | Switch to tab by index |
 
 For fallback creation from the configured **default branch**, see [default-branch.md]({{ '/documentation/features/default-branch/' | relative_url }}).
+
+Pane loading and setup errors reflect the real worktree operation before a terminal starts. UI regressions create panes through New Pane and use a delayed Git checkout hook and an actual conflicting non-worktree directory in disposable repositories; the app has no loading or error injection flags.

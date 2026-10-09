@@ -1,36 +1,7 @@
 import XCTest
 
-final class SessionPersistenceFlowTests: XCTestCase {
-    var app: XCUIApplication!
-
-    override func setUp() {
-        super.setUp()
-        continueAfterFailure = false
-
-        for file in [
-            "sessions.json", "active-tools-settings.json", "cursor-settings.json",
-            "debug-settings.json", "restart-settings.json",
-        ] {
-            try? FileManager.default.removeItem(at: UITestAppSupport.directory.appending(path: file))
-        }
-
-        let testDir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appending(path: "UITestWorkspace", directoryHint: .isDirectory)
-        try? FileManager.default.removeItem(at: testDir)
-        GitUITestWorkspace.prepareCleanRepo()
-
-        app = XCUIApplication()
-        app.launchArguments = ["--uitesting"]
-        app.launch()
-        app.activate()
-    }
-
-    override func tearDown() {
-        app.terminate()
-        let sessionFile = UITestAppSupport.directory.appending(path: "sessions.json")
-        try? FileManager.default.removeItem(at: sessionFile)
-        super.tearDown()
-    }
+final class SessionPersistenceFlowTests: BaseTestCase {
+    override var appLaunchArguments: [String] { ["--uitesting"] }
 
     func testSessionPersistenceFlow() {
         app.typeKey("t", modifierFlags: .command)
@@ -142,9 +113,11 @@ final class SessionPersistenceFlowTests: XCTestCase {
 
         let pane = app.staticTexts["pane-name-cursor-restore"].firstMatch
         XCTAssertTrue(pane.waitForExistence(timeout: 25))
+        waitFor(app.descendants(matching: .any).matching(identifier: "pane-terminal-cursor-restore").firstMatch)
 
         app.terminate()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 10))
+        app.launchArguments = ["--uitesting"]
         app.launch()
         app.activate()
 

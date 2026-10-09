@@ -4,6 +4,27 @@ import XCTest
 
 @MainActor
 final class TerminalBellNotificationTests: XCTestCase {
+    func testOpenShellPaneBindsOSC777Notifications() async throws {
+        let appState = AppState()
+        let tab = Tab(name: "Shell tab", directory: URL(filePath: "/tmp"))
+        let source = Pane(name: "source", tab: tab, harness: .claude)
+        tab.panes.append(source)
+        appState.tabs.append(tab)
+        tab.openShellPane(activePane: source, appState: appState)
+        let shell = try XCTUnwrap(tab.panes.last)
+        let controller = try XCTUnwrap(shell.terminalController)
+        controller.terminalView.feed(text: "\u{1b}]777;notify;Shell;Permission needed for Bash\u{07}")
+        let deadline = Date().addingTimeInterval(2)
+        while appState.notifications.isEmpty, Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(appState.notifications.count, 1)
+        XCTAssertEqual(appState.notifications.first?.paneID, shell.id)
+        XCTAssertEqual(appState.notifications.first?.paneName, "shell:source")
+        XCTAssertEqual(appState.notifications.first?.tabName, "Shell tab")
+        XCTAssertEqual(appState.notifications.first?.reason, "Permission needed for Bash")
+    }
+
     func testWireTerminalBellForNotificationsAddsWhenPaneIsNotActive() async {
         let appState = AppState()
         let tab = Tab(name: "T", directory: URL(filePath: "/tmp", directoryHint: .isDirectory))

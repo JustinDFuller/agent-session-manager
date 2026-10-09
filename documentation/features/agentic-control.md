@@ -2,6 +2,8 @@
 
 Agent Control lets an injected agent inspect and operate Agent Session Manager through an app-owned local Model Context Protocol (MCP) server. The app remains the authority for tabs, panes, profiles, worktrees, settings, status lines, and notifications.
 
+The control server starts before session restoration and also starts when a UI-test launch skips restoration. Skipping saved sessions does not disable the real control service or harness injection.
+
 ## Configuration
 
 Open **Settings** and choose:
@@ -61,3 +63,5 @@ swift test --filter AgentControl
 ```
 
 Dev state is isolated under `~/Library/Application Support/agent-session-manager.dev/`. The final terminal invocation contains only the selected harness command; setup, configuration, and error reporting stay in the app layer.
+
+The real Cursor MCP UI test requires `agent status` to validate a live account. Stored credentials that cannot fetch account details do not satisfy this prerequisite; the test reports an explicit skip instead of treating the login screen as an MCP regression. Once authenticated, the test enables the real `--approve-mcps` and `--trust` options for its temporary Git workspace and verifies the session binding and credential revocation traces.

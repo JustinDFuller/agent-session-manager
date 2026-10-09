@@ -32,3 +32,7 @@ Trailing spaces are trimmed per line, and fully-blank lines are removed from the
 ## Updating SwiftTerm
 
 Keep `Package.swift` and `project.yml` on the same minimum version. Run `TerminalScrollbackTests.testHighCapacityTerminalResizeRemainsResponsive` after dependency updates to confirm resize work does not regress to scaling with scrollback capacity.
+
+The native terminal view exposes a named accessibility group for each pane, including shell panes. Its identifier is assigned directly to the AppKit view so accessibility clients can focus or open the context menu on the real terminal surface. The unit suite checks the accessible surface, and the Dev UI suite exercises terminal input and context menus.
+
+Shell panes and restored panes install their real terminal controllers during UI testing through the same `Tab.addPane` path used in normal app launches. Process startup remains deferred until the terminal view has a stable layout.

@@ -167,7 +167,7 @@ final class PlainTerminalAccessTests: XCTestCase {
         tab.panes.append(existingPane)
         let initialCount = tab.panes.count
 
-        tab.openShellPane(activePane: existingPane)
+        tab.openShellPane(activePane: existingPane, appState: AppState())
 
         XCTAssertEqual(tab.panes.count, initialCount + 1)
     }
@@ -177,7 +177,7 @@ final class PlainTerminalAccessTests: XCTestCase {
         let sourcePane = Pane(name: "reader", tab: tab, harness: .claude)
         tab.panes.append(sourcePane)
 
-        tab.openShellPane(activePane: sourcePane)
+        tab.openShellPane(activePane: sourcePane, appState: AppState())
 
         XCTAssertEqual(tab.panes.last?.name, "shell:reader")
     }
@@ -194,7 +194,7 @@ final class PlainTerminalAccessTests: XCTestCase {
         tab.panes.append(sourcePane)
         tab.panes.append(Pane(name: "shell:reader", tab: tab, harness: .shell))
 
-        tab.openShellPane(activePane: sourcePane)
+        tab.openShellPane(activePane: sourcePane, appState: AppState())
 
         XCTAssertEqual(tab.panes.last?.name, "shell:reader-2")
     }
@@ -210,7 +210,7 @@ final class PlainTerminalAccessTests: XCTestCase {
 
     func testOpenShellPaneAddedPaneHasShellHarness() {
         let tab = Tab(name: "T", directory: URL(filePath: "/tmp"))
-        tab.openShellPane(activePane: nil)
+        tab.openShellPane(activePane: nil, appState: AppState())
         XCTAssertEqual(tab.panes.last?.harness, .shell)
     }
 
@@ -223,7 +223,7 @@ final class PlainTerminalAccessTests: XCTestCase {
     func testOpenShellPaneFallsBackToPlainShellNameWithoutSourcePane() {
         let tab = Tab(name: "T", directory: URL(filePath: "/tmp"))
 
-        tab.openShellPane(activePane: nil)
+        tab.openShellPane(activePane: nil, appState: AppState())
 
         XCTAssertEqual(tab.panes.last?.name, "shell")
     }

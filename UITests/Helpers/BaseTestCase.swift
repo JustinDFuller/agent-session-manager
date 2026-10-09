@@ -23,7 +23,8 @@ class BaseTestCase: XCTestCase {
 
         app = XCUIApplication()
         app.launchArguments = appLaunchArguments
-        app.launchEnvironment = additionalLaunchEnvironment
+        app.launchEnvironment = additionalLaunchEnvironment.merging(["DISABLE_AUTO_UPDATE": "true"]) { _, value in value
+        }
         addUIInterruptionMonitor(withDescription: "Notification permission") { alert in
             for label in ["Allow", "Don’t Allow", "Don't Allow"] {
                 let button = alert.buttons[label]

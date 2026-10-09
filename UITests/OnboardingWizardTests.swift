@@ -226,9 +226,13 @@ final class OnboardingWizardTests: BaseTestCase {
         waitForToolsContinueButtonToEnable(doneButton)
         doneButton.click()
 
-        let clearButton = forcedApp.buttons["onboarding-statusline-clear-button"]
+        let clearButton = forcedApp.descendants(matching: .any).matching(
+            identifier: "onboarding-statusline-clear-button"
+        ).firstMatch
         XCTAssertTrue(clearButton.waitForExistence(timeout: 5))
-        XCTAssertFalse(forcedApp.buttons["onboarding-statusline-reset-button"].exists)
+        XCTAssertFalse(
+            forcedApp.descendants(matching: .any).matching(identifier: "onboarding-statusline-reset-button").firstMatch
+                .exists)
 
         forcedApp.terminate()
     }
@@ -257,13 +261,19 @@ final class OnboardingWizardTests: BaseTestCase {
         waitForToolsContinueButtonToEnable(doneButton)
         doneButton.click()
 
-        let clearButton = forcedApp.buttons["onboarding-statusline-clear-button"]
+        let clearButton = forcedApp.descendants(matching: .any).matching(
+            identifier: "onboarding-statusline-clear-button"
+        ).firstMatch
         XCTAssertTrue(clearButton.waitForExistence(timeout: 5))
         clearButton.click()
 
-        let resetButton = forcedApp.buttons["onboarding-statusline-reset-button"]
+        let resetButton = forcedApp.descendants(matching: .any).matching(
+            identifier: "onboarding-statusline-reset-button"
+        ).firstMatch
         XCTAssertTrue(resetButton.waitForExistence(timeout: 5))
-        XCTAssertFalse(forcedApp.buttons["onboarding-statusline-clear-button"].exists)
+        XCTAssertFalse(
+            forcedApp.descendants(matching: .any).matching(identifier: "onboarding-statusline-clear-button").firstMatch
+                .exists)
 
         forcedApp.terminate()
     }
@@ -464,9 +474,12 @@ final class OnboardingWizardTests: BaseTestCase {
         XCTAssertTrue(statusLineSaveButton.waitForExistence(timeout: 5))
         statusLineSaveButton.click()
 
-        let clearButton = forcedApp.buttons["onboarding-cliflags-clear-button"]
+        let clearButton = forcedApp.descendants(matching: .any).matching(identifier: "onboarding-cliflags-clear-button")
+            .firstMatch
         XCTAssertTrue(clearButton.waitForExistence(timeout: 5))
-        XCTAssertFalse(forcedApp.buttons["onboarding-cliflags-reset-button"].exists)
+        XCTAssertFalse(
+            forcedApp.descendants(matching: .any).matching(identifier: "onboarding-cliflags-reset-button").firstMatch
+                .exists)
 
         forcedApp.terminate()
     }
@@ -499,13 +512,17 @@ final class OnboardingWizardTests: BaseTestCase {
         XCTAssertTrue(statusLineSaveButton.waitForExistence(timeout: 5))
         statusLineSaveButton.click()
 
-        let clearButton = forcedApp.buttons["onboarding-cliflags-clear-button"]
+        let clearButton = forcedApp.descendants(matching: .any).matching(identifier: "onboarding-cliflags-clear-button")
+            .firstMatch
         XCTAssertTrue(clearButton.waitForExistence(timeout: 5))
         clearButton.click()
 
-        let resetButton = forcedApp.buttons["onboarding-cliflags-reset-button"]
+        let resetButton = forcedApp.descendants(matching: .any).matching(identifier: "onboarding-cliflags-reset-button")
+            .firstMatch
         XCTAssertTrue(resetButton.waitForExistence(timeout: 5))
-        XCTAssertFalse(forcedApp.buttons["onboarding-cliflags-clear-button"].exists)
+        XCTAssertFalse(
+            forcedApp.descendants(matching: .any).matching(identifier: "onboarding-cliflags-clear-button").firstMatch
+                .exists)
 
         forcedApp.terminate()
     }

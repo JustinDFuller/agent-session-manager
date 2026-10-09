@@ -36,6 +36,7 @@ struct PaneAdvancedSettingsSheet: View {
         .padding(24)
         .frame(width: 420, height: 520, alignment: .topLeading)
         .pinnedSheetBackground()
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("new-pane-advanced-settings-sheet")
     }
 
