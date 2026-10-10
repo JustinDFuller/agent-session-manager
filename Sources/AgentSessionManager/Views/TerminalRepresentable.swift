@@ -35,7 +35,9 @@ struct TerminalRepresentable: NSViewRepresentable {
     let tabName: String
 
     func makeNSView(context: Context) -> LocalProcessTerminalView {
-        controller.terminalView
+        controller.terminalView.setAccessibilityIdentifier("pane-terminal-\(paneName)")
+        controller.terminalView.setAccessibilityLabel("Terminal for \(paneName)")
+        return controller.terminalView
     }
 
     func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {

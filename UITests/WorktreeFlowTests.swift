@@ -45,20 +45,32 @@ final class WorktreeFlowTests: BaseTestCase {
         nameField.typeText("ui-root")
         app.buttons["new-pane-open-button"].click()
 
-        let cancelBtn = app.descendants(matching: .any).matching(identifier: "takeover-cancel-button").firstMatch
+        let cancelBtn = app.dialogs.buttons["Cancel"].firstMatch
         XCTAssertTrue(cancelBtn.waitForExistence(timeout: paneWait))
         cancelBtn.click()
         let dontManageBtn =
-            app.descendants(matching: .any).matching(identifier: "takeover-dont-manage-button").firstMatch
+            app.dialogs.buttons["Don't Manage"].firstMatch
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline, dontManageBtn.exists || cancelBtn.exists {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         }
         XCTAssertFalse(dontManageBtn.exists || cancelBtn.exists)
-        XCTAssertTrue(app.textFields["new-pane-name-field"].waitForExistence(timeout: 3))
-
+        let cancelledPane = app.staticTexts["pane-name-ui-root"].firstMatch
+        waitFor(cancelledPane)
+        let removePane = app.windows.buttons["Remove Pane"].firstMatch
+        waitFor(removePane)
+        removePane.click()
+        let keepCancelledWorktree = app.sheets.buttons["Keep Worktree"].firstMatch
+        waitFor(keepCancelledWorktree)
+        keepCancelledWorktree.click()
+        waitForDisappear(cancelledPane)
+        app.typeKey("p", modifierFlags: .command)
+        nameField = app.textFields["new-pane-name-field"]
+        waitFor(nameField)
+        nameField.click()
+        nameField.typeText("ui-root")
         app.buttons["new-pane-open-button"].click()
-        let continueBtn = app.descendants(matching: .any).matching(identifier: "takeover-dont-manage-button").firstMatch
+        let continueBtn = app.dialogs.buttons["Don't Manage"].firstMatch
         XCTAssertTrue(continueBtn.waitForExistence(timeout: paneWait))
         continueBtn.click()
 
@@ -107,16 +119,16 @@ final class WorktreeFlowTests: BaseTestCase {
         app.descendants(matching: .any).matching(identifier: "pane-close-UITestWorkspace").firstMatch.click()
         screenshot("14-simple-close")
 
-        XCTAssertFalse(app.buttons["Keep Worktree"].firstMatch.waitForExistence(timeout: 2))
+        XCTAssertFalse(app.windows.buttons["Keep Worktree"].firstMatch.waitForExistence(timeout: 2))
         waitForDisappear(primaryPaneName)
 
         createManagedWorktreePane(folder: "wt-alert")
         app.descendants(matching: .any).matching(identifier: "pane-close-wt-alert").firstMatch.click()
         screenshot("15-cleanup-alert")
 
-        let keepButton = app.buttons["Keep Worktree"].firstMatch
+        let keepButton = app.windows.buttons["Keep Worktree"].firstMatch
         XCTAssertTrue(keepButton.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Delete Worktree"].firstMatch.exists)
+        XCTAssertTrue(app.windows.buttons["Delete Worktree"].firstMatch.exists)
         XCTAssertTrue(app.buttons["Cancel"].firstMatch.exists)
 
         app.windows.firstMatch.buttons["Cancel"].firstMatch.click()
@@ -128,13 +140,13 @@ final class WorktreeFlowTests: BaseTestCase {
         waitFor(primaryPaneName2, timeout: paneWait)
 
         app.descendants(matching: .any).matching(identifier: "pane-close-UITestWorkspace").firstMatch.click()
-        XCTAssertFalse(app.buttons["Keep Worktree"].firstMatch.waitForExistence(timeout: 2))
+        XCTAssertFalse(app.windows.buttons["Keep Worktree"].firstMatch.waitForExistence(timeout: 2))
         waitForDisappear(primaryPaneName2)
 
         app.descendants(matching: .any).matching(identifier: "pane-close-wt-managed").firstMatch.click()
         screenshot("16-mixed-close")
-        XCTAssertTrue(app.buttons["Keep Worktree"].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Delete Worktree"].firstMatch.exists)
+        XCTAssertTrue(app.windows.buttons["Keep Worktree"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.windows.buttons["Delete Worktree"].firstMatch.exists)
         XCTAssertTrue(app.buttons["Cancel"].firstMatch.exists)
     }
 
@@ -146,7 +158,7 @@ final class WorktreeFlowTests: BaseTestCase {
 
         app.descendants(matching: .any).matching(identifier: "pane-close-wt-immediate").firstMatch.click()
 
-        let deleteButton = app.buttons["Delete Worktree"].firstMatch
+        let deleteButton = app.windows.buttons["Delete Worktree"].firstMatch
         XCTAssertTrue(deleteButton.waitForExistence(timeout: 5))
         deleteButton.click()
 
@@ -191,7 +203,7 @@ final class WorktreeFlowTests: BaseTestCase {
         field.click()
         field.typeText("ui-root")
         app.buttons["new-pane-open-button"].click()
-        let dontManage = app.descendants(matching: .any).matching(identifier: "takeover-dont-manage-button").firstMatch
+        let dontManage = app.dialogs.buttons["Don't Manage"].firstMatch
         XCTAssertTrue(dontManage.waitForExistence(timeout: paneWait))
         dontManage.click()
         waitForDisappear(field, timeout: 25)

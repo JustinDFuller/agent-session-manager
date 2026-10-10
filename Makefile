@@ -178,6 +178,8 @@ check-toolchain:
 
 xcodeproj:
 	xcodegen generate
+	mkdir -p "$(APP_NAME).xcodeproj/project.xcworkspace/xcshareddata/swiftpm"
+	cp Package.resolved "$(APP_NAME).xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
 
 test-ui-dev: xcodeproj sign-dev-test-artifacts
 	rm -rf $(RESULTS_PATH)
@@ -185,6 +187,7 @@ test-ui-dev: xcodeproj sign-dev-test-artifacts
 		-project $(APP_NAME).xcodeproj \
 		-scheme $(SCHEME) \
 		-configuration Dev \
+		-onlyUsePackageVersionsFromResolvedFile \
 		-destination 'platform=macOS' \
 		-resultBundlePath $(RESULTS_PATH) \
 		-derivedDataPath $(DERIVED_DATA)
@@ -195,6 +198,7 @@ test-ui-dev-launch: xcodeproj sign-dev-test-artifacts
 		-project $(APP_NAME).xcodeproj \
 		-scheme $(SCHEME) \
 		-configuration Dev \
+		-onlyUsePackageVersionsFromResolvedFile \
 		-destination 'platform=macOS' \
 		-resultBundlePath $(RESULTS_PATH) \
 		-derivedDataPath $(DERIVED_DATA) \
@@ -209,6 +213,7 @@ screenshots: xcodeproj sign-dev-test-artifacts
 		-project $(APP_NAME).xcodeproj \
 		-scheme $(SCHEME) \
 		-configuration Dev \
+		-onlyUsePackageVersionsFromResolvedFile \
 		-destination 'platform=macOS' \
 		-resultBundlePath $(RESULTS_PATH) \
 		-derivedDataPath $(DERIVED_DATA) \
@@ -220,6 +225,7 @@ build-for-testing: xcodeproj
 		-project $(APP_NAME).xcodeproj \
 		-scheme $(SCHEME) \
 		-configuration Dev \
+		-onlyUsePackageVersionsFromResolvedFile \
 		-destination 'platform=macOS' \
 		-derivedDataPath $(DERIVED_DATA)
 

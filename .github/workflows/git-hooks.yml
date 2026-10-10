@@ -1,0 +1,30 @@
+name: Git Hook Isolation
+
+on:
+  pull_request:
+    paths:
+      - ".githooks/**"
+      - "scripts/test-git-hooks.sh"
+      - ".github/workflows/git-hooks.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".githooks/**"
+      - "scripts/test-git-hooks.sh"
+      - ".github/workflows/git-hooks.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Git hook fixture isolation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Check nested Git fixtures and Dev command routing
+        run: bash scripts/test-git-hooks.sh

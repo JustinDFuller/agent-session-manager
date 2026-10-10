@@ -40,12 +40,6 @@ final class CLIOptionPresetFlowTests: BaseTestCase {
         app.descendants(matching: .any).matching(identifier: "cli-option-value-menu-\(flagID)").firstMatch
     }
 
-    private func toggleAllowMultipleSelections(forFlagID flagID: String) {
-        let toggle = app.checkBoxes["settings-cli-option-allow-multi-\(flagID)"]
-        waitFor(toggle)
-        toggle.click()
-    }
-
     private func createPresetTestProfile() {
         openToolsTab()
         definePresets(forFlagID: "--mcp-config", presets: ["mcp-a", "mcp-b"])
@@ -98,16 +92,24 @@ final class CLIOptionPresetFlowTests: BaseTestCase {
 
     func testProfileEditorSingleAndMultiSelectPresetPickers() {
         createPresetTestProfile()
+        app.menuButtons["ellipsis.circle"].firstMatch.click()
+        app.menuItems["Edit"].click()
 
         let effortMenu = valueMenu(forFlagID: "--effort")
-        XCTAssertTrue(effortMenu.label.contains("high"), "Selecting a preset should update the single-select label")
+        waitFor(effortMenu)
+        XCTAssertEqual(effortMenu.title, "high", effortMenu.debugDescription)
 
         let mcpMenu = valueMenu(forFlagID: "--mcp-config")
-        XCTAssertTrue(mcpMenu.label.contains("2 selected"), "Selecting two presets should summarize the count")
+        XCTAssertEqual(mcpMenu.title, "2 selected", mcpMenu.debugDescription)
     }
 
     func testFlagWithoutPresetsStillShowsPlainTextFieldInProfileEditor() {
         openToolsTab()
+        let modelShowToggle = app.checkBoxes["settings-cli-option-show---model"]
+        waitFor(modelShowToggle)
+        if modelShowToggle.value as? Int == 0 {
+            modelShowToggle.click()
+        }
         let profilesTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-profiles").firstMatch
         waitFor(profilesTab)
         profilesTab.click()
@@ -143,25 +145,24 @@ final class CLIOptionPresetFlowTests: BaseTestCase {
         let profilePicker = app.descendants(matching: .any).matching(identifier: "new-pane-profile-picker").firstMatch
         waitFor(profilePicker)
         profilePicker.click()
-        let presetTestItem = app.menuItems.matching(NSPredicate(format: "label CONTAINS %@", profileName)).firstMatch
+        let presetTestItem = profilePicker.menuItems[profileName]
         waitFor(presetTestItem)
         presetTestItem.click()
         app.buttons["new-pane-cli-options-button"].click()
 
         let effortMenu = valueMenu(forFlagID: "--effort")
         waitFor(effortMenu)
-        XCTAssertTrue(effortMenu.label.contains("high"), "New Pane sheet should pre-fill the saved effort selection")
+        XCTAssertEqual(effortMenu.title, "high", effortMenu.debugDescription)
 
         let mcpMenu = valueMenu(forFlagID: "--mcp-config")
         waitFor(mcpMenu)
-        XCTAssertTrue(
-            mcpMenu.label.contains("2 selected"), "New Pane sheet should pre-fill both saved mcp-config paths")
+        XCTAssertEqual(mcpMenu.title, "2 selected", mcpMenu.debugDescription)
 
         mcpMenu.click()
         let mcpBItem = app.menuItems["mcp-b"]
         waitFor(mcpBItem)
         mcpBItem.click()
-        XCTAssertTrue(mcpMenu.label.contains("mcp-a"), "Deselecting one preset should leave the other selected")
+        XCTAssertEqual(mcpMenu.title, "mcp-a", mcpMenu.debugDescription)
 
         app.buttons["new-pane-cli-options-done-button"].click()
         let nameField = app.textFields["new-pane-name-field"]
@@ -216,9 +217,21 @@ final class CLIOptionPresetFlowTests: BaseTestCase {
             NSPredicate(format: "label CONTAINS 'ANTHROPIC_MODEL'")
         ).firstMatch
         waitFor(environmentModelToggle)
+        let profileScroll = app.sheets.firstMatch.scrollViews.firstMatch
+        let environmentScroll = app.scrollViews["profile-editor-hidden-env-vars-scroll-view"]
+        waitFor(environmentScroll)
+        for _ in 0..<10 where !profileScroll.frame.contains(environmentScroll.frame) {
+            profileScroll.scroll(byDeltaX: 0, deltaY: -120)
+        }
+        for _ in 0..<10 where !environmentScroll.frame.contains(environmentModelToggle.frame) {
+            environmentScroll.scroll(byDeltaX: 0, deltaY: -80)
+        }
+        XCTAssertTrue(environmentScroll.frame.contains(environmentModelToggle.frame))
+        XCTAssertTrue(environmentModelToggle.isHittable)
         if environmentModelToggle.value as? Int == 0 {
             environmentModelToggle.click()
         }
+        XCTAssertEqual(environmentModelToggle.value as? Int, 1, environmentModelToggle.debugDescription)
 
         let saveButton = app.buttons["Save"]
         waitFor(saveButton)
@@ -234,9 +247,7 @@ final class CLIOptionPresetFlowTests: BaseTestCase {
         let profilePicker = app.descendants(matching: .any).matching(identifier: "new-pane-profile-picker").firstMatch
         waitFor(profilePicker)
         profilePicker.click()
-        let profileItem = app.menuItems.matching(
-            NSPredicate(format: "label CONTAINS %@", "Selected Option Profile")
-        ).firstMatch
+        let profileItem = profilePicker.menuItems["Selected Option Profile"]
         waitFor(profileItem)
         profileItem.click()
         app.buttons["new-pane-cli-options-button"].click()
@@ -282,7 +293,9 @@ final class CLIOptionPresetFlowTests: BaseTestCase {
 
     func testTogglingAllowMultipleSelectionsSwitchesFlagToMultiSelectMenu() {
         openToolsTab()
-        toggleAllowMultipleSelections(forFlagID: "--model")
+        let allowMultipleSelections = app.checkBoxes["settings-cli-option-allow-multi---model"]
+        waitFor(allowMultipleSelections)
+        allowMultipleSelections.click()
         definePresets(forFlagID: "--model", presets: ["model-a", "model-b"])
 
         let profilesTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-profiles").firstMatch
@@ -315,7 +328,7 @@ final class CLIOptionPresetFlowTests: BaseTestCase {
         waitFor(modelBItem)
         modelBItem.click()
 
-        XCTAssertTrue(modelMenu.label.contains("2 selected"), "Selecting two presets should summarize the count")
+        XCTAssertEqual(modelMenu.title, "2 selected", modelMenu.debugDescription)
 
         let saveButton = app.buttons["Save"]
         waitFor(saveButton)
@@ -329,18 +342,13 @@ final class CLIOptionPresetFlowTests: BaseTestCase {
         let profilePicker = app.descendants(matching: .any).matching(identifier: "new-pane-profile-picker").firstMatch
         waitFor(profilePicker)
         profilePicker.click()
-        let multiModelProfileItem = app.menuItems.matching(
-            NSPredicate(format: "label CONTAINS %@", "Multi Model Profile")
-        ).firstMatch
+        let multiModelProfileItem = profilePicker.menuItems["Multi Model Profile"]
         waitFor(multiModelProfileItem)
         multiModelProfileItem.click()
         app.buttons["new-pane-cli-options-button"].click()
 
         let newPaneModelMenu = valueMenu(forFlagID: "--model")
         waitFor(newPaneModelMenu)
-        XCTAssertTrue(
-            newPaneModelMenu.label.contains("2 selected"),
-            "New Pane sheet should render the multi-select menu with both saved presets pre-filled"
-        )
+        XCTAssertEqual(newPaneModelMenu.title, "2 selected", newPaneModelMenu.debugDescription)
     }
 }

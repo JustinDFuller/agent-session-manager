@@ -50,7 +50,7 @@ final class SettingsFlowTests: BaseTestCase {
         let custom = app.menuItems["Custom Limit"]
         waitFor(custom)
         custom.click()
-        let warning = app.alerts["Reduce Scrollback History?"]
+        let warning = app.sheets.containing(.button, identifier: "Reduce History").firstMatch
         waitFor(warning)
         warning.buttons["Reduce History"].click()
 
@@ -115,11 +115,91 @@ final class SettingsFlowTests: BaseTestCase {
     }
 
     func testSettingsFlow() {
-        verifyPanesTab()
+        do {
+            app.typeKey(",", modifierFlags: .command)
+            let generalTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-panes").firstMatch
+            waitFor(generalTab)
+            generalTab.click()
+
+            let branchField = app.textFields["settings-default-branch-field"]
+            waitFor(branchField)
+            XCTAssertTrue(branchField.exists)
+            XCTAssertEqual(branchField.value as? String, "ui-root")
+
+            branchField.click()
+            branchField.typeKey("a", modifierFlags: .command)
+            branchField.typeText("develop")
+            XCTAssertEqual(branchField.value as? String, "develop")
+
+            let branchToggle = app.checkBoxes["settings-default-branch-toggle"]
+            waitFor(branchToggle)
+            branchToggle.click()
+            XCTAssertFalse(app.textFields["settings-default-branch-field"].waitForExistence(timeout: 0.5))
+            branchToggle.click()
+            waitFor(app.textFields["settings-default-branch-field"])
+
+            let continueToggle = app.checkBoxes["settings-continue-on-restart-toggle"]
+            waitFor(continueToggle)
+            XCTAssertTrue(continueToggle.exists)
+            XCTAssertEqual(continueToggle.value as? Int, 1)
+
+            let autoSessionNameToggle = app.checkBoxes["settings-auto-session-name-toggle"]
+            waitFor(autoSessionNameToggle)
+            XCTAssertTrue(autoSessionNameToggle.exists)
+
+            let shellPicker = app.descendants(matching: .any).matching(identifier: "settings-shell-picker").firstMatch
+            waitFor(shellPicker)
+            XCTAssertTrue(shellPicker.exists, "Shell picker should exist under General tab")
+
+            let focusModePicker = app.descendants(matching: .any)
+                .matching(identifier: "settings-focus-mode-tab-switch-picker").firstMatch
+            waitFor(focusModePicker)
+            let hideSidebarToggle = app.checkBoxes["settings-focus-mode-hide-sidebar-toggle"]
+            waitFor(hideSidebarToggle)
+            XCTAssertEqual(hideSidebarToggle.value as? Int, 1)
+        }
         let settingsWindow = app.windows["AgentSessionManager Settings"]
         waitFor(settingsWindow)
         assertOnlySidebarShowsSelectedSectionTitle("Panes", in: settingsWindow)
-        verifyNotificationsTab()
+        do {
+            let notificationsTab = app.descendants(matching: .any).matching(
+                identifier: "settings-sidebar-notifications"
+            )
+            .firstMatch
+            waitFor(notificationsTab)
+            notificationsTab.click()
+
+            let bannerToggle = app.checkBoxes["settings-macos-banner-notifications-toggle"]
+            waitFor(bannerToggle)
+
+            let openNotifSettingsButton = app.descendants(matching: .any)
+                .matching(identifier: "settings-open-notification-settings-button")
+                .firstMatch
+            waitFor(openNotifSettingsButton)
+            XCTAssertTrue(openNotifSettingsButton.exists)
+
+            let stickyToggle = app.checkBoxes["settings-sticky-notifications-toggle"]
+            XCTAssertFalse(stickyToggle.exists)
+
+            XCTAssertFalse(app.checkBoxes["settings-claude-notification-hook-toggle"].exists)
+
+            let cursorHookToggle = app.checkBoxes["settings-cursor-notification-hook-toggle"]
+            waitFor(cursorHookToggle)
+            XCTAssertTrue(cursorHookToggle.exists)
+
+            let alwaysShowToggle = app.checkBoxes["settings-always-show-notifications-bar-toggle"]
+            waitFor(alwaysShowToggle)
+            XCTAssertEqual(alwaysShowToggle.value as? Int, 1)
+
+            let priorityToggle = app.checkBoxes["settings-priority-notifications-toggle"]
+            waitFor(priorityToggle)
+            XCTAssertTrue(priorityToggle.exists)
+
+            let sidebarSide = app.descendants(matching: .any)
+                .matching(identifier: "settings-sidebar-side")
+                .firstMatch
+            waitFor(sidebarSide)
+        }
         assertOnlySidebarShowsSelectedSectionTitle("Notifications", in: settingsWindow)
 
         let shortcutsTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-shortcuts").firstMatch
@@ -213,7 +293,32 @@ final class SettingsFlowTests: BaseTestCase {
         let nameAfter = profileNames.firstMatch.value as? String
         XCTAssertNotEqual(nameBefore, nameAfter, "Profile order should swap after move-down")
 
-        verifyDebugTab()
+        do {
+            let debugTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-debug").firstMatch
+            waitFor(debugTab)
+            debugTab.click()
+            let debugToggle = app.checkBoxes["settings-debug-mode-toggle"]
+            waitFor(debugToggle)
+            if debugToggle.value as? Int == 0 {
+                debugToggle.click()
+            }
+            waitFor(app.buttons["settings-open-trace-dashboard-button"])
+            waitFor(app.buttons["settings-open-invariant-dashboard-button"])
+            app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
+            app.typeKey("d", modifierFlags: [.command, .shift])
+            let dashboard = app.windows["Trace Dashboard"]
+            waitFor(dashboard)
+            let refreshButton = dashboard.buttons["trace-dashboard-refresh-button"]
+            waitFor(refreshButton)
+            XCTAssertTrue(refreshButton.exists)
+            let traceSidebarList = dashboard.descendants(matching: .any)
+                .matching(identifier: "trace-dashboard-sidebar-list").firstMatch
+            let traceSidebarEmptyState = dashboard.descendants(matching: .any)
+                .matching(identifier: "trace-dashboard-sidebar-empty-state").firstMatch
+            XCTAssertTrue(traceSidebarList.exists || traceSidebarEmptyState.exists)
+            app.typeKey("i", modifierFlags: [.command, .shift])
+            waitFor(app.windows["Invariant Dashboard"])
+        }
     }
 
     func testSettingsSidebarTrailingSpaceIsClickable() {
@@ -239,115 +344,6 @@ final class SettingsFlowTests: BaseTestCase {
 
         XCTAssertTrue(profilesTab.isSelected)
         waitFor(app.buttons["New Profile"])
-    }
-
-    private func verifyPanesTab() {
-        app.typeKey(",", modifierFlags: .command)
-        let generalTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-panes").firstMatch
-        waitFor(generalTab)
-        generalTab.click()
-
-        let branchField = app.textFields["settings-default-branch-field"]
-        waitFor(branchField)
-        XCTAssertTrue(branchField.exists)
-        XCTAssertEqual(branchField.value as? String, "ui-root")
-
-        branchField.click()
-        branchField.typeKey("a", modifierFlags: .command)
-        branchField.typeText("develop")
-        XCTAssertEqual(branchField.value as? String, "develop")
-
-        let branchToggle = app.checkBoxes["settings-default-branch-toggle"]
-        waitFor(branchToggle)
-        branchToggle.click()
-        XCTAssertFalse(app.textFields["settings-default-branch-field"].waitForExistence(timeout: 0.5))
-        branchToggle.click()
-        waitFor(app.textFields["settings-default-branch-field"])
-
-        let continueToggle = app.checkBoxes["settings-continue-on-restart-toggle"]
-        waitFor(continueToggle)
-        XCTAssertTrue(continueToggle.exists)
-        XCTAssertEqual(continueToggle.value as? Int, 1)
-
-        let autoSessionNameToggle = app.checkBoxes["settings-auto-session-name-toggle"]
-        waitFor(autoSessionNameToggle)
-        XCTAssertTrue(autoSessionNameToggle.exists)
-
-        let shellPicker = app.descendants(matching: .any).matching(identifier: "settings-shell-picker").firstMatch
-        waitFor(shellPicker)
-        XCTAssertTrue(shellPicker.exists, "Shell picker should exist under General tab")
-
-        let focusModePicker = app.descendants(matching: .any)
-            .matching(identifier: "settings-focus-mode-tab-switch-picker").firstMatch
-        waitFor(focusModePicker)
-        let hideSidebarToggle = app.checkBoxes["settings-focus-mode-hide-sidebar-toggle"]
-        waitFor(hideSidebarToggle)
-        XCTAssertEqual(hideSidebarToggle.value as? Int, 1)
-    }
-
-    private func verifyNotificationsTab() {
-        let notificationsTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-notifications")
-            .firstMatch
-        waitFor(notificationsTab)
-        notificationsTab.click()
-
-        let bannerToggle = app.checkBoxes["settings-macos-banner-notifications-toggle"]
-        waitFor(bannerToggle)
-
-        let openNotifSettingsButton = app.descendants(matching: .any)
-            .matching(identifier: "settings-open-notification-settings-button")
-            .firstMatch
-        waitFor(openNotifSettingsButton)
-        XCTAssertTrue(openNotifSettingsButton.exists)
-
-        let stickyToggle = app.checkBoxes["settings-sticky-notifications-toggle"]
-        XCTAssertFalse(stickyToggle.exists)
-
-        XCTAssertFalse(app.checkBoxes["settings-claude-notification-hook-toggle"].exists)
-
-        let cursorHookToggle = app.checkBoxes["settings-cursor-notification-hook-toggle"]
-        waitFor(cursorHookToggle)
-        XCTAssertTrue(cursorHookToggle.exists)
-
-        let alwaysShowToggle = app.checkBoxes["settings-always-show-notifications-bar-toggle"]
-        waitFor(alwaysShowToggle)
-        XCTAssertEqual(alwaysShowToggle.value as? Int, 1)
-
-        let priorityToggle = app.checkBoxes["settings-priority-notifications-toggle"]
-        waitFor(priorityToggle)
-        XCTAssertTrue(priorityToggle.exists)
-
-        let sidebarSide = app.descendants(matching: .any)
-            .matching(identifier: "settings-sidebar-side")
-            .firstMatch
-        waitFor(sidebarSide)
-    }
-
-    private func verifyDebugTab() {
-        let debugTab = app.descendants(matching: .any).matching(identifier: "settings-sidebar-debug").firstMatch
-        waitFor(debugTab)
-        debugTab.click()
-        let debugToggle = app.checkBoxes["settings-debug-mode-toggle"]
-        waitFor(debugToggle)
-        if debugToggle.value as? Int == 0 {
-            debugToggle.click()
-        }
-        waitFor(app.buttons["settings-open-trace-dashboard-button"])
-        waitFor(app.buttons["settings-open-invariant-dashboard-button"])
-        app.typeKey(XCUIKeyboardKey.escape, modifierFlags: [])
-        app.typeKey("d", modifierFlags: [.command, .shift])
-        let dashboard = app.windows["Trace Dashboard"]
-        waitFor(dashboard)
-        let refreshButton = dashboard.buttons["trace-dashboard-refresh-button"]
-        waitFor(refreshButton)
-        XCTAssertTrue(refreshButton.exists)
-        let traceSidebarList = dashboard.descendants(matching: .any)
-            .matching(identifier: "trace-dashboard-sidebar-list").firstMatch
-        let traceSidebarEmptyState = dashboard.descendants(matching: .any)
-            .matching(identifier: "trace-dashboard-sidebar-empty-state").firstMatch
-        XCTAssertTrue(traceSidebarList.exists || traceSidebarEmptyState.exists)
-        app.typeKey("i", modifierFlags: [.command, .shift])
-        waitFor(app.windows["Invariant Dashboard"])
     }
 
     private func closeAuxiliaryWindowAndAssertMainState(
@@ -452,7 +448,19 @@ final class SettingsFlowTests: BaseTestCase {
         ).firstMatch
         waitFor(verboseToggle)
         XCTAssertTrue(verboseToggle.exists, "Hidden option --verbose should appear after Show all options")
+        let optionsScroll = app.scrollViews["profile-editor-hidden-options-scroll-view"]
+        waitFor(optionsScroll)
+        let editorScroll = app.sheets.firstMatch.scrollViews.firstMatch
+        for _ in 0..<12 where !editorScroll.frame.contains(optionsScroll.frame) {
+            editorScroll.scroll(byDeltaX: 0, deltaY: -100)
+        }
+        for _ in 0..<30 where !optionsScroll.frame.contains(verboseToggle.frame) {
+            optionsScroll.scroll(byDeltaX: 0, deltaY: -80)
+        }
+        XCTAssertTrue(optionsScroll.frame.contains(verboseToggle.frame))
+        XCTAssertTrue(verboseToggle.isHittable)
         verboseToggle.click()
+        XCTAssertEqual(verboseToggle.value as? Int, 1)
 
         let showInAllProfilesButton = app.descendants(matching: .any).matching(
             NSPredicate(format: "label == 'Show in all profiles'")
@@ -587,10 +595,24 @@ final class SettingsFlowTests: BaseTestCase {
             NSPredicate(format: "label CONTAINS '--model'")
         ).firstMatch
         waitFor(modelToggle)
+        let optionsScroll = app.scrollViews["profile-editor-hidden-options-scroll-view"]
+        waitFor(optionsScroll)
+        let editorScroll = app.sheets.firstMatch.scrollViews.firstMatch
+        for _ in 0..<12 where !editorScroll.frame.contains(optionsScroll.frame) {
+            editorScroll.scroll(byDeltaX: 0, deltaY: -100)
+        }
+        for _ in 0..<20 where !optionsScroll.frame.contains(modelToggle.frame) {
+            optionsScroll.scroll(byDeltaX: 0, deltaY: -80)
+        }
+        XCTAssertTrue(optionsScroll.frame.contains(modelToggle.frame))
         modelToggle.click()
+        XCTAssertEqual(modelToggle.value as? Int, 1)
 
         let modelField = app.textFields["cli-option-value-field---model"]
         waitFor(modelField)
+        for _ in 0..<10 where !optionsScroll.frame.contains(modelField.frame) {
+            optionsScroll.scroll(byDeltaX: 0, deltaY: -40)
+        }
         modelField.click()
         modelField.typeText(modelValue)
 
@@ -599,7 +621,8 @@ final class SettingsFlowTests: BaseTestCase {
         saveButton.click()
         waitFor(app.staticTexts.matching(NSPredicate(format: "value == %@", profileName)).firstMatch)
 
-        let menuButton = app.buttons.matching(NSPredicate(format: "label == 'More'")).firstMatch
+        let profileMenus = app.menuButtons.matching(identifier: "ellipsis.circle")
+        let menuButton = profileMenus.element(boundBy: profileMenus.count - 1)
         waitFor(menuButton)
         menuButton.click()
         let editButton = app.menuItems["Edit"]

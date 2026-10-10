@@ -5,15 +5,18 @@ final class CursorFlowTests: BaseTestCase {
         let shell = Process()
         let output = Pipe()
         shell.executableURL = URL(filePath: "/bin/zsh")
-        shell.arguments = ["-i", "-c", "command -v agent"]
+        shell.arguments = ["-i", "-c", "agent status"]
         shell.standardOutput = output
         shell.standardError = FileHandle.nullDevice
         try shell.run()
+        let status = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         shell.waitUntilExit()
         guard shell.terminationStatus == 0,
-            !output.fileHandleForReading.readDataToEndOfFile().isEmpty
+            status.contains("Logged in"),
+            !status.contains("unable to fetch user details"),
+            !status.contains("user details not available")
         else {
-            throw XCTSkip("Cursor agent is not installed in the UI-test shell PATH")
+            throw XCTSkip("The real Cursor MCP flow requires an installed Cursor agent with a validated account login")
         }
 
         app.typeKey(",", modifierFlags: .command)
@@ -73,6 +76,18 @@ final class CursorFlowTests: BaseTestCase {
         if approveMCPs.value as? Int != 1 {
             approveMCPs.click()
         }
+        XCTAssertEqual(approveMCPs.value as? Int, 1, "The real Cursor MCP approval option should be enabled")
+        let trustWorkspace = app.checkBoxes["--trust"].firstMatch
+        waitFor(trustWorkspace)
+        let optionsScroll = app.scrollViews["new-pane-cli-options-content-scroll-view"]
+        for _ in 0..<20 where !optionsScroll.frame.contains(trustWorkspace.frame) {
+            optionsScroll.scroll(byDeltaX: 0, deltaY: -100)
+        }
+        XCTAssertTrue(optionsScroll.frame.contains(trustWorkspace.frame))
+        if trustWorkspace.value as? Int != 1 {
+            trustWorkspace.click()
+        }
+        XCTAssertEqual(trustWorkspace.value as? Int, 1)
         app.buttons["new-pane-cli-options-done-button"].click()
         paneField.click()
         paneField.typeText("cursor-control")

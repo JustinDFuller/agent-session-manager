@@ -439,6 +439,7 @@ final class AgentControlResourceTests: XCTestCase {
     private func stopPanes(in state: AppState) {
         for pane in state.tabs.flatMap(\.panes) {
             pane.terminalController?.terminate()
+            pane.removeStatusLineMonitor()
         }
     }
 

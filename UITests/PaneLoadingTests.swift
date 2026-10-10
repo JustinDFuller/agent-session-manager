@@ -1,108 +1,48 @@
 import XCTest
 
-final class PaneLoadingTests: XCTestCase {
-    var app: XCUIApplication!
-
-    private static let tabID = "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1"
-    private static let loadingPaneID = "b2b2b2b2-b2b2-b2b2-b2b2-b2b2b2b2b2b2"
-    private static let errorPaneID = "c3c3c3c3-c3c3-c3c3-c3c3-c3c3c3c3c3c3"
-
-    private var sessionURL: URL {
-        UITestAppSupport.directory.appending(path: "sessions.json")
-    }
-
-    override func setUp() {
-        super.setUp()
-        continueAfterFailure = false
-        GitUITestWorkspace.prepareCleanRepo()
-    }
-
-    override func tearDown() {
-        app?.terminate()
-        try? FileManager.default.removeItem(at: sessionURL)
-        super.tearDown()
-    }
-
-    func testLoadingOverlayIsVisible() {
-        let workspaceDir = GitUITestWorkspace.directoryURL.path
-        let json = makeSessionJSON(
-            tabID: Self.tabID,
-            tabName: "LoadingTab",
-            paneID: Self.loadingPaneID,
-            paneName: "loading-pane",
-            workspaceDir: workspaceDir
-        )
-        writeSession(json)
-
-        app = XCUIApplication()
-        app.launchArguments = [
-            "--uitesting",
-            "--inject-pane-loading=\(Self.loadingPaneID)",
-        ]
-        app.launch()
-        app.activate()
+final class PaneLoadingTests: BaseTestCase {
+    func testLoadingOverlayIsVisible() throws {
+        let directory = GitUITestWorkspace.directoryURL.appending(path: ".git/hooks")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let hook = directory.appending(path: "post-checkout")
+        try Data("#!/bin/sh\nsleep 10\n".utf8).write(to: hook)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook.path)
+        GitUITestWorkspace.runGitOrFail(
+            ["config", "core.hooksPath", directory.path], cwd: GitUITestWorkspace.directoryURL)
+        createTab(named: "LoadingTab")
+        app.typeKey("p", modifierFlags: .command)
+        let field = app.textFields["new-pane-name-field"]
+        waitFor(field)
+        field.click()
+        field.typeText("loading-pane")
+        app.buttons["new-pane-open-button"].click()
 
         let overlay = app.descendants(matching: .any)
             .matching(identifier: "pane-loading-overlay-loading-pane").firstMatch
-        XCTAssertTrue(overlay.waitForExistence(timeout: 15))
+        waitFor(overlay)
+        waitForDisappear(overlay, timeout: 20)
+        waitFor(app.descendants(matching: .any).matching(identifier: "pane-terminal-loading-pane").firstMatch)
     }
 
-    func testErrorOverlayIsVisible() {
-        let workspaceDir = GitUITestWorkspace.directoryURL.path
-        let json = makeSessionJSON(
-            tabID: Self.tabID,
-            tabName: "ErrorTab",
-            paneID: Self.errorPaneID,
-            paneName: "error-pane",
-            workspaceDir: workspaceDir
-        )
-        writeSession(json)
-
-        app = XCUIApplication()
-        app.launchArguments = [
-            "--uitesting",
-            "--inject-pane-error=\(Self.errorPaneID)",
-        ]
-        app.launch()
-        app.activate()
+    func testErrorOverlayIsVisible() throws {
+        let directory = GitUITestWorkspace.directoryURL.appending(path: ".agent-session-manager/worktrees/error-pane")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        createTab(named: "ErrorTab")
+        app.typeKey("p", modifierFlags: .command)
+        let field = app.textFields["new-pane-name-field"]
+        waitFor(field)
+        field.click()
+        field.typeText("error-pane")
+        app.buttons["new-pane-open-button"].click()
 
         let overlay = app.descendants(matching: .any)
             .matching(identifier: "pane-error-overlay-error-pane").firstMatch
-        XCTAssertTrue(overlay.waitForExistence(timeout: 15))
-    }
-
-    private func makeSessionJSON(
-        tabID: String, tabName: String, paneID: String, paneName: String, workspaceDir: String
-    ) -> String {
-        """
-        {
-          "tabs": [
-            {
-              "id": "\(tabID)",
-              "name": "\(tabName)",
-              "directory": "\(workspaceDir)",
-              "panes": [
-                {
-                  "id": "\(paneID)",
-                  "name": "\(paneName)",
-                  "harness": "claude",
-                  "isPriority": false,
-                  "isMerged": false,
-                  "worktreeDirectory": "\(workspaceDir)",
-                  "worktreeIsManaged": false
-                }
-              ]
-            }
-          ],
-          "activeTabIndex": 0,
-          "pendingNotifications": []
-        }
-        """
-    }
-
-    private func writeSession(_ json: String) {
-        let support = UITestAppSupport.directory
-        try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        try? json.data(using: .utf8)?.write(to: sessionURL)
+        waitFor(overlay, timeout: 15)
+        XCTAssertTrue(
+            app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS 'not a git worktree' OR value CONTAINS 'not a git worktree'")
+            ).firstMatch.exists)
+        XCTAssertFalse(
+            app.descendants(matching: .any).matching(identifier: "pane-terminal-error-pane").firstMatch.exists)
     }
 }

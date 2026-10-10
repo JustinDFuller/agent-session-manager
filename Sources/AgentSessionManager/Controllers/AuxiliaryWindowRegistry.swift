@@ -40,18 +40,44 @@ extension AuxiliaryWindowRegistry {
     private static var requestedWindowIDs: Set<String> = []
 
     @MainActor
-    static func open(_ window: AuxiliaryWindow, using openWindow: OpenWindowAction) {
-        recordExplicitOpen(id: window.rawValue)
-        openWindow(id: window.rawValue)
-    }
+    private static var windowControllers: [AuxiliaryWindow: NSWindowController] = [:]
 
     @MainActor
-    static func recordExplicitOpen(id: String) {
-        requestedWindowIDs.insert(id)
+    static func open(_ window: AuxiliaryWindow, tracesDirectory: URL, invariantsDirectory: URL) {
+        requestedWindowIDs.insert(window.rawValue)
+        if windowControllers[window] == nil {
+            let content: AnyView
+            switch window {
+            case .traceDashboard:
+                content = AnyView(TraceDashboardView(tracesDirectory: tracesDirectory))
+            case .invariantDashboard:
+                content = AnyView(InvariantDashboardView(directory: invariantsDirectory))
+            }
+            let hosting = NSHostingController(rootView: content.preferredColorScheme(.dark).tint(Theme.accent))
+            let nativeWindow = NSWindow(contentViewController: hosting)
+            nativeWindow.title = window.title
+            nativeWindow.identifier = NSUserInterfaceItemIdentifier(window.rawValue)
+            nativeWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            nativeWindow.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
+            nativeWindow.isReleasedWhenClosed = false
+            nativeWindow.isRestorable = false
+            Theme.configure(window: nativeWindow, using: Theme.dashboardWindowChrome)
+            nativeWindow.setFrame(NSRect(x: 0, y: 0, width: 900, height: 664), display: false)
+            nativeWindow.center()
+            windowControllers[window] = NSWindowController(window: nativeWindow)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        windowControllers[window]?.showWindow(nil)
+        windowControllers[window]?.window?.makeKeyAndOrderFront(nil)
+        TracingService.shared.record("app.auxiliary_window.opened", attributes: ["window.id": window.rawValue])
     }
 
     @MainActor
     static func resetForTesting() {
+        for controller in windowControllers.values {
+            controller.close()
+        }
+        windowControllers = [:]
         requestedWindowIDs = []
     }
 

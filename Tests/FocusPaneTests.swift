@@ -60,7 +60,7 @@ final class FocusPaneTests: XCTestCase {
         let fixture = makeState(paneNames: ["one", "two"])
         fixture.tab.setFocusedPane(id: fixture.panes[1].id, reason: "test")
 
-        fixture.tab.openShellPane(activePane: fixture.panes[1])
+        fixture.tab.openShellPane(activePane: fixture.panes[1], appState: fixture.state)
 
         XCTAssertNil(fixture.tab.focusedPaneID)
     }

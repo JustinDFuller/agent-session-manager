@@ -10,9 +10,7 @@ struct PaneView: View {
     let onClosePane: (Pane) -> Void
     let onRefreshPane: (Pane) -> Void
     let onViewPaneSettings: (Pane) -> Void
-    @State private var showsScrollbackEditor = false
-    @State private var scrollbackDraft: ScrollbackLimit?
-    @State private var scrollbackLinesText = ""
+    @State private var scrollbackEditor: PaneScrollbackPresentation?
     @State private var pendingScrollback: ScrollbackLimit?
     @State private var showsScrollbackReductionWarning = false
 
@@ -104,7 +102,7 @@ struct PaneView: View {
                 NotificationCenter.default.post(name: .newPane, object: nil)
             }
             Button("Open Shell Here") {
-                pane.tab?.openShellPane(activePane: pane, appSettings: appSettings)
+                pane.tab?.openShellPane(activePane: pane, appState: appState, appSettings: appSettings)
             }
             if let pr = pane.statusLineMonitor?.currentData?.pr, let url = URL(string: pr.url) {
                 Button("Go to Pull Request") {
@@ -160,49 +158,16 @@ struct PaneView: View {
                 }
                 Divider()
                 Button("Custom\u{2026}") {
-                    scrollbackDraft =
-                        pane.scrollbackOverride
-                        ?? .finite(appSettings.defaultScrollback.resolvedLines)
-                    scrollbackLinesText = String(
-                        (pane.scrollbackOverride ?? appSettings.defaultScrollback).resolvedLines
+                    scrollbackEditor = PaneScrollbackPresentation(
+                        limit: pane.scrollbackOverride ?? .finite(appSettings.defaultScrollback.resolvedLines)
                     )
-                    showsScrollbackEditor = true
                 }
             }
         }
-        .sheet(isPresented: $showsScrollbackEditor) {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Pane Scrollback History")
-                    .font(.headline)
-                ScrollbackLimitEditor(
-                    value: scrollbackDraft,
-                    allowsInheritance: true,
-                    inheritedValue: appSettings.defaultScrollback,
-                    accessibilityPrefix: "pane-scrollback",
-                    onChange: { scrollbackDraft = $0 },
-                    finiteLinesText: $scrollbackLinesText
-                )
-                HStack {
-                    Spacer()
-                    Button("Cancel") {
-                        showsScrollbackEditor = false
-                    }
-                    Button("Apply") {
-                        let committedScrollback: ScrollbackLimit?
-                        if case .finite? = scrollbackDraft, let lines = Int(scrollbackLinesText) {
-                            committedScrollback = ScrollbackLimit(finiteLines: lines)
-                        } else {
-                            committedScrollback = scrollbackDraft
-                        }
-                        requestScrollbackChange(committedScrollback)
-                        showsScrollbackEditor = false
-                    }
-                    .keyboardShortcut(.defaultAction)
-                }
+        .sheet(item: $scrollbackEditor) { presentation in
+            PaneScrollbackEditorSheet(value: presentation.limit, inheritedValue: appSettings.defaultScrollback) {
+                requestScrollbackChange($0)
             }
-            .padding(24)
-            .frame(width: 420)
-            .pinnedSheetBackground()
         }
         .alert(
             "Reduce Scrollback History?",
@@ -438,5 +403,50 @@ struct PaneView: View {
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.1)))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityIdentifier("pane-loading-overlay-\(pane.name)")
+    }
+}
+
+private struct PaneScrollbackPresentation: Identifiable {
+    let id = UUID()
+    let limit: ScrollbackLimit
+}
+
+private struct PaneScrollbackEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State var value: ScrollbackLimit?
+    let inheritedValue: ScrollbackLimit
+    let onApply: (ScrollbackLimit?) -> Void
+    @State private var linesText = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Pane Scrollback History").font(.headline)
+            ScrollbackLimitEditor(
+                value: value,
+                allowsInheritance: true,
+                inheritedValue: inheritedValue,
+                accessibilityPrefix: "pane-scrollback",
+                onChange: { value = $0 },
+                finiteLinesText: $linesText
+            )
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Apply") {
+                    let committed: ScrollbackLimit?
+                    if case .finite? = value, let lines = Int(linesText) {
+                        committed = ScrollbackLimit(finiteLines: lines)
+                    } else {
+                        committed = value
+                    }
+                    dismiss()
+                    onApply(committed)
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 420)
+        .pinnedSheetBackground()
     }
 }

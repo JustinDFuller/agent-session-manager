@@ -45,8 +45,7 @@ final class TabPaneFlowTests: BaseTestCase {
 
         for _ in 0..<3 {
             let shellName = openShellHere(from: "history-pane")
-            let shellHeader = app.descendants(matching: .any)
-                .matching(identifier: "pane-header-\(shellName)").firstMatch
+            let shellHeader = app.staticTexts["pane-name-\(shellName)"].firstMatch
             waitFor(shellHeader)
             app.buttons.matching(identifier: "pane-close-\(shellName)").firstMatch.click()
             waitForDisappear(shellHeader)
@@ -67,7 +66,7 @@ final class TabPaneFlowTests: BaseTestCase {
         waitFor(useGlobal)
         useGlobal.click()
 
-        let warning = app.alerts["Reduce Scrollback History?"]
+        let warning = app.sheets.containing(.button, identifier: "Reduce History").firstMatch
         waitFor(warning)
         warning.buttons["Reduce History"].click()
         waitForDisappear(warning)
@@ -88,7 +87,7 @@ final class TabPaneFlowTests: BaseTestCase {
         paneField.typeText("2000")
         app.buttons["Apply"].click()
 
-        let customWarning = app.alerts["Reduce Scrollback History?"]
+        let customWarning = app.sheets.containing(.button, identifier: "Reduce History").firstMatch
         waitFor(customWarning)
         customWarning.buttons["Reduce History"].click()
         waitForDisappear(customWarning)
@@ -109,7 +108,12 @@ final class TabPaneFlowTests: BaseTestCase {
         let refresh = app.windows.firstMatch.menuItems["Refresh Pane\u{2026}"]
         waitFor(refresh)
         refresh.click()
-        app.buttons["new-pane-more-settings-button"].click()
+        let refreshWithSettings = app.buttons["refresh-pane-settings"]
+        waitFor(refreshWithSettings)
+        refreshWithSettings.click()
+        let moreSettingsAfterRefresh = app.buttons["new-pane-more-settings-button"]
+        waitFor(moreSettingsAfterRefresh)
+        moreSettingsAfterRefresh.click()
         let refreshedField = app.textFields["new-pane-scrollback-lines-field"]
         waitFor(refreshedField)
         XCTAssertEqual(refreshedField.value as? String, "2000")
@@ -177,8 +181,10 @@ final class TabPaneFlowTests: BaseTestCase {
 
         let verboseToggle = app.checkBoxes.matching(NSPredicate(format: "label CONTAINS '--verbose'")).firstMatch
         waitFor(verboseToggle)
-        optionsScrollView.swipeUp()
-        optionsScrollView.swipeUp()
+        for _ in 0..<30 where !optionsScrollView.frame.contains(verboseToggle.frame) {
+            optionsScrollView.scroll(byDeltaX: 0, deltaY: -150)
+        }
+        XCTAssertTrue(optionsScrollView.frame.contains(verboseToggle.frame))
         XCTAssertTrue(verboseToggle.isHittable, "The lower CLI options should be reachable by scrolling")
         XCTAssertEqual(showCLIOptions.label, "Fewer options")
 
@@ -255,7 +261,8 @@ final class TabPaneFlowTests: BaseTestCase {
         app.typeKey(.escape, modifierFlags: [])
         waitForDisappear(app.textFields["new-pane-name-field"])
 
-        let idleTabDot = app.descendants(matching: .any).matching(identifier: "tab-activity-idle-WorkTab").firstMatch
+        let idleTabDot = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == 'tab idle indicator for WorkTab'")).firstMatch
         XCTAssertTrue(idleTabDot.waitForExistence(timeout: 5))
 
         waitFor(app.staticTexts["tab-empty-state-WorkTab"])
@@ -320,7 +327,8 @@ final class TabPaneFlowTests: BaseTestCase {
 
         createPane(named: "feature-a")
         waitFor(app.staticTexts["pane-name-feature-a"].firstMatch)
-        let idleTabDot2 = app.descendants(matching: .any).matching(identifier: "tab-activity-idle-WorkTab").firstMatch
+        let idleTabDot2 = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == 'tab idle indicator for WorkTab'")).firstMatch
         XCTAssertTrue(idleTabDot2.waitForExistence(timeout: 5))
         app.typeText("a")
         XCTAssertTrue(app.staticTexts["pane-name-feature-a"].firstMatch.exists)

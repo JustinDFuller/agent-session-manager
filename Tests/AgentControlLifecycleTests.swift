@@ -273,6 +273,7 @@ final class AgentControlLifecycleTests: XCTestCase {
                 bearerToken: credential.bearerToken
             )
             let pair = await InMemoryTransport.createConnectedPair()
+            try await pair.server.connect()
             let bridgeTask = Task {
                 try await MCPTransportBridge(
                     localTransport: pair.server,

@@ -188,6 +188,9 @@ final class TerminalController: NSObject {
     override init() {
         terminalView = BellCapturingTerminalView(frame: .zero)
         super.init()
+        terminalView.setAccessibilityElement(true)
+        terminalView.setAccessibilityRole(.group)
+        terminalView.setAccessibilityLabel("Terminal")
         terminalView.processDelegate = self
         terminalView.onAttention = { [weak self] event in self?.onAttention?(event) }
         terminalView.onSelectionChanged = { [weak self] active in

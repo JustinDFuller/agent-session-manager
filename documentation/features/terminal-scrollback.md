@@ -25,3 +25,5 @@ Global settings and pane overrides persist across launches. Global changes take 
 ## Runtime behavior
 
 Reducing an existing pane's effective limit immediately and irreversibly drops its oldest retained lines, so the app asks for confirmation first. Increasing the limit cannot recover output that was already discarded. Full-screen terminal applications that use the alternate screen do not add their content to scrollback.
+
+The custom pane editor opens with the selected pane’s effective limit as one presentation item. Editing occurs in sheet-local state, so the first presentation and later reopenings show the current limit and dismissing with Cancel leaves the pane unchanged.

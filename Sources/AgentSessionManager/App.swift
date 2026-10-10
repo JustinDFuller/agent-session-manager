@@ -14,11 +14,10 @@ struct ContentView: View {
     @State private var pendingPRResolutionPane: Pane?
     @State private var pendingPRResolutionTab: Tab?
     @State private var pendingPRResolutionKind: NotificationKind = .prMerged
-    @State private var showRefreshSheet = false
     @State private var paneToRefresh: Pane?
-    @State private var showRefreshSettingsSheet = false
+    @State private var pendingRefreshSettings: Pane?
+    @State private var paneForRefreshSettings: Pane?
     @State private var showOnboarding = false
-    @State private var showPaneSettingsSheet = false
     @State private var paneForSettings: Pane?
 
     var body: some View {
@@ -224,8 +223,10 @@ struct ContentView: View {
                         "marker_result": launchLifecycleResult.writeResult.rawValue,
                     ])
                 InvariantReporter.shared.configure(from: appSettings)
-                await AgentControlService.shared.configure(appState: appState, appSettings: appSettings)
-                await AgentControlService.shared.start()
+            }
+            await AgentControlService.shared.configure(appState: appState, appSettings: appSettings)
+            await AgentControlService.shared.start()
+            if !CommandLine.arguments.contains("--uitesting-skip-restore") {
                 UpdateCheckCoordinator.shared.start()
                 if let bundleIdentifier = Bundle.main.bundleIdentifier {
                     BundleIdentityVerifier.checkPreferredURL(
@@ -240,24 +241,6 @@ struct ContentView: View {
                 await SessionPersistence.checkForResolvedPRsAfterRestore(appState: appState)
             }
             await MacNotificationCoordinator.shared.requestAuthorizationIfNeeded()
-            if AgentSessionManagerApp.isUITesting {
-                for arg in CommandLine.arguments {
-                    if arg.hasPrefix("--inject-pane-loading="),
-                        let id = UUID(uuidString: String(arg.dropFirst("--inject-pane-loading=".count)))
-                    {
-                        for tab in appState.tabs {
-                            tab.panes.first(where: { $0.id == id })?.setupState = .loading
-                        }
-                    }
-                    if arg.hasPrefix("--inject-pane-error="),
-                        let id = UUID(uuidString: String(arg.dropFirst("--inject-pane-error=".count)))
-                    {
-                        for tab in appState.tabs {
-                            tab.panes.first(where: { $0.id == id })?.setupState = .failed(error: "Test setup error")
-                        }
-                    }
-                }
-            }
             if !AgentSessionManagerApp.isUITesting
                 || CommandLine.arguments.contains("--uitesting-show-onboarding")
             {
@@ -274,7 +257,7 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .openShellHere)) { _ in
             guard let tab = appState.activeTab else { return }
-            tab.openShellPane(activePane: appState.activePane, appSettings: appSettings)
+            tab.openShellPane(activePane: appState.activePane, appState: appState, appSettings: appSettings)
         }
         .onReceive(NotificationCenter.default.publisher(for: .viewPaneSettings)) { _ in
             guard let pane = appState.activePane else { return }
@@ -317,29 +300,31 @@ struct ContentView: View {
         .sheet(isPresented: $showingNewTab) {
             NewTabSheet()
         }
-        .sheet(isPresented: $showRefreshSheet) {
-            if let pane = paneToRefresh {
+        .sheet(
+            item: $paneToRefresh,
+            onDismiss: {
+                paneForRefreshSettings = pendingRefreshSettings
+                pendingRefreshSettings = nil
+            },
+            content: { pane in
                 RefreshPaneSheet(
                     pane: pane,
                     onQuickRefresh: { pane in
                         pane.tab?.refreshPane(pane)
                     },
                     onRefreshWithSettings: { pane in
-                        paneToRefresh = pane
-                        showRefreshSettingsSheet = true
+                        pendingRefreshSettings = pane
                     }
                 )
             }
-        }
-        .sheet(isPresented: $showRefreshSettingsSheet) {
-            if let pane = paneToRefresh, let tab = pane.tab {
+        )
+        .sheet(item: $paneForRefreshSettings) { pane in
+            if let tab = pane.tab {
                 NewPaneSheet(tab: tab, refreshingPane: pane)
             }
         }
-        .sheet(isPresented: $showPaneSettingsSheet) {
-            if let pane = paneForSettings {
-                PaneSettingsView(snapshot: pane.settingsSnapshot(profiles: appSettings.profiles))
-            }
+        .sheet(item: $paneForSettings) { pane in
+            PaneSettingsView(snapshot: pane.settingsSnapshot(profiles: appSettings.profiles))
         }
         .alert("Close Worktree Pane", isPresented: $showCleanupAlert) {
             Button("Keep Worktree") {
@@ -429,12 +414,10 @@ struct ContentView: View {
 
     private func handleRefreshPane(_ pane: Pane) {
         paneToRefresh = pane
-        showRefreshSheet = true
     }
 
     private func handleViewPaneSettings(_ pane: Pane) {
         paneForSettings = pane
-        showPaneSettingsSheet = true
     }
 
     private func handleClosePane(_ pane: Pane) {

@@ -5,6 +5,13 @@ import XCTest
 
 @MainActor
 final class TerminalScrollbackTests: XCTestCase {
+    func testTerminalExposesAnAccessibleInteractionSurface() {
+        let controller = TerminalController()
+        XCTAssertTrue(controller.terminalView.isAccessibilityElement())
+        XCTAssertEqual(controller.terminalView.accessibilityRole(), .group)
+        XCTAssertEqual(controller.terminalView.accessibilityLabel(), "Terminal")
+    }
+
     func testDefaultScrollbackIs5000() {
         let settings = AppSettings()
         XCTAssertEqual(settings.defaultScrollback, .finite(5_000))

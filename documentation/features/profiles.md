@@ -14,6 +14,8 @@ In **Settings → Profiles**, select a profile and click **Edit**. Every availab
 - **Set a value** — for string flags like `--model`, type the value in the text field.
 - **Show on create** — tick the **Show** checkbox on the right to make the option visible in the New Pane sheet whenever this profile is selected (see below).
 
+Expanded environment-variable catalogs scroll independently inside the editor. UI automation scrolls that list until the target row is inside its visible bounds before changing a checkbox, then verifies the saved selection through New Pane.
+
 ## Show on Create
 
 By default, options enabled in a selected profile appear in the New Pane sheet so their values can be reviewed or changed. Options stored in the profile but disabled remain hidden unless they are marked **Show on new pane**.

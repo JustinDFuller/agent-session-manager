@@ -68,6 +68,7 @@ struct PaneCreationOptionsSheet: View {
         .padding(24)
         .frame(width: 620, height: 560, alignment: .topLeading)
         .pinnedSheetBackground()
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("new-pane-cli-options-sheet")
     }
 

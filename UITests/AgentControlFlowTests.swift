@@ -39,14 +39,23 @@ final class AgentControlFlowTests: BaseTestCase {
         XCTAssertFalse(
             exitPrompt.waitForExistence(timeout: 5),
             "Claude Code exited during startup with Agent Control enabled")
+        XCTAssertFalse(
+            app.descendants(matching: .any)
+                .matching(identifier: "pane-error-overlay-claude-control").firstMatch.exists,
+            "Agent Control setup should complete before launching Claude Code")
 
         app.typeKey("i", modifierFlags: .command)
         let settingsSheet = app.descendants(matching: .any)
             .matching(identifier: "pane-settings-sheet").firstMatch
         waitFor(settingsSheet)
         let runningStatus = settingsSheet.staticTexts.matching(
-            NSPredicate(format: "label BEGINSWITH 'Running (pid '")
+            NSPredicate(format: "value BEGINSWITH 'Running (pid '")
         ).firstMatch
+        waitFor(runningStatus)
+        app.buttons["pane-settings-close-button"].click()
+        waitForDisappear(settingsSheet)
+        app.typeKey("i", modifierFlags: .command)
+        waitFor(settingsSheet)
         waitFor(runningStatus)
     }
 
@@ -119,7 +128,9 @@ final class AgentControlFlowTests: BaseTestCase {
         XCTAssertFalse(app.checkBoxes["new-pane-agent-control-toggle"].exists)
         app.buttons["new-pane-more-settings-button"].click()
         XCTAssertTrue(app.staticTexts["Agent Session Manager control will be enabled."].exists)
-        app.typeKey(.escape, modifierFlags: [])
+        app.buttons["new-pane-advanced-settings-done-button"].click()
+        XCTAssertTrue(alwaysField.exists, "Closing More Settings should return to New Pane")
+        app.buttons["new-pane-cancel-button"].click()
         waitForDisappear(alwaysField)
     }
 }
