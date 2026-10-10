@@ -11,6 +11,9 @@ Issue [#187](https://github.com/JustinDFuller/agent-session-manager/issues/187) 
 - Keep status-line fonts and configured rows unchanged; resize a scrollable viewport within its pane.
 - Remember tab-bar height and notification-sidebar width globally, grid proportions per tab, and status-line height per pane across relaunches.
 - Support native resize cursors, accessible adjustment, clickable size controls, and explicit reset actions.
+- Add configurable directional shortcuts that resize the active pane while terminal input focus stays in place; move the divider on the requested side, falling back to the opposite divider at an outside edge.
+- Default to Command–Option–arrows for four-point adjustments and Command–Option–Shift–arrows for sixteen-point adjustments, with key repeat, shared-track limits, and visible divider feedback.
+- Expose separate normal and larger-step bindings for all four directions in Settings → Shortcuts, with key capture, disabling, conflict checks, and global persistence.
 - Preserve custom proportions through window resizing, pane reordering, and focus transitions; reset only an axis whose track count changes.
 
 ## Capabilities
@@ -29,4 +32,4 @@ The implementation will affect root layout, pane grid geometry, status-line pres
 
 ## Deliberately Out of Scope
 
-Independent splits within each row, a free-form split tree, filling existing empty grid cells, changes to pane capacity, cross-tab pane movement, drag-to-collapse, font scaling, automatic status-item reflow, harness invocation changes, terminal restart behavior, and changes to release or merge-gate policy are excluded. This proposal PR contains planning artifacts only; implementation, real UI evidence, and the eventual archive transition belong to later work after review.
+Independent splits within each row, a free-form split tree, filling existing empty grid cells, changes to pane capacity, cross-tab pane movement, drag-to-collapse, font scaling, automatic status-item reflow, harness invocation changes, terminal restart behavior, prefix-key sequences, pane-size shortcuts for global sections or status viewports, replacement of existing non-resize shortcut editors, and changes to release or merge-gate policy are excluded. This proposal PR contains planning artifacts only; implementation, real UI evidence, and the eventual archive transition belong to later work after review.
