@@ -36,9 +36,7 @@ In both branches, never create the root as a side effect: do not run `openspec i
    - Auto-select if only one active change exists
    - If ambiguous, run `openspec list --json` to get available changes and ask the user to select one
 
-   When prompting, show all active changes returned by the list, including changes with `status: "no-tasks"`.
-   Include the schema used for each change if available.
-   Mark changes with incomplete tasks as "(In Progress)".
+   When prompting, show all active changes returned by the list, including changes with `status: "no-tasks"`. Include the schema used for each change if available. Mark changes with incomplete tasks as "(In Progress)".
 
    Always announce: "Using change: <name>" and how to override (e.g., `/openspec-verify-change <other>`).
 
@@ -86,78 +84,36 @@ In both branches, never create the root as a side effect: do not run `openspec i
    - If `unavailableTrackingFiles` is nonempty, mark **Task Completion** as not verified and include every unavailable path and reason. Continue using any readable task evidence, but do not infer completion from the partial `tasks` and `progress` fields.
    - If `taskTrackingConfigured` is true and `tasks` is empty, mark **Task Completion** as not verified and record the reason from apply `state` and `instruction`. Nonzero totals alone do not establish evaluable task descriptions.
    - Report complete vs total tasks from `progress`.
-   - If `progress.remaining` is greater than 0:
-     - Add CRITICAL issue for each listed incomplete task. If the remaining count exceeds the listed incomplete tasks, also report the incomplete checkboxes without descriptions and recommend adding descriptions and completing them. Do not infer completion from the listed tasks alone.
-     - Recommendation: "Complete task: <description>" or "Mark as done if already implemented"
+   - If `progress.remaining` is greater than 0: - Add CRITICAL issue for each listed incomplete task. If the remaining count exceeds the listed incomplete tasks, also report the incomplete checkboxes without descriptions and recommend adding descriptions and completing them. Do not infer completion from the listed tasks alone. - Recommendation: "Complete task: <description>" or "Mark as done if already implemented"
 
    **Spec Coverage**:
    - If status marks the spec artifact skipped by `skip_specs: true`, or the schema defines no spec artifact (no artifact whose `artifactPaths.<id>.outputPath` is under `specs/`), report the spec-dependent checks as not applicable.
    - Otherwise, `contextFiles` is keyed by artifact id, and artifact ids come from the active schema, so do not assume an id such as `specs`. The spec artifacts are those whose `artifactPaths.<id>.outputPath` is under `specs/`; read their files from `contextFiles.<id>`. If those spec files are absent or empty, mark **Spec Coverage**, **Requirement Implementation Mapping**, and **Scenario Coverage** as not verified; do not treat any of them as clean.
-   - If delta specs exist in those spec files:
-     - Extract all requirements (marked with "### Requirement:", or listed as `FROM:`/`TO:` pairs under `## RENAMED Requirements`) and note the delta section each one sits under: `## ADDED`, `## MODIFIED`, `## REMOVED`, or `## RENAMED Requirements`. The section decides what the check looks for.
-     - For each ADDED or MODIFIED requirement (for MODIFIED, check the text in the delta, not the old wording):
-       - Search codebase for keywords related to the requirement
-       - Assess if implementation likely exists
-     - If ADDED or MODIFIED requirements appear unimplemented:
-       - Add CRITICAL issue: "Requirement not found: <requirement name>"
-       - Recommendation: "Implement requirement X: <description>"
-     - For each REMOVED requirement, the change asks for the behavior to be gone, so invert the check:
-       - Search codebase for the removed behavior. Matches in `openspec/` artifacts or docs, or in code that serves only the Migration note or an ADDED requirement, are not evidence by themselves. Report any code path that still delivers the removed behavior, including one shared with an ADDED requirement.
-       - Finding no implementation is the expected result. Never report a REMOVED requirement as "Requirement not found" or recommend implementing it.
-       - If the behavior is still present:
-         - Add CRITICAL issue: "Removed requirement still implemented: <requirement name>"
-         - Recommendation: "Remove the remaining implementation at <file>:<lines>, following the requirement's Migration note if it has one"
-     - For each RENAMED entry (`FROM:`/`TO:`), the name changes but the behavior stays, so check the TO requirement for that unchanged behavior:
-       - Do not report the FROM name as missing, and do not require code symbols, identifiers, or file names to be renamed.
-       - If the TO name also appears under MODIFIED, its behavior is checked there against the MODIFIED text; skip it here.
-       - Otherwise, read the baseline requirement in the main spec at `<planningHome.root>/openspec/specs/<capability-path>/spec.md`, using the same capability path as the delta spec: the requirement under the FROM name, or under the TO name only when the FROM name is absent because the main spec is already synced. Its body and scenarios are the evidence for the behavior the TO requirement keeps.
-       - Search codebase for that behavior and assess if it is still implemented.
-       - If it appears unimplemented:
-         - Add CRITICAL issue: "Renamed requirement not found: <TO name>"
-         - Recommendation: "Restore the behavior of <TO name> (renamed from <FROM name>); a rename must not change behavior"
-       - If the baseline requirement cannot be found or read, mark **Spec Coverage** as not verified for that entry with the reason. Never count an unchecked rename as passing.
+   - If delta specs exist in those spec files: - Extract all requirements (marked with "### Requirement:", or listed as `FROM:`/`TO:` pairs under `## RENAMED Requirements`) and note the delta section each one sits under: `## ADDED`, `## MODIFIED`, `## REMOVED`, or `## RENAMED Requirements`. The section decides what the check looks for. - For each ADDED or MODIFIED requirement (for MODIFIED, check the text in the delta, not the old wording): - Search codebase for keywords related to the requirement - Assess if implementation likely exists - If ADDED or MODIFIED requirements appear unimplemented: - Add CRITICAL issue: "Requirement not found: <requirement name>" - Recommendation: "Implement requirement X: <description>" - For each REMOVED requirement, the change asks for the behavior to be gone, so invert the check: - Search codebase for the removed behavior. Matches in `openspec/` artifacts or docs, or in code that serves only the Migration note or an ADDED requirement, are not evidence by themselves. Report any code path that still delivers the removed behavior, including one shared with an ADDED requirement. - Finding no implementation is the expected result. Never report a REMOVED requirement as "Requirement not found" or recommend implementing it. - If the behavior is still present: - Add CRITICAL issue: "Removed requirement still implemented: <requirement name>" - Recommendation: "Remove the remaining implementation at <file>:<lines>, following the requirement's Migration note if it has one" - For each RENAMED entry (`FROM:`/`TO:`), the name changes but the behavior stays, so check the TO requirement for that unchanged behavior: - Do not report the FROM name as missing, and do not require code symbols, identifiers, or file names to be renamed. - If the TO name also appears under MODIFIED, its behavior is checked there against the MODIFIED text; skip it here. - Otherwise, read the baseline requirement in the main spec at `<planningHome.root>/openspec/specs/<capability-path>/spec.md`, using the same capability path as the delta spec: the requirement under the FROM name, or under the TO name only when the FROM name is absent because the main spec is already synced. Its body and scenarios are the evidence for the behavior the TO requirement keeps. - Search codebase for that behavior and assess if it is still implemented. - If it appears unimplemented: - Add CRITICAL issue: "Renamed requirement not found: <TO name>" - Recommendation: "Restore the behavior of <TO name> (renamed from <FROM name>); a rename must not change behavior" - If the baseline requirement cannot be found or read, mark **Spec Coverage** as not verified for that entry with the reason. Never count an unchecked rename as passing.
 
 6. **Verify Correctness**
 
    If the delta specs are readable and contain at least one REMOVED or RENAMED requirement but no ADDED or MODIFIED requirements (the change only removes or renames requirements), report **Requirement Implementation Mapping** and **Scenario Coverage** as **Not applicable**. The REMOVED and RENAMED checks under Spec Coverage are the evidence for such a change (each RENAMED entry is checked there against its baseline behavior), so do not mark these two checks as not verified. A delta spec with no parseable requirements at all is unusable evidence, not a removal-only change: mark these checks as not verified.
 
    **Requirement Implementation Mapping**:
-   - For each ADDED or MODIFIED requirement from delta specs (REMOVED entries, and RENAMED entries without a MODIFIED block, were settled under Spec Coverage):
-     - Search codebase for implementation evidence
-     - If found, note file paths and line ranges
-     - Assess if implementation matches requirement intent
-     - If divergence detected:
-       - Add WARNING: "Implementation may diverge from spec: <details>"
-       - Recommendation: "Review <file>:<lines> against requirement X"
+   - For each ADDED or MODIFIED requirement from delta specs (REMOVED entries, and RENAMED entries without a MODIFIED block, were settled under Spec Coverage): - Search codebase for implementation evidence - If found, note file paths and line ranges - Assess if implementation matches requirement intent - If divergence detected: - Add WARNING: "Implementation may diverge from spec: <details>" - Recommendation: "Review <file>:<lines> against requirement X"
 
    **Scenario Coverage**:
-   - For each scenario under an ADDED or MODIFIED requirement in delta specs (marked with "#### Scenario:"):
-     - Check if conditions are handled in code
-     - Check if tests exist covering the scenario
-     - If scenario appears uncovered:
-       - Add WARNING: "Scenario not covered: <scenario name>"
-       - Recommendation: "Add test or implementation for scenario: <description>"
+   - For each scenario under an ADDED or MODIFIED requirement in delta specs (marked with "#### Scenario:"): - Check if conditions are handled in code - Check if tests exist covering the scenario - If scenario appears uncovered: - Add WARNING: "Scenario not covered: <scenario name>" - Recommendation: "Add test or implementation for scenario: <description>"
    - Skip scenarios under a REMOVED requirement; that behavior is meant to be gone.
 
 7. **Verify Coherence**
 
    **Design Adherence**:
    - If the schema defines no design artifact (no artifact with id `design`, and none whose `artifactPaths.<id>.outputPath` is or ends in `design.md`), report **Design Adherence** as not applicable.
-   - If the design artifact's `contextFiles.<id>` file exists:
-     - Extract key decisions (look for sections like "Decision:", "Approach:", "Architecture:")
-     - Verify implementation follows those decisions
-     - If contradiction detected:
-       - Add WARNING: "Design decision not followed: <decision>"
-       - Recommendation: "Update implementation or revise design.md to match reality"
+   - If the design artifact's `contextFiles.<id>` file exists: - Extract key decisions (look for sections like "Decision:", "Approach:", "Architecture:") - Verify implementation follows those decisions - If contradiction detected: - Add WARNING: "Design decision not followed: <decision>" - Recommendation: "Update implementation or revise design.md to match reality"
    - Otherwise, if the design artifact's `contextFiles.<id>` file is absent or empty: mark **Design Adherence** as not verified. With other supporting artifacts, **Code Pattern Consistency** still runs; the task-only case remains limited to task completion.
 
    **Code Pattern Consistency**:
    - If implementation changes cannot be identified, mark **Code Pattern Consistency** as not verified and explain the missing evidence.
    - Otherwise, review new code for consistency with project patterns
    - Check file naming, directory structure, coding style
-   - If significant deviations found:
-     - Add SUGGESTION: "Code pattern deviation: <details>"
-     - Recommendation: "Consider following project pattern: <example>"
+   - If significant deviations found: - Add SUGGESTION: "Code pattern deviation: <details>" - Recommendation: "Consider following project pattern: <example>"
 
 8. **Generate Verification Report**
 
@@ -177,22 +133,11 @@ In both branches, never create the root as a side effect: do not run `openspec i
 
    **Issues by Priority**:
 
-   1. **CRITICAL** (Must fix before archive):
-      - Incomplete tasks
-      - Missing requirement implementations
-      - Removed requirements still implemented
-      - Renamed requirements whose behavior is no longer implemented
-      - Each with specific, actionable recommendation
+   1. **CRITICAL** (Must fix before archive): - Incomplete tasks - Missing requirement implementations - Removed requirements still implemented - Renamed requirements whose behavior is no longer implemented - Each with specific, actionable recommendation
 
-   2. **WARNING** (Should fix):
-      - Spec/design divergences
-      - Missing scenario coverage
-      - Each with specific recommendation
+   2. **WARNING** (Should fix): - Spec/design divergences - Missing scenario coverage - Each with specific recommendation
 
-   3. **SUGGESTION** (Nice to fix):
-      - Pattern inconsistencies
-      - Minor improvements
-      - Each with specific recommendation
+   3. **SUGGESTION** (Nice to fix): - Pattern inconsistencies - Minor improvements - Each with specific recommendation
 
    **Final Assessment**:
    - If CRITICAL issues: "X critical issue(s) found. Fix before archiving." If any check was skipped, also name every skipped check and its reason.
