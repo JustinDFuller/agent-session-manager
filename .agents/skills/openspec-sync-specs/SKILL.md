@@ -87,17 +87,65 @@ In both branches, never create the root as a side effect: do not run `openspec i
 
    c. **Apply changes intelligently**:
 
-      **ADDED Requirements:** - If requirement doesn't exist in main spec → add it - If requirement already exists → update it to match (treat as implicit MODIFIED)
+      **ADDED Requirements:**
 
-      **MODIFIED Requirements:** - Find the requirement in main spec - Apply the changes - this can be: - Adding new scenarios the main spec does not have yet - Modifying existing scenarios - Changing the requirement description - Preserve scenarios/content not mentioned in the delta
+      - If requirement doesn't exist in main spec → add it
 
-      **REMOVED Requirements:** - Remove the entire requirement block from main spec - Retiring the capability. Delete the whole `spec.md` - and the directory once nothing else is left in it - only when ALL of these hold: 1. removing the requirements *this run* left no requirement blocks; 2. the rest of the spec is well-formed (it still has a `## Purpose`); 3. the main spec was not already empty before this sync - if you removed nothing, change nothing; 4. every other nonblank line in the whole file is accounted for as the title, Purpose, Requirements header, or a canonical requirement's statement, scenarios, or fenced examples; 5. the change's `.openspec.yaml` declares `retire_capabilities: true`; 6. the `spec.md` resolves inside the real specs root (do not follow a capability-directory symlink to delete an external file). If removing the selected requirements would leave no requirement blocks and any retirement condition is not satisfied, do not modify the main spec. Stop the sync for that capability, report the blocking condition, and tell the user how to resolve it. Never write or leave an empty `## Requirements` section. When only the marker is missing, say that too - it is the one thing the user can add to make the retirement go through. - Deleting the file also deletes its `## Purpose`; any other section blocks retirement. Name Purpose when you report the retirement. Include a pasteable `git checkout` only when the spec lived in the caller's checkout; otherwise give checkout-scoped recovery guidance.
+      - If requirement already exists → update it to match (treat as implicit MODIFIED)
 
-      **RENAMED Requirements:** - Find the FROM requirement, rename to TO
+      **MODIFIED Requirements:**
 
-      **`## Purpose` in the delta:** - The main spec already has one and it is authoritative - leave it alone (this is what `openspec archive` does; it warns and moves on)
+      - Find the requirement in main spec
 
-   d. **Create new main spec** if capability doesn't exist yet: - Only when the delta has ADDED requirements to put in it and no MODIFIED or RENAMED requirements blocked this capability in step b. Otherwise create nothing and leave the specs directory untouched. For a REMOVED-only delta, if the change's `.openspec.yaml` declares `retire_capabilities: true`, report it as already retired and continue without recreating the spec. Without that marker, report the sync as blocked: `openspec archive` rejects it with `Spec must have at least one requirement`. An empty delta has no operations to sync; report it as blocked too. Never write an empty `## Requirements` section. - Create `<planningHome.root>/openspec/specs/<capability-path>/spec.md` - Add Purpose section: copy the delta's `## Purpose` body verbatim when it has one (this is what `openspec archive` does); only write a brief TBD placeholder when it does not - Add Requirements section with the ADDED requirements - Follow the **Main Spec Format Reference** below
+      - Apply the changes - this can be:
+
+        - Adding new scenarios the main spec does not have yet
+
+        - Modifying existing scenarios
+
+        - Changing the requirement description
+
+      - Preserve scenarios/content not mentioned in the delta
+
+      **REMOVED Requirements:**
+
+      - Remove the entire requirement block from main spec
+
+      - Retiring the capability. Delete the whole `spec.md` - and the directory once nothing else is left in it - only when ALL of these hold:
+
+        1. removing the requirements *this run* left no requirement blocks;
+
+        2. the rest of the spec is well-formed (it still has a `## Purpose`);
+
+        3. the main spec was not already empty before this sync - if you removed nothing, change nothing;
+
+        4. every other nonblank line in the whole file is accounted for as the title, Purpose, Requirements header, or a canonical requirement's statement, scenarios, or fenced examples;
+
+        5. the change's `.openspec.yaml` declares `retire_capabilities: true`;
+
+        6. the `spec.md` resolves inside the real specs root (do not follow a capability-directory symlink to delete an external file). If removing the selected requirements would leave no requirement blocks and any retirement condition is not satisfied, do not modify the main spec. Stop the sync for that capability, report the blocking condition, and tell the user how to resolve it. Never write or leave an empty `## Requirements` section. When only the marker is missing, say that too - it is the one thing the user can add to make the retirement go through.
+
+      - Deleting the file also deletes its `## Purpose`; any other section blocks retirement. Name Purpose when you report the retirement. Include a pasteable `git checkout` only when the spec lived in the caller's checkout; otherwise give checkout-scoped recovery guidance.
+
+      **RENAMED Requirements:**
+
+      - Find the FROM requirement, rename to TO
+
+      **`## Purpose` in the delta:**
+
+      - The main spec already has one and it is authoritative - leave it alone (this is what `openspec archive` does; it warns and moves on)
+
+   d. **Create new main spec** if capability doesn't exist yet:
+
+      - Only when the delta has ADDED requirements to put in it and no MODIFIED or RENAMED requirements blocked this capability in step b. Otherwise create nothing and leave the specs directory untouched. For a REMOVED-only delta, if the change's `.openspec.yaml` declares `retire_capabilities: true`, report it as already retired and continue without recreating the spec. Without that marker, report the sync as blocked: `openspec archive` rejects it with `Spec must have at least one requirement`. An empty delta has no operations to sync; report it as blocked too. Never write an empty `## Requirements` section.
+
+      - Create `<planningHome.root>/openspec/specs/<capability-path>/spec.md`
+
+      - Add Purpose section: copy the delta's `## Purpose` body verbatim when it has one (this is what `openspec archive` does); only write a brief TBD placeholder when it does not
+
+      - Add Requirements section with the ADDED requirements
+
+      - Follow the **Main Spec Format Reference** below
 
 5. **Validate updated main specs**
 
