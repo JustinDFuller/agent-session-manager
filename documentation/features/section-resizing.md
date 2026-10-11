@@ -2,7 +2,7 @@
 
 Section resizing allocates space across the existing tab bar, notification sidebar, pane grid, and each pane's status viewport. It preserves the automatic pane grid, terminal identities, pane order, and empty cells while each divider exchanges space only with its adjacent region or track.
 
-This guide describes the approved complete feature. The foundations layer provides geometry and compatible preferences; later implementation layers provide user controls, grid interactions, and status resizing.
+This guide records the complete approved behavior across the implementation stack. Group 2 implements tab-bar and notification-sidebar resizing, global layout settings, and shortcut configuration. Pane-grid resizing, status viewports, and routing pane-resize bindings from terminals remain for Group 3 and are not available in Group 2.
 
 ## Ownership
 

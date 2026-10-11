@@ -20,12 +20,50 @@ extension XCTestCase {
 
 extension BaseTestCase {
     func createTab(named name: String) {
-        app.typeKey("t", modifierFlags: .command)
+        if !appLaunchArguments.contains("--uitesting") {
+            let onboardingSkipButton = app.buttons["onboarding-skip-button"]
+            if onboardingSkipButton.waitForExistence(timeout: 2) {
+                onboardingSkipButton.click()
+            }
+        }
+        let fileMenu = app.menuBars.menuBarItems["File"]
+        waitFor(fileMenu)
+        fileMenu.click()
+        let newTab = fileMenu.menuItems["New Tab"]
+        waitFor(newTab)
+        newTab.click()
         let field = app.textFields["new-tab-name-field"]
         waitFor(field)
         field.click()
         field.typeText(name)
         app.buttons["new-tab-choose-dir-button"].click()
+        if !appLaunchArguments.contains("--uitesting") {
+            let directoryPicker = app.dialogs["open-panel"]
+            let selectDirectory = directoryPicker.buttons["OKButton"]
+            waitFor(selectDirectory)
+            let pickerInitiallyReady = expectation(
+                for: NSPredicate(format: "hittable == true"), evaluatedWith: selectDirectory)
+            wait(for: [pickerInitiallyReady], timeout: 15)
+            directoryPicker.typeKey("g", modifierFlags: [.command, .shift])
+            let folderEntryReady = expectation(
+                for: NSPredicate(format: "hittable == false"), evaluatedWith: selectDirectory)
+            wait(for: [folderEntryReady], timeout: 15)
+            directoryPicker.typeKey("a", modifierFlags: .command)
+            directoryPicker.typeText(GitUITestWorkspace.directoryURL.path)
+            directoryPicker.typeKey(.enter, modifierFlags: [])
+            let pickerReady = expectation(
+                for: NSPredicate(format: "hittable == true"), evaluatedWith: selectDirectory)
+            wait(for: [pickerReady], timeout: 15)
+            selectDirectory.click()
+            let directoryLabel = app.staticTexts["new-tab-directory-label"]
+            waitFor(directoryLabel)
+            XCTAssertEqual(
+                (directoryLabel.value as? String).map {
+                    URL(filePath: $0).resolvingSymlinksInPath().standardizedFileURL.path
+                },
+                GitUITestWorkspace.directoryURL.resolvingSymlinksInPath().standardizedFileURL.path
+            )
+        }
         let createBtn = app.buttons["new-tab-create-button"]
         waitFor(createBtn)
         let enabled = expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: createBtn)

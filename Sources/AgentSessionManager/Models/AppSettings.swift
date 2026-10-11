@@ -109,6 +109,7 @@ enum FocusModeTabSwitchBehavior: String, Codable, CaseIterable {
 @MainActor
 final class AppSettings {
     var layoutSettings = LayoutSettings()
+    var layoutSaveError: String?
     var cliOptions: [CLIOptionConfig] = CLIOptionConfig.all
     var codexCliOptions: [CLIOptionConfig] = CLIOptionConfig.codexAll
     var cursorCliOptions: [CLIOptionConfig] = CLIOptionConfig.cursorAll

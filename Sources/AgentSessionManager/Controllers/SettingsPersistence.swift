@@ -108,6 +108,7 @@ struct SettingsPersistence {
     private static var cursorSettingsURL: URL { appSupportDir.appending(path: "cursor-settings.json") }
     private static var opencodeSettingsURL: URL { appSupportDir.appending(path: "opencode-settings.json") }
     private static var statusLineSettingsURL: URL { appSupportDir.appending(path: "statusline-settings.json") }
+    private static var layoutSettingsURL: URL { appSupportDir.appending(path: "layout-settings.json") }
     private static var activeToolsURL: URL { appSupportDir.appending(path: "active-tools-settings.json") }
     private static var defaultBranchURL: URL { appSupportDir.appending(path: "default-branch.json") }
     private static var notificationSettingsURL: URL { appSupportDir.appending(path: "notification-settings.json") }
@@ -140,6 +141,40 @@ struct SettingsPersistence {
     static func save<Value: Encodable>(_ value: Value, to filename: String) {
         guard let data = try? JSONEncoder().encode(value) else { return }
         try? data.write(to: appSupportDir.appending(path: filename))
+    }
+
+    @discardableResult
+    static func saveLayout(appSettings: AppSettings) -> Bool {
+        guard let data = try? JSONEncoder().encode(appSettings.layoutSettings) else {
+            appSettings.layoutSaveError = "Could not save layout settings. Changes remain active until the app closes."
+            LayoutResizeTelemetry.record(
+                event: "persistence_failed",
+                section: "global",
+                axis: .columns,
+                source: "settings",
+                before: 0,
+                after: 0,
+                result: "encode_failed"
+            )
+            return false
+        }
+        do {
+            try data.write(to: layoutSettingsURL, options: .atomic)
+            appSettings.layoutSaveError = nil
+            return true
+        } catch {
+            appSettings.layoutSaveError = "Could not save layout settings. Changes remain active until the app closes."
+            LayoutResizeTelemetry.record(
+                event: "persistence_failed",
+                section: "global",
+                axis: .columns,
+                source: "settings",
+                before: 0,
+                after: 0,
+                result: "write_failed"
+            )
+            return false
+        }
     }
 
     static func saveDebugSettings(enabled: Bool) -> Bool {

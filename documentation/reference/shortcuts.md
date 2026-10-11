@@ -22,7 +22,7 @@ Keyboard shortcuts open, close, and move through tabs and panes without leaving 
 
 ## Shortcut configuration
 
-**Settings → Shortcuts** contains the configurable shortcut fields. Each field accepts one key, and the command modifier remains fixed. The ⌘1 through ⌘9 tab-switching shortcuts are fixed.
+**Settings → Shortcuts** contains the configurable shortcut fields. Existing app shortcuts accept one key with their displayed modifiers, and the ⌘1 through ⌘9 tab-switching shortcuts are fixed.
 
 ## Terminal editing
 
@@ -31,5 +31,6 @@ Keyboard shortcuts open, close, and move through tabs and panes without leaving 
 ## Related documentation
 
 - [Tabs and Panes]({{ '/documentation/user-guide/tabs-and-panes/' | relative_url }})
+- [Resize Sections and Panes]({{ '/documentation/user-guide/resize-sections-and-panes/' | relative_url }})
 - [Focus Pane]({{ '/documentation/user-guide/focus-pane/' | relative_url }})
 - [Supported Tools]({{ '/documentation/reference/supported-tools/' | relative_url }})

@@ -19,6 +19,11 @@ struct ContentView: View {
     @State private var paneForRefreshSettings: Pane?
     @State private var showOnboarding = false
     @State private var paneForSettings: Pane?
+    @State private var tabBarResizePreview: Double?
+    @State private var sidebarResizePreview: Double?
+    @State private var tabBarResizeSnapshot: Double?
+    @State private var sidebarResizeSnapshot: Double?
+    @State private var layoutMeasurements: [String: Double] = [:]
 
     var body: some View {
         @Bindable var appState = appState
@@ -26,55 +31,287 @@ struct ContentView: View {
         let hideNotificationSidebar =
             appSettings.hideNotificationSidebarWhileFocused
             && appState.activeTab?.focusedPaneID != nil
-        VStack(spacing: 0) {
-            TabBarView()
-                .frame(height: 44)
-
-            Divider()
-
-            ZStack {
-                HStack(spacing: 0) {
-                    if appSettings.notificationSidebarSide == .left
-                        && (hasNotifications
-                            || appSettings.alwaysShowNotificationsSidebar)
-                        && !hideNotificationSidebar
+        GeometryReader { geometry in
+            let activeTab = appState.activeTab
+            let layout = GridLayout.forPaneCount(activeTab?.panes.count ?? 0)
+            let isFocused = activeTab?.focusedPaneID != nil
+            let effectiveLayout = isFocused ? GridLayout.forPaneCount(1) : layout
+            let mainMinimumWidth =
+                activeTab?.panes.isEmpty != false
+                ? 160.0
+                : isFocused ? 168.0 : max(168, Double(layout.columns) * 160 + Double(layout.columns - 1) * 4 + 8)
+            let visiblePanes =
+                isFocused
+                ? activeTab?.panes.filter { $0.id == activeTab?.focusedPaneID } ?? []
+                : activeTab?.panes ?? []
+            let rowMinimums = (0..<effectiveLayout.rows).map { rowIndex in
+                let panesInRow = visiblePanes.enumerated().compactMap { index, pane in
+                    index / effectiveLayout.columns == rowIndex ? pane : nil
+                }
+                guard !panesInRow.isEmpty else { return 64.0 }
+                return panesInRow.map { pane in
+                    let headerHeight = layoutMeasurements["header-\(pane.id.uuidString)"] ?? 28
+                    let statusConfig: StatusLineConfig
+                    if let profileID = pane.profileID,
+                        let profile = appSettings.profiles.first(where: { $0.id == profileID })
                     {
+                        statusConfig = profile.resolvedStatusLineConfig(inheriting: appSettings.statusLineConfig)
+                    } else {
+                        statusConfig = appSettings.statusLineConfig
+                    }
+                    let hasStatusRows =
+                        pane.statusLineMonitor != nil
+                        && statusConfig.rows.contains {
+                            $0.items.contains { statusConfig.supports($0, on: pane.harness) }
+                        }
+                    return headerHeight + 1 + 64 + (hasStatusRows ? 32 : 0)
+                }.max() ?? 64
+            }
+            let mainMinimumHeight =
+                activeTab?.panes.isEmpty == false
+                ? rowMinimums.reduce(0, +) + Double(max(0, effectiveLayout.rows - 1)) * 4 + 8
+                : 64.0
+            let tabBarMinimum = max(
+                44,
+                (layoutMeasurements.filter { $0.key.hasPrefix("tabbar-") }.values.max() ?? 0) + 12
+            )
+            let tabBarMaximum = max(tabBarMinimum, min(96, Double(geometry.size.height) - mainMinimumHeight))
+            let tabBarSize = min(
+                max(tabBarResizePreview ?? appSettings.layoutSettings.tabBarHeight, tabBarMinimum),
+                tabBarMaximum
+            )
+            let sidebarIsVisible =
+                (hasNotifications || appSettings.alwaysShowNotificationsSidebar)
+                && !hideNotificationSidebar
+            let sidebarMaximum = max(160, min(480, Double(geometry.size.width) - mainMinimumWidth - 8))
+            let sidebarSize = min(
+                max(sidebarResizePreview ?? appSettings.layoutSettings.notificationSidebarWidth, 160),
+                sidebarMaximum
+            )
+            let cancellationKey = [
+                activeTab?.id.uuidString ?? "empty",
+                activeTab?.panes.map { $0.id.uuidString }.joined(separator: ",") ?? "",
+                activeTab?.focusedPaneID?.uuidString ?? "grid",
+                appState.activePaneID?.uuidString ?? "none",
+                "\(layout.columns)x\(layout.rows)",
+                "\(geometry.size.width)x\(geometry.size.height)",
+                "\(mainMinimumWidth)x\(mainMinimumHeight)",
+                appSettings.notificationSidebarSide.rawValue,
+                "\(sidebarIsVisible)",
+            ].joined(separator: "|")
+
+            VStack(spacing: 0) {
+                TabBarView()
+                    .frame(height: tabBarSize)
+
+                HStack(spacing: 0) {
+                    if appSettings.notificationSidebarSide == .left && sidebarIsVisible {
                         NotificationSidebarView()
                             .environment(appState)
                             .environment(appSettings)
-                        Divider()
+                            .frame(width: sidebarSize)
+                        GlobalSectionHandle(
+                            axis: .columns,
+                            identifier: "notification-sidebar-resize-handle",
+                            label: "Notification Sidebar",
+                            value: sidebarSize,
+                            minimum: 160,
+                            maximum: sidebarMaximum,
+                            cancellationKey: cancellationKey,
+                            onPreview: { newValue in
+                                if let newValue {
+                                    if sidebarResizeSnapshot == nil { sidebarResizeSnapshot = sidebarSize }
+                                    sidebarResizePreview = newValue
+                                } else {
+                                    sidebarResizePreview = nil
+                                    sidebarResizeSnapshot = nil
+                                }
+                            },
+                            onCommit: { newValue, source in
+                                let previousValue = sidebarResizeSnapshot ?? sidebarSize
+                                appSettings.layoutSettings.notificationSidebarWidth = newValue
+                                sidebarResizeSnapshot = nil
+                                let saved = SettingsPersistence.saveLayout(appSettings: appSettings)
+                                LayoutResizeTelemetry.record(
+                                    event: "completed", section: "notification_sidebar", axis: .columns,
+                                    source: source, before: previousValue, after: newValue,
+                                    result: saved ? "saved" : "save_failed", tab: activeTab
+                                )
+                            },
+                            onReset: { source in
+                                let previousValue = sidebarSize
+                                let resetValue = min(max(240, 160), sidebarMaximum)
+                                appSettings.layoutSettings.notificationSidebarWidth = 240
+                                sidebarResizePreview = nil
+                                sidebarResizeSnapshot = nil
+                                let saved = SettingsPersistence.saveLayout(appSettings: appSettings)
+                                LayoutResizeTelemetry.record(
+                                    event: "reset", section: "notification_sidebar", axis: .columns,
+                                    source: source, before: previousValue, after: resetValue,
+                                    result: saved ? "saved" : "save_failed", tab: activeTab
+                                )
+                            },
+                            onCancel: {
+                                let before = appSettings.layoutSettings.notificationSidebarWidth
+                                sidebarResizePreview = nil
+                                LayoutResizeTelemetry.record(
+                                    event: "canceled", section: "notification_sidebar", axis: .columns,
+                                    source: "pointer", before: sidebarResizeSnapshot ?? before,
+                                    after: sidebarResizeSnapshot ?? before, result: "canceled", tab: activeTab
+                                )
+                                sidebarResizeSnapshot = nil
+                            }
+                        )
                     }
 
                     Group {
                         if appState.tabs.isEmpty {
                             EmptyStateView()
-                        } else if let tab = appState.activeTab {
+                        } else if let tab = activeTab {
                             PaneGridView(
                                 tab: tab, onClosePane: handleClosePane, onRefreshPane: handleRefreshPane,
                                 onViewPaneSettings: handleViewPaneSettings
                             )
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: mainMinimumWidth, maxWidth: .infinity, maxHeight: .infinity)
 
-                    if appSettings.notificationSidebarSide == .right
-                        && (hasNotifications
-                            || appSettings.alwaysShowNotificationsSidebar)
-                        && !hideNotificationSidebar
-                    {
-                        Divider()
+                    if appSettings.notificationSidebarSide == .right && sidebarIsVisible {
+                        GlobalSectionHandle(
+                            axis: .columns,
+                            identifier: "notification-sidebar-resize-handle",
+                            label: "Notification Sidebar",
+                            value: sidebarSize,
+                            minimum: 160,
+                            maximum: sidebarMaximum,
+                            movementSign: -1,
+                            cancellationKey: cancellationKey,
+                            onPreview: { newValue in
+                                if let newValue {
+                                    if sidebarResizeSnapshot == nil { sidebarResizeSnapshot = sidebarSize }
+                                    sidebarResizePreview = newValue
+                                } else {
+                                    sidebarResizePreview = nil
+                                    sidebarResizeSnapshot = nil
+                                }
+                            },
+                            onCommit: { newValue, source in
+                                let previousValue = sidebarResizeSnapshot ?? sidebarSize
+                                appSettings.layoutSettings.notificationSidebarWidth = newValue
+                                sidebarResizeSnapshot = nil
+                                let saved = SettingsPersistence.saveLayout(appSettings: appSettings)
+                                LayoutResizeTelemetry.record(
+                                    event: "completed", section: "notification_sidebar", axis: .columns,
+                                    source: source, before: previousValue, after: newValue,
+                                    result: saved ? "saved" : "save_failed", tab: activeTab
+                                )
+                            },
+                            onReset: { source in
+                                let previousValue = sidebarSize
+                                let resetValue = min(max(240, 160), sidebarMaximum)
+                                appSettings.layoutSettings.notificationSidebarWidth = 240
+                                sidebarResizePreview = nil
+                                sidebarResizeSnapshot = nil
+                                let saved = SettingsPersistence.saveLayout(appSettings: appSettings)
+                                LayoutResizeTelemetry.record(
+                                    event: "reset", section: "notification_sidebar", axis: .columns,
+                                    source: source, before: previousValue, after: resetValue,
+                                    result: saved ? "saved" : "save_failed", tab: activeTab
+                                )
+                            },
+                            onCancel: {
+                                let before = appSettings.layoutSettings.notificationSidebarWidth
+                                sidebarResizePreview = nil
+                                LayoutResizeTelemetry.record(
+                                    event: "canceled", section: "notification_sidebar", axis: .columns,
+                                    source: "pointer", before: sidebarResizeSnapshot ?? before,
+                                    after: sidebarResizeSnapshot ?? before, result: "canceled", tab: activeTab
+                                )
+                                sidebarResizeSnapshot = nil
+                            }
+                        )
                         NotificationSidebarView()
                             .environment(appState)
                             .environment(appSettings)
+                            .frame(width: sidebarSize)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .top) {
+                GlobalSectionHandle(
+                    axis: .rows,
+                    identifier: "tab-bar-resize-handle",
+                    label: "Tab Bar",
+                    value: tabBarSize,
+                    minimum: tabBarMinimum,
+                    maximum: tabBarMaximum,
+                    cancellationKey: cancellationKey,
+                    onPreview: { newValue in
+                        if let newValue {
+                            if tabBarResizeSnapshot == nil { tabBarResizeSnapshot = tabBarSize }
+                            tabBarResizePreview = newValue
+                        } else {
+                            tabBarResizePreview = nil
+                            tabBarResizeSnapshot = nil
+                        }
+                    },
+                    onCommit: { newValue, source in
+                        let previousValue = tabBarResizeSnapshot ?? tabBarSize
+                        appSettings.layoutSettings.tabBarHeight = newValue
+                        tabBarResizeSnapshot = nil
+                        let saved = SettingsPersistence.saveLayout(appSettings: appSettings)
+                        LayoutResizeTelemetry.record(
+                            event: "completed", section: "tab_bar", axis: .rows, source: source,
+                            before: previousValue, after: newValue,
+                            result: saved ? "saved" : "save_failed", tab: activeTab
+                        )
+                    },
+                    onReset: { source in
+                        let previousValue = tabBarSize
+                        let resetValue = min(max(44, tabBarMinimum), tabBarMaximum)
+                        appSettings.layoutSettings.tabBarHeight = 44
+                        tabBarResizePreview = nil
+                        tabBarResizeSnapshot = nil
+                        let saved = SettingsPersistence.saveLayout(appSettings: appSettings)
+                        LayoutResizeTelemetry.record(
+                            event: "reset", section: "tab_bar", axis: .rows, source: source,
+                            before: previousValue, after: resetValue,
+                            result: saved ? "saved" : "save_failed", tab: activeTab
+                        )
+                    },
+                    onCancel: {
+                        let before = appSettings.layoutSettings.tabBarHeight
+                        tabBarResizePreview = nil
+                        LayoutResizeTelemetry.record(
+                            event: "canceled", section: "tab_bar", axis: .rows, source: "pointer",
+                            before: tabBarResizeSnapshot ?? before,
+                            after: tabBarResizeSnapshot ?? before, result: "canceled", tab: activeTab
+                        )
+                        tabBarResizeSnapshot = nil
+                    }
+                )
+                .frame(height: 8)
+                .offset(y: tabBarSize - 4)
+            }
+            .onPreferenceChange(LayoutMeasurementKey.self) { layoutMeasurements = $0 }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.controlBackground)
+        .overlay(alignment: .bottom) {
+            if let message = appSettings.layoutSaveError {
+                HStack(spacing: 8) {
+                    Text(message)
+                        .font(.caption)
+                    Button("Dismiss") { appSettings.layoutSaveError = nil }
+                        .buttonStyle(.bordered)
+                }
+                .padding(12)
+                .background(Theme.overlayMaterial, in: RoundedRectangle(cornerRadius: 8))
+                .padding(8)
+                .accessibilityIdentifier("layout-save-error")
+            }
+        }
         .preferredColorScheme(.dark)
         .tint(Theme.accent)
         .onReceive(
@@ -92,12 +329,12 @@ struct ContentView: View {
                 appSettings.defaultBranch = branch
                 appSettings.isDefaultBranchEnabled = true
             }
+            var restoredLayoutSettings =
+                SettingsPersistence.load(LayoutSettings.self, from: "layout-settings.json")
+                ?? LayoutSettings()
+            restoredLayoutSettings.bindings.resolveConflicts(appBindings: ResizeKeyBinding.appBindings())
+            appSettings.layoutSettings = restoredLayoutSettings
             if !CommandLine.arguments.contains("--uitesting-skip-restore") {
-                var restoredLayoutSettings =
-                    SettingsPersistence.load(LayoutSettings.self, from: "layout-settings.json")
-                    ?? LayoutSettings()
-                restoredLayoutSettings.bindings.resolveConflicts(appBindings: ResizeKeyBinding.appBindings())
-                appSettings.layoutSettings = restoredLayoutSettings
                 appSettings.cliOptions = SettingsPersistence.mergeCLIOptions(
                     SettingsPersistence.loadCLIOptions(from: "settings.json", harness: .claude),
                     into: CLIOptionConfig.all)
@@ -469,6 +706,42 @@ struct EmptyStateView: View {
                 .accessibilityIdentifier("empty-state-hint")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct GlobalSectionHandle: View {
+    @Environment(AppState.self) private var appState
+    let axis: ResizeAxis
+    let identifier: String
+    let label: String
+    let value: Double
+    let minimum: Double
+    let maximum: Double
+    var movementSign = 1.0
+    let cancellationKey: String
+    let onPreview: (Double?) -> Void
+    let onCommit: (Double, String) -> Void
+    let onReset: (String) -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        ResizeHandle(
+            axis: axis,
+            identifier: identifier,
+            label: label,
+            value: value,
+            minimum: minimum,
+            maximum: maximum,
+            focusTarget: appState.activePane?.terminalController?.terminalView,
+            movementSign: movementSign,
+            cancellationKey: cancellationKey,
+            onPreview: onPreview,
+            onCommit: onCommit,
+            onReset: onReset,
+            onCancel: onCancel
+        )
+        .frame(width: axis == .columns ? 8 : nil, height: axis == .rows ? 8 : nil)
+        .frame(maxWidth: axis == .rows ? .infinity : nil, maxHeight: axis == .columns ? .infinity : nil)
     }
 }
 
