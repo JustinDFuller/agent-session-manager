@@ -88,7 +88,7 @@ class BaseTestCase: XCTestCase {
     func clearPersistedState() {
         let support = UITestAppSupport.directory
         for file in [
-            "sessions.json", "settings.json", "codex-settings.json",
+            "sessions.json", "layout-settings.json", "settings.json", "codex-settings.json",
             "cursor-settings.json", "opencode-settings.json", "opencode-env-var-settings.json",
             "statusline-settings.json",
             "active-tools-settings.json", "default-branch.json",

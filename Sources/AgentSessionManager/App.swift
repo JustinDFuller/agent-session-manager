@@ -93,6 +93,11 @@ struct ContentView: View {
                 appSettings.isDefaultBranchEnabled = true
             }
             if !CommandLine.arguments.contains("--uitesting-skip-restore") {
+                var restoredLayoutSettings =
+                    SettingsPersistence.load(LayoutSettings.self, from: "layout-settings.json")
+                    ?? LayoutSettings()
+                restoredLayoutSettings.bindings.resolveConflicts(appBindings: ResizeKeyBinding.appBindings())
+                appSettings.layoutSettings = restoredLayoutSettings
                 appSettings.cliOptions = SettingsPersistence.mergeCLIOptions(
                     SettingsPersistence.loadCLIOptions(from: "settings.json", harness: .claude),
                     into: CLIOptionConfig.all)
