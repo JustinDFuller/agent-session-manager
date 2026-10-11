@@ -6,21 +6,21 @@ final class SectionResizeGlobalFlowTests: BaseTestCase {
     func testTabBarResizeHandleSupportsPointerMenuKeyboardAndEscape() {
         createTab(named: "TabBarResize")
         createPane(named: "tab-bar-resize-pane")
-        let paneGrid = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH 'pane-grid-'"))
+        let paneRegion = app.descendants(matching: .any)
+            .matching(identifier: "pane-tab-bar-resize-pane")
             .firstMatch
-        waitFor(paneGrid)
+        waitFor(paneRegion)
         let handle = app.descendants(matching: .any)
             .matching(identifier: "tab-bar-resize-handle").firstMatch
         waitFor(handle)
         let initial = resizeValue(handle)
-        let initialPaneHeight = paneGrid.frame.height
+        let initialPaneHeight = paneRegion.frame.height
 
         let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         let end = start.withOffset(CGVector(dx: 0, dy: 20))
         start.press(forDuration: 0.1, thenDragTo: end)
         XCTAssertEqual(resizeValue(handle), initial + 20, accuracy: 1)
-        XCTAssertEqual(paneGrid.frame.height, initialPaneHeight - 20, accuracy: 2)
+        XCTAssertEqual(paneRegion.frame.height, initialPaneHeight - 20, accuracy: 2)
 
         handle.rightClick()
         let increase = app.menuItems["Increase Tab Bar Size"]
@@ -59,20 +59,20 @@ final class SectionResizeGlobalFlowTests: BaseTestCase {
         let sidebarHandle = app.descendants(matching: .any)
             .matching(identifier: "notification-sidebar-resize-handle").firstMatch
         waitFor(sidebarHandle)
-        let paneGrid = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH 'pane-grid-'"))
+        let paneRegion = app.descendants(matching: .any)
+            .matching(identifier: "pane-sidebar-resize-pane")
             .firstMatch
-        waitFor(paneGrid)
-        let initialPaneWidth = paneGrid.frame.width
+        waitFor(paneRegion)
+        let initialPaneWidth = paneRegion.frame.width
         let growFromLeft = sidebarHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         growFromLeft.press(forDuration: 0.1, thenDragTo: growFromLeft.withOffset(CGVector(dx: 20, dy: 0)))
         XCTAssertEqual(resizeValue(sidebarHandle), 260, accuracy: 1)
-        XCTAssertEqual(paneGrid.frame.width, initialPaneWidth - 20, accuracy: 2)
+        XCTAssertEqual(paneRegion.frame.width, initialPaneWidth - 20, accuracy: 2)
 
         let shrinkFromLeft = sidebarHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         shrinkFromLeft.press(forDuration: 0.1, thenDragTo: shrinkFromLeft.withOffset(CGVector(dx: -20, dy: 0)))
         XCTAssertEqual(resizeValue(sidebarHandle), 240, accuracy: 1)
-        XCTAssertEqual(paneGrid.frame.width, initialPaneWidth, accuracy: 2)
+        XCTAssertEqual(paneRegion.frame.width, initialPaneWidth, accuracy: 2)
 
         sidebarHandle.rightClick()
         let increase = app.menuItems["Increase Notification Sidebar Size"]
@@ -106,16 +106,16 @@ final class SectionResizeGlobalFlowTests: BaseTestCase {
         waitFor(reset)
         reset.click()
         XCTAssertEqual(resizeValue(sidebarHandle), 240, accuracy: 1)
-        let rightSidePaneWidth = paneGrid.frame.width
+        let rightSidePaneWidth = paneRegion.frame.width
         let growFromRight = sidebarHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         growFromRight.press(forDuration: 0.1, thenDragTo: growFromRight.withOffset(CGVector(dx: -20, dy: 0)))
         XCTAssertEqual(resizeValue(sidebarHandle), 260, accuracy: 1)
-        XCTAssertEqual(paneGrid.frame.width, rightSidePaneWidth - 20, accuracy: 2)
+        XCTAssertEqual(paneRegion.frame.width, rightSidePaneWidth - 20, accuracy: 2)
 
         let shrinkFromRight = sidebarHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         shrinkFromRight.press(forDuration: 0.1, thenDragTo: shrinkFromRight.withOffset(CGVector(dx: 20, dy: 0)))
         XCTAssertEqual(resizeValue(sidebarHandle), 240, accuracy: 1)
-        XCTAssertEqual(paneGrid.frame.width, rightSidePaneWidth, accuracy: 2)
+        XCTAssertEqual(paneRegion.frame.width, rightSidePaneWidth, accuracy: 2)
         sidebarHandle.rightClick()
         let increaseAgain = app.menuItems["Increase Notification Sidebar Size"]
         waitFor(increaseAgain)
