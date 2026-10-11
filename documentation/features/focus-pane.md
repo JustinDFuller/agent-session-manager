@@ -12,6 +12,8 @@ Focus mode is available when a tab has at least two panes:
 
 The focused pane header keeps the activity indicator, pane name, and close button. A small bordered **Show All Panes** button with a grid icon appears immediately before close. Pane dragging is disabled while focused.
 
+Focus Pane keeps the selected pane's status-line resize handle available. Pane-grid dividers and grid-resize shortcuts are hidden or inactive while focused; returning to **Show All Panes** restores the saved grid proportions.
+
 The tab bar remains visible so tabs can still be switched. The native macOS green traffic-light button also remains unchanged: it controls the app window, while Focus Pane mode controls the layout inside one tab.
 
 ## Automatic Grid Restoration

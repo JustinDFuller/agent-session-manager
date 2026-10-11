@@ -31,6 +31,37 @@ struct LayoutResizeTelemetry {
         }
         TracingService.shared.record("layout.resize.\(event)", attributes: attributes)
     }
+
+    static func saveSession(
+        appState: AppState,
+        appSettings: AppSettings,
+        tab: Tab?,
+        pane: Pane? = nil,
+        axis: ResizeAxis = .rows,
+        source: String = "session"
+    ) {
+        if SessionPersistence.save(appState: appState) {
+            appSettings.layoutSaveError = nil
+        } else {
+            appSettings.layoutSaveError = "Could not save layout changes. Your current layout remains available."
+            record(
+                event: "persistence_failed",
+                section: pane == nil ? "grid" : "status",
+                axis: axis,
+                source: source,
+                before: 0,
+                after: 0,
+                result: "failed",
+                tab: tab,
+                pane: pane
+            )
+        }
+    }
+}
+
+extension Notification.Name {
+    static let paneResizeCommand = Notification.Name("agentSessionManagerPaneResizeCommand")
+    static let paneResizeReleased = Notification.Name("agentSessionManagerPaneResizeReleased")
 }
 
 struct LayoutMeasurementKey: PreferenceKey {

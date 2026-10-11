@@ -39,6 +39,29 @@ final class PaneGridMetricsTests: XCTestCase {
         XCTAssertEqual(metrics.contentSize, CGSize(width: 1_000, height: 700))
     }
 
+    func testAdjacentPreviewMovesOnlyTargetDivider() {
+        let sizes = [300.0, 300.0, 300.0]
+        let initialPositions = PaneGridMetrics.dividerPositions(sizes: sizes)
+        let firstBoundaryPreview = GridLayout.adjusting(
+            sizes, boundary: 0, delta: 20, minima: [160, 160, 160]
+        )
+        let firstBoundaryPositions = PaneGridMetrics.dividerPositions(sizes: firstBoundaryPreview)
+        XCTAssertEqual(firstBoundaryPreview, [320, 280, 300])
+        XCTAssertEqual(firstBoundaryPositions[0], initialPositions[0] + 20, accuracy: 0.000_001)
+        XCTAssertEqual(firstBoundaryPositions[1], initialPositions[1], accuracy: 0.000_001)
+
+        let nonuniformSizes = [260.0, 340.0, 220.0]
+        let nonuniformPositions = PaneGridMetrics.dividerPositions(sizes: nonuniformSizes)
+        let middleBoundaryPreview = GridLayout.adjusting(
+            nonuniformSizes, boundary: 1, delta: -24, minima: [160, 160, 160]
+        )
+        let middleBoundaryPositions = PaneGridMetrics.dividerPositions(sizes: middleBoundaryPreview)
+        XCTAssertEqual(middleBoundaryPreview, [260, 316, 244])
+        XCTAssertEqual(middleBoundaryPreview[1] + middleBoundaryPreview[2], nonuniformSizes[1] + nonuniformSizes[2])
+        XCTAssertEqual(middleBoundaryPositions[0], nonuniformPositions[0], accuracy: 0.000_001)
+        XCTAssertEqual(middleBoundaryPositions[1], nonuniformPositions[1] - 24, accuracy: 0.000_001)
+    }
+
     func testPaneMinimaCreateScrollableOverflowWithoutChangingPreferredWeights() {
         let preferences = PaneGridSizePreferences(columnWeights: [0.5, 0.3, 0.2], rowWeights: [0.7, 0.3])
         let metrics = PaneGridMetrics(

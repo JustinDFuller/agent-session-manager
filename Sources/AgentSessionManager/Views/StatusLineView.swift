@@ -4,6 +4,9 @@ import SwiftUI
 struct StatusLineView: View {
     let monitor: StatusLineMonitor
     let config: StatusLineConfig
+    let paneID: UUID
+    var viewportHeight: Double?
+    var viewportWidth: Double?
     var profileName: String?
 
     @State private var showPRPopover = false
@@ -25,35 +28,49 @@ struct StatusLineView: View {
     var body: some View {
         Group {
             if !nonEmptyRows.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(nonEmptyRows) { row in
-                        switch config.rowAlignment {
-                        case .leading:
-                            HStack(spacing: 12) {
-                                ForEach(row.items) { item in
-                                    factView(item: item, data: monitor.currentData)
+                ScrollView([.horizontal, .vertical]) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(nonEmptyRows) { row in
+                            switch config.rowAlignment {
+                            case .leading:
+                                HStack(spacing: 12) {
+                                    ForEach(row.items) { item in
+                                        factView(item: item, data: monitor.currentData)
+                                    }
+                                    Spacer(minLength: 0)
                                 }
-                                Spacer(minLength: 0)
-                            }
-                        case .spaceBetween:
-                            HStack(spacing: 0) {
-                                ForEach(row.items) { item in
-                                    factView(item: item, data: monitor.currentData)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                ForEach(0..<(maxRowItemCount - row.items.count), id: \.self) { _ in
-                                    Spacer()
-                                        .frame(maxWidth: .infinity)
+                            case .spaceBetween:
+                                HStack(spacing: 0) {
+                                    ForEach(row.items) { item in
+                                        factView(item: item, data: monitor.currentData)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    ForEach(0..<(maxRowItemCount - row.items.count), id: \.self) { _ in
+                                        Spacer()
+                                            .frame(maxWidth: .infinity)
+                                    }
                                 }
                             }
                         }
                     }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .frame(minWidth: viewportWidth.map { CGFloat($0) }, alignment: .leading)
+                    .background {
+                        GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: LayoutMeasurementKey.self,
+                                value: ["status-content-\(paneID.uuidString)": geometry.size.height]
+                            )
+                        }
+                    }
+                    .accessibilityIdentifier("status-line-row")
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
+                .frame(height: viewportHeight.map { CGFloat($0) })
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Theme.windowBackground)
-                .accessibilityIdentifier("status-line-row")
+                .accessibilityIdentifier("status-line-viewport-\(paneID.uuidString)")
+                .accessibilityLabel("Status line for pane")
             }
         }
         .task(id: config.customFields) {
@@ -69,6 +86,7 @@ struct StatusLineView: View {
             factLabelView(item: item)
             factValueView(item: item, data: data)
         }
+        .fixedSize(horizontal: true, vertical: false)
         if item.id == "pr", data?.pr != nil {
             Button {
                 showPRPopover.toggle()

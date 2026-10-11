@@ -13,6 +13,11 @@ struct PaneView: View {
     @State private var scrollbackEditor: PaneScrollbackPresentation?
     @State private var pendingScrollback: ScrollbackLimit?
     @State private var showsScrollbackReductionWarning = false
+    @State private var naturalStatusHeight = 24.0
+    @State private var statusPreviewHeight: Double?
+    @State private var paneHeight = 0.0
+    @State private var paneWidth = 0.0
+    @State private var measuredHeaderHeight = 28.0
 
     var body: some View {
         @Bindable var appState = appState
@@ -47,6 +52,17 @@ struct PaneView: View {
             }
         }
         .background(Theme.paneBackground)
+        .background {
+            GeometryReader { geometry in
+                Color.clear.preference(
+                    key: LayoutMeasurementKey.self,
+                    value: [
+                        "pane-height-\(pane.id.uuidString)": geometry.size.height,
+                        "pane-width-\(pane.id.uuidString)": geometry.size.width,
+                    ]
+                )
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
@@ -103,6 +119,25 @@ struct PaneView: View {
             }
             Button("Open Shell Here") {
                 pane.tab?.openShellPane(activePane: pane, appState: appState, appSettings: appSettings)
+            }
+            if pane.statusLineHeight != nil {
+                Button("Reset Status Height") {
+                    let before = effectiveStatusHeight
+                    pane.statusLineHeight = nil
+                    LayoutResizeTelemetry.record(
+                        event: "reset", section: "status", axis: .rows, source: "context_menu",
+                        before: before,
+                        after: min(naturalStatusHeight, effectiveMaximumStatusHeight),
+                        result: "success",
+                        tab: pane.tab,
+                        pane: pane
+                    )
+                    LayoutResizeTelemetry.saveSession(
+                        appState: appState, appSettings: appSettings, tab: pane.tab, pane: pane, axis: .rows,
+                        source: "context_menu"
+                    )
+                }
+                .accessibilityIdentifier("pane-reset-status-height-\(pane.id.uuidString)")
             }
             if let pr = pane.statusLineMonitor?.currentData?.pr, let url = URL(string: pr.url) {
                 Button("Go to Pull Request") {
@@ -191,6 +226,24 @@ struct PaneView: View {
                 pane.statusLineMonitor?.writeSettingsFile()
             }
         }
+        .onPreferenceChange(LayoutMeasurementKey.self) { values in
+            if let height = values["pane-height-\(pane.id.uuidString)"], height.isFinite, height > 0 {
+                paneHeight = height
+            }
+            if let width = values["pane-width-\(pane.id.uuidString)"], width.isFinite, width > 0 {
+                paneWidth = width
+            }
+            if let height = values["header-\(pane.id.uuidString)"], height.isFinite, height > 0 {
+                measuredHeaderHeight = height
+            }
+            if let height = values["status-content-\(pane.id.uuidString)"], height.isFinite, height > 0 {
+                naturalStatusHeight = height
+            }
+        }
+        .preference(
+            key: LayoutMeasurementKey.self,
+            value: ["status-min-\(pane.id.uuidString)": statusHasContent ? 32 : 0]
+        )
         .accessibilityElement(children: .contain)
     }
 
@@ -244,6 +297,14 @@ struct PaneView: View {
             .accessibilityLabel("close-\(pane.name)")
         }
         .background(Theme.windowBackground)
+        .background {
+            GeometryReader { geometry in
+                Color.clear.preference(
+                    key: LayoutMeasurementKey.self,
+                    value: ["header-\(pane.id.uuidString)": geometry.size.height]
+                )
+            }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("pane-header-\(pane.name)")
     }
@@ -326,11 +387,94 @@ struct PaneView: View {
 
     @ViewBuilder
     private var statusLine: some View {
-        if let monitor = pane.statusLineMonitor {
-            Divider()
+        if let monitor = pane.statusLineMonitor, statusHasContent {
+            ResizeHandle(
+                axis: .rows,
+                identifier: "pane-status-resize-\(pane.id.uuidString)",
+                label: "Resize status line for \(pane.name)",
+                value: statusPreviewHeight ?? effectiveStatusHeight,
+                minimum: 24,
+                maximum: effectiveMaximumStatusHeight,
+                focusTarget: appState.activePane?.terminalController?.terminalView,
+                movementSign: -1,
+                cancellationKey: statusResizeCancellationKey,
+                onPreview: { statusPreviewHeight = $0 },
+                onCommit: { height, source in
+                    let before = effectiveStatusHeight
+                    pane.statusLineHeight = height
+                    statusPreviewHeight = nil
+                    LayoutResizeTelemetry.record(
+                        event: "completed", section: "status", axis: .rows, source: source,
+                        before: before, after: height, result: "success", tab: pane.tab, pane: pane
+                    )
+                    LayoutResizeTelemetry.saveSession(
+                        appState: appState, appSettings: appSettings, tab: pane.tab, pane: pane, axis: .rows,
+                        source: source
+                    )
+                },
+                onReset: { source in
+                    let before = effectiveStatusHeight
+                    pane.statusLineHeight = nil
+                    statusPreviewHeight = nil
+                    LayoutResizeTelemetry.record(
+                        event: "reset", section: "status", axis: .rows, source: source,
+                        before: before,
+                        after: min(naturalStatusHeight, effectiveMaximumStatusHeight),
+                        result: "success",
+                        tab: pane.tab,
+                        pane: pane
+                    )
+                    LayoutResizeTelemetry.saveSession(
+                        appState: appState, appSettings: appSettings, tab: pane.tab, pane: pane, axis: .rows,
+                        source: source
+                    )
+                },
+                onCancel: {
+                    statusPreviewHeight = nil
+                    LayoutResizeTelemetry.record(
+                        event: "canceled", section: "status", axis: .rows, source: "pointer",
+                        before: effectiveStatusHeight,
+                        after: effectiveStatusHeight,
+                        result: "canceled", tab: pane.tab, pane: pane
+                    )
+                }
+            )
+            .frame(height: 8)
             let config = resolvedStatusLineConfig
-            StatusLineView(monitor: monitor, config: config, profileName: resolvedProfileName)
+            StatusLineView(
+                monitor: monitor,
+                config: config,
+                paneID: pane.id,
+                viewportHeight: statusPreviewHeight ?? effectiveStatusHeight,
+                viewportWidth: paneWidth,
+                profileName: resolvedProfileName
+            )
         }
+    }
+
+    private var statusHasContent: Bool {
+        resolvedStatusLineConfig.rows.contains { row in
+            row.items.contains { resolvedStatusLineConfig.supports($0, on: pane.harness) }
+        }
+    }
+
+    private var effectiveMaximumStatusHeight: Double {
+        PaneGridMetrics.maximumStatusHeight(paneHeight: paneHeight, headerHeight: measuredHeaderHeight)
+    }
+
+    private var statusResizeCancellationKey: String {
+        let topology = pane.tab?.panes.map { $0.id.uuidString }.joined(separator: ",") ?? ""
+        return
+            "\(appState.activeTabID?.uuidString ?? "")-\(pane.tab?.id.uuidString ?? "")-\(topology)-\(pane.tab?.focusedPaneID?.uuidString ?? "all")-\(appState.activePaneID?.uuidString ?? "none")-\(paneWidth)x\(paneHeight)-\(measuredHeaderHeight)"
+    }
+
+    private var effectiveStatusHeight: Double {
+        PaneGridMetrics.effectiveStatusHeight(
+            preferredHeight: pane.statusLineHeight,
+            naturalHeight: naturalStatusHeight,
+            paneHeight: paneHeight,
+            headerHeight: measuredHeaderHeight
+        )
     }
 
     private var resolvedStatusLineConfig: StatusLineConfig {
@@ -361,6 +505,7 @@ struct PaneView: View {
                 tabID: pane.tab?.id.uuidString ?? "",
                 tabName: pane.tab?.name ?? ""
             )
+            .padding(.horizontal, 2)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .layoutPriority(1)
             .id(pane.restartToken)

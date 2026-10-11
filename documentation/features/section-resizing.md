@@ -2,7 +2,7 @@
 
 Section resizing allocates space across the existing tab bar, notification sidebar, pane grid, and each pane's status viewport. It preserves the automatic pane grid, terminal identities, pane order, and empty cells while each divider exchanges space only with its adjacent region or track.
 
-This guide records the complete approved behavior across the implementation stack. Group 2 implements tab-bar and notification-sidebar resizing, global layout settings, and shortcut configuration. Pane-grid resizing, status viewports, and routing pane-resize bindings from terminals remain for Group 3 and are not available in Group 2.
+Groups 1–3 implement the shared geometry, global section controls, pane-grid dividers, status viewports, and shortcut routing. Group 4 owns integrated cross-tab runtime evidence and final bounds validation.
 
 ## Ownership
 
@@ -32,4 +32,4 @@ Global dimension settings use atomic writes to `layout-settings.json`; tab propo
 
 ## Telemetry
 
-Resize records use bounded section, axis, input source, before/after allocation, and result values. Grid records include tab identity; status records include pane and owning-tab identity. Active-pane shortcut records also include the selected boundary, direction, and normal or larger-step action. Save failures surface through nonmodal app UI and emit `layout.resize.persistence_failed`; pointer-move samples and terminal contents are never recorded.
+Resize records use bounded section, axis, input source, before/after allocation, and result values. Grid records include tab identity; status records include pane and owning-tab identity. Active-pane shortcut records also include the selected boundary, direction, and normal or larger-step action. Reset source is `pointer` for double-clicking a resize handle and `menu` for selecting its local reset item. Save failures surface through nonmodal app UI and emit `layout.resize.persistence_failed`; pointer-move samples and terminal contents are never recorded.
