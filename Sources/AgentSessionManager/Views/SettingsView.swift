@@ -224,6 +224,65 @@ private struct PanesContent: View {
     var body: some View {
         @Bindable var appSettings = appSettings
         Form {
+            Section("Layout") {
+                SettingRow(
+                    title: "Tab Bar Height",
+                    description: "Preferred height of the tab bar.",
+                    defaultValue: "44 points"
+                ) {
+                    Stepper(
+                        "\(Int(appSettings.layoutSettings.tabBarHeight)) points",
+                        value: $appSettings.layoutSettings.tabBarHeight,
+                        in: 44...96,
+                        step: 4
+                    )
+                    .accessibilityIdentifier("settings-layout-tab-bar-height")
+                    .onChange(of: appSettings.layoutSettings.tabBarHeight) { before, after in
+                        let saved = SettingsPersistence.saveLayout(appSettings: appSettings)
+                        LayoutResizeTelemetry.record(
+                            event: "completed", section: "tab_bar", axis: .rows, source: "settings",
+                            before: before, after: after, result: saved ? "saved" : "save_failed"
+                        )
+                    }
+                }
+                SettingRow(
+                    title: "Notification Sidebar Width",
+                    description: "Preferred width of the notification sidebar.",
+                    defaultValue: "240 points"
+                ) {
+                    Stepper(
+                        "\(Int(appSettings.layoutSettings.notificationSidebarWidth)) points",
+                        value: $appSettings.layoutSettings.notificationSidebarWidth,
+                        in: 160...480,
+                        step: 16
+                    )
+                    .accessibilityIdentifier("settings-layout-sidebar-width")
+                    .onChange(of: appSettings.layoutSettings.notificationSidebarWidth) { before, after in
+                        let saved = SettingsPersistence.saveLayout(appSettings: appSettings)
+                        LayoutResizeTelemetry.record(
+                            event: "completed", section: "notification_sidebar", axis: .columns, source: "settings",
+                            before: before, after: after, result: saved ? "saved" : "save_failed"
+                        )
+                    }
+                }
+                Button("Reset Section Sizes") {
+                    let beforeTabBar = appSettings.layoutSettings.tabBarHeight
+                    let beforeSidebar = appSettings.layoutSettings.notificationSidebarWidth
+                    appSettings.layoutSettings.resetSections()
+                    let saved = SettingsPersistence.saveLayout(appSettings: appSettings)
+                    LayoutResizeTelemetry.record(
+                        event: "reset", section: "tab_bar", axis: .rows, source: "settings",
+                        before: beforeTabBar, after: appSettings.layoutSettings.tabBarHeight,
+                        result: saved ? "saved" : "save_failed"
+                    )
+                    LayoutResizeTelemetry.record(
+                        event: "reset", section: "notification_sidebar", axis: .columns, source: "settings",
+                        before: beforeSidebar, after: appSettings.layoutSettings.notificationSidebarWidth,
+                        result: saved ? "saved" : "save_failed"
+                    )
+                }
+                .accessibilityIdentifier("settings-layout-reset-sections")
+            }
             Section("New Pane") {
                 SettingRow(
                     title: "Default Branch",
@@ -794,6 +853,7 @@ private struct EnvVarSections: View {
 }
 
 private struct KeyboardShortcutsContent: View {
+    @Environment(AppSettings.self) private var appSettings
     @AppStorage("keyBinding.newTabKey") var newTabKey = "t"
     @AppStorage("keyBinding.newPaneKey") var newPaneKey = "p"
     @AppStorage("keyBinding.closePaneKey") var closePaneKey = "w"
@@ -808,34 +868,44 @@ private struct KeyboardShortcutsContent: View {
                 KeyBindingRow(
                     id: "new-tab",
                     label: "New Tab", description: "Open the New Tab sheet", modifier: "⌘",
-                    key: $newTabKey)
+                    key: $newTabKey, validateBinding: validateAppBinding)
                 KeyBindingRow(
                     id: "new-pane",
                     label: "New Pane in Current Tab", description: "Open the New Pane sheet",
-                    modifier: "⌘", key: $newPaneKey)
+                    modifier: "⌘", key: $newPaneKey, validateBinding: validateAppBinding)
                 KeyBindingRow(
                     id: "close-pane",
                     label: "Close Active Pane", description: "Close the focused pane", modifier: "⌘",
-                    key: $closePaneKey)
+                    key: $closePaneKey, validateBinding: validateAppBinding)
                 KeyBindingRow(
                     id: "close-tab",
                     label: "Close Active Tab", description: "Close the current tab", modifier: "⌘",
-                    key: $closeTabKey)
+                    key: $closeTabKey, validateBinding: validateAppBinding)
                 KeyBindingRow(
                     id: "open-shell-here",
                     label: "Open Shell Here",
                     description: "Open a new plain shell pane in the same working directory",
-                    modifier: "⌘⇧", key: $openShellHereKey)
+                    modifier: "⌘⇧", key: $openShellHereKey, validateBinding: validateAppBinding)
                 KeyBindingRow(
                     id: "refresh-pane",
                     label: "Refresh Active Pane",
                     description: "Restart pane with fresh environment",
-                    modifier: "⌘", key: $refreshPaneKey)
+                    modifier: "⌘", key: $refreshPaneKey, validateBinding: validateAppBinding)
                 KeyBindingRow(
                     id: "view-pane-settings",
                     label: "View Pane Settings",
                     description: "Show the active pane's configuration",
-                    modifier: "⌘", key: $viewPaneSettingsKey)
+                    modifier: "⌘", key: $viewPaneSettingsKey, validateBinding: validateAppBinding)
+            }
+            Section(
+                header: Text("Pane Resizing"),
+                footer: Text("Resize shortcuts work while a terminal pane has keyboard focus. Command is required.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            ) {
+                ForEach(ResizeAction.allCases, id: \.id) { action in
+                    ResizeShortcutRow(action: action, appSettings: appSettings)
+                }
             }
             Section(
                 header: Text("Fixed Shortcuts"),
@@ -859,6 +929,13 @@ private struct KeyboardShortcutsContent: View {
         .formStyle(.grouped)
         .pinnedFormBackground()
     }
+
+    private func validateAppBinding(_ candidate: ResizeKeyBinding) -> String? {
+        ResizeShortcutValidation.validateAppBinding(
+            candidate,
+            resizeBindings: appSettings.layoutSettings.bindings
+        )
+    }
 }
 
 private struct KeyBindingRow: View {
@@ -867,8 +944,10 @@ private struct KeyBindingRow: View {
     let description: String
     let modifier: String
     @Binding var key: String
+    var validateBinding: (ResizeKeyBinding) -> String? = { _ in nil }
 
     @State private var draft = ""
+    @State private var validationMessage: String?
     @FocusState private var isFocused: Bool
 
     var body: some View {
@@ -904,7 +983,14 @@ private struct KeyBindingRow: View {
                                 if draft.isEmpty {
                                     draft = key
                                 } else {
-                                    key = draft
+                                    let binding = ResizeKeyBinding(key: draft, modifiers: modifierFlags)
+                                    if let message = validateBinding(binding) {
+                                        validationMessage = message
+                                        draft = key
+                                    } else {
+                                        key = draft
+                                        validationMessage = nil
+                                    }
                                 }
                             }
                         }
@@ -916,10 +1002,91 @@ private struct KeyBindingRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("settings-shortcut-description-\(id)")
+            if let validationMessage {
+                Text(validationMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("settings-shortcut-error-\(id)")
+            }
         }
         .padding(.vertical, 6)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings-shortcut-row-\(id)")
+    }
+
+    private var modifierFlags: NSEvent.ModifierFlags {
+        modifier.contains("⇧") ? [.command, .shift] : .command
+    }
+}
+
+private struct ResizeShortcutRow: View {
+    let action: ResizeAction
+    let appSettings: AppSettings
+
+    @State private var isCapturing = false
+    @State private var validationMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(action.label)
+                        .font(.system(.body, design: .monospaced))
+                        .fontWeight(.medium)
+                        .accessibilityIdentifier("settings-resize-shortcut-title-\(action.id)")
+                    Text("Move the active pane divider by \(Int(action.step)) points.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                ShortcutCaptureControl(
+                    action: action,
+                    binding: appSettings.layoutSettings.bindings.binding(for: action),
+                    isCapturing: $isCapturing,
+                    onCapture: { binding in
+                        if let message = ResizeShortcutValidation.validateResizeBinding(
+                            binding,
+                            action: action,
+                            bindings: appSettings.layoutSettings.bindings,
+                            appBindings: ResizeKeyBinding.appBindings()
+                        ) {
+                            validationMessage = message
+                            return
+                        }
+                        appSettings.layoutSettings.bindings.setBinding(binding, for: action)
+                        validationMessage = nil
+                        save()
+                    },
+                    onCancel: { validationMessage = nil },
+                    onInvalid: { validationMessage = $0 }
+                )
+                Button("Disable") {
+                    appSettings.layoutSettings.bindings.setBinding(nil, for: action)
+                    validationMessage = nil
+                    save()
+                }
+                .accessibilityIdentifier("settings-resize-shortcut-disable-\(action.id)")
+            }
+            if let conflict = appSettings.layoutSettings.bindings.conflicts.first(where: { $0 == action.id }) {
+                Text("This saved shortcut conflicted with another app shortcut and was disabled.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("settings-resize-shortcut-restored-conflict-\(conflict)")
+            }
+            if let validationMessage {
+                Text(validationMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("settings-resize-shortcut-error-\(action.id)")
+            }
+        }
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings-resize-shortcut-row-\(action.id)")
+    }
+
+    private func save() {
+        SettingsPersistence.saveLayout(appSettings: appSettings)
     }
 }
 

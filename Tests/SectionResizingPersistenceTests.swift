@@ -338,4 +338,31 @@ final class SectionResizingPersistenceTests: XCTestCase {
         XCTAssertEqual(tab.panes.first?.harness, .claude)
         XCTAssertNil(tab.panes.first?.statusLineHeight)
     }
+
+    func testLayoutSaveFailuresSurfaceNonmodalErrorAndRecordScope() throws {
+        TracingService.shared.enableTestCapture()
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let blockedName = "agent-session-manager-layout-settings-blocked-\(UUID().uuidString)"
+        let blocked = supportDirectory.appending(path: blockedName)
+        try fileManager.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
+        try Data("blocked".utf8).write(to: blocked)
+        let previousOverride = PersistenceHelpers.overrideAppSupportSubdirectory
+        PersistenceHelpers.overrideAppSupportSubdirectory = blockedName
+        defer {
+            PersistenceHelpers.overrideAppSupportSubdirectory = previousOverride
+            try? fileManager.removeItem(at: blocked)
+        }
+        let settings = AppSettings()
+
+        XCTAssertFalse(SettingsPersistence.saveLayout(appSettings: settings))
+        XCTAssertNotNil(settings.layoutSaveError)
+        let event = try XCTUnwrap(
+            TracingService.shared.recordedEventsForTesting.first { $0.name == "layout.resize.persistence_failed" }
+        )
+        XCTAssertEqual(event.attributes["section"], "global")
+        XCTAssertEqual(event.attributes["axis"], "columns")
+        XCTAssertEqual(event.attributes["source"], "settings")
+        XCTAssertEqual(event.attributes["result"], "write_failed")
+    }
 }

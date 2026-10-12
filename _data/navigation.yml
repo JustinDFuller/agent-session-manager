@@ -61,6 +61,9 @@
     - title: Status Line
       url: /documentation/user-guide/status-line/
       type: how-to
+    - title: Resize Global Sections
+      url: /documentation/user-guide/resize-sections-and-panes/
+      type: how-to
     - title: Notifications
       url: /documentation/user-guide/notifications/
       type: how-to

@@ -104,6 +104,14 @@ struct TabButtonView: View {
                     lineWidth: isDragTarget ? 2 : 1
                 )
         )
+        .background {
+            GeometryReader { geometry in
+                Color.clear.preference(
+                    key: LayoutMeasurementKey.self,
+                    value: ["tabbar-\(tab.id.uuidString)": geometry.size.height]
+                )
+            }
+        }
         .draggable(tab.id.uuidString) {
             Text(tab.name)
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))

@@ -45,7 +45,7 @@ struct NotificationSidebarView: View {
             Divider()
             clearAllButton
         }
-        .frame(width: 240)
+        .frame(maxWidth: .infinity)
         .background(NotificationSidebarTheme.containerBackground)
         .accessibilityIdentifier("notification-sidebar")
     }

@@ -154,6 +154,7 @@ struct StatusLineConfigLayoutEditor: View {
                                         .foregroundStyle(.red)
                                 }
                                 .buttonStyle(.borderless)
+                                .accessibilityIdentifier("settings-statusline-remove-item-\(rowIndex)-\(item.id)")
                             }
                         }
                         Menu {
@@ -220,6 +221,7 @@ struct StatusLineConfigLayoutEditor: View {
                     } label: {
                         Label("Add Row", systemImage: "plus")
                     }
+                    .accessibilityIdentifier("settings-statusline-add-row-button")
                     .buttonStyle(.borderless)
                 }
                 Section("Custom Fields") {
