@@ -670,7 +670,7 @@ struct NewPaneSheet: View {
                     appState.isCheckoutInUse(
                         directory: tab.directory,
                         checkout: resolved.checkoutURL,
-                        excludingPaneID: pane.id)
+                        excludingPaneIDs: [pane.id])
                 }
                 if inUse {
                     await MainActor.run {

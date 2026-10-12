@@ -13,7 +13,7 @@ final class IsCheckoutInUseTests: XCTestCase {
         let checkout = Tab.worktreeDirectoryURL(repoRoot: tab.directory, name: "feature")
 
         XCTAssertFalse(
-            state.isCheckoutInUse(directory: tab.directory, checkout: checkout, excludingPaneID: pane.id),
+            state.isCheckoutInUse(directory: tab.directory, checkout: checkout, excludingPaneIDs: [pane.id]),
             "Loading pane must not match itself"
         )
     }
@@ -28,7 +28,7 @@ final class IsCheckoutInUseTests: XCTestCase {
         let unrelatedID = UUID()
 
         XCTAssertTrue(
-            state.isCheckoutInUse(directory: tab.directory, checkout: checkout, excludingPaneID: unrelatedID),
+            state.isCheckoutInUse(directory: tab.directory, checkout: checkout, excludingPaneIDs: [unrelatedID]),
             "A different pane that owns the same checkout must still be detected"
         )
         _ = pane

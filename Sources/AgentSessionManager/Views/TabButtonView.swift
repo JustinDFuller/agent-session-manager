@@ -81,7 +81,7 @@ struct TabButtonView: View {
             }
 
             Button {
-                appState.closeTab(tab)
+                appState.requestClose(.tab(tab), appSettings: appSettings)
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .medium))
@@ -137,7 +137,7 @@ struct TabButtonView: View {
                 NotificationCenter.default.post(name: .newTab, object: nil)
             }
             Button("Delete This Tab") {
-                appState.closeTab(tab)
+                appState.requestClose(.tab(tab), appSettings: appSettings)
             }
             Button("Create Pane") {
                 appState.switchToTab(
