@@ -72,10 +72,15 @@ final class OpenCodeStatusProviderTests: XCTestCase {
     }
 
     private final class FakeClient: OpenCodeServerClient, @unchecked Sendable {
+        nonisolated(unsafe) private let sessionsByIDLock = NSLock()
+        nonisolated(unsafe) private var storedSessionsByID: [String: OpenCodeSession] = [:]
         nonisolated(unsafe) var healthResult: Result<(healthy: Bool, version: String?), Error> = .success(
             (true, "1.17.20"))
         nonisolated(unsafe) var sessions: [OpenCodeSession] = []
-        nonisolated(unsafe) var sessionsByID: [String: OpenCodeSession] = [:]
+        nonisolated(unsafe) var sessionsByID: [String: OpenCodeSession] {
+            get { sessionsByIDLock.withLock { storedSessionsByID } }
+            set { sessionsByIDLock.withLock { storedSessionsByID = newValue } }
+        }
         nonisolated(unsafe) var sessionRequestCount = 0
         nonisolated(unsafe) var renameRequests: [(id: String, title: String)] = []
         nonisolated(unsafe) var renamedSessions: [String: OpenCodeSession] = [:]

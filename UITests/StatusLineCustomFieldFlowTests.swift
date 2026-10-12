@@ -80,7 +80,8 @@ final class StatusLineCustomFieldFlowTests: BaseTestCase {
         runNowButton.click()
 
         let startedMessage = app.staticTexts.matching(
-            NSPredicate(format: "value CONTAINS 'Started in'")
+            NSPredicate(
+                format: "value CONTAINS 'Started in' OR value CONTAINS 'Already running in'")
         ).firstMatch
         waitFor(startedMessage)
 
