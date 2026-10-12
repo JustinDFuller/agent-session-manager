@@ -81,7 +81,7 @@ Each decoded Claude `Stop` is traced as `statusline.hook.event` with a `decision
 
 Not every existing span is pane scoped. Pane-scoped spans should carry `pane.id`, `pane.name`, `tab.id`, and `tab.name`; runtime changes must follow `instrument-runtime-telemetry`.
 
-Layout-resize records use bounded `section`, `axis`, `source`, `before`, `after`, and `result` attributes. Grid changes carry tab identity, status viewport changes carry pane and owning-tab identity, and keyboard grid changes also carry the selected `boundary.index`, `direction`, and `action` (`normal_step` or `larger_step`). Persistence failures use `layout.resize.persistence_failed`; they do not include file paths or terminal contents.
+Layout-resize records use bounded `section`, `axis`, `source`, `before`, `after`, and `result` attributes. For `layout.resize.reset`, `source` is `pointer` for double-clicking a resize handle and `menu` for selecting its local reset item. Grid changes carry tab identity, status viewport changes carry pane and owning-tab identity, and keyboard grid changes also carry the selected `boundary.index`, `direction`, and `action` (`normal_step` or `larger_step`). Persistence failures use `layout.resize.persistence_failed`; they do not include file paths or terminal contents.
 
 ## Diagnosis
 

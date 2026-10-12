@@ -529,6 +529,7 @@ struct ContentView: View {
         .background(
             KeyboardShortcutView(
                 appState: appState,
+                appSettings: appSettings,
                 onClosePane: closeActivePane,
                 onCloseTab: closeActiveTab,
                 onSwitchTab: switchTab,
@@ -764,6 +765,7 @@ private final class WindowTrackingView: NSView {
 
 private struct KeyboardShortcutView: NSViewRepresentable {
     let appState: AppState
+    let appSettings: AppSettings
     let onClosePane: () -> Void
     let onCloseTab: () -> Void
     let onSwitchTab: (Int) -> Void
@@ -778,6 +780,7 @@ private struct KeyboardShortcutView: NSViewRepresentable {
         coordinator.onSwitchTab = onSwitchTab
         coordinator.onRefreshPane = onRefreshPane
         coordinator.appState = appState
+        coordinator.appSettings = appSettings
         nsView.onWindowChanged = { [weak coordinator] window in
             coordinator?.hostWindow = window
         }
@@ -790,6 +793,27 @@ private struct KeyboardShortcutView: NSViewRepresentable {
                 eventWindow: event.window
             )
             guard shouldHandleEvent else { return event }
+            if let bindings = coordinator.appSettings?.layoutSettings.bindings,
+                let appState = coordinator.appState,
+                let pane = appState.activePane,
+                let terminalView = pane.terminalController?.terminalView,
+                let action = ResizeCommandRouting.action(
+                    key: ResizeKeyBinding.key(for: event),
+                    modifiers: event.modifierFlags,
+                    bindings: bindings,
+                    isMainWindow: true,
+                    terminalHasFocus: coordinator.hostWindow?.firstResponder === terminalView,
+                    hasAttachedSheet: coordinator.hostWindow?.attachedSheet != nil
+                )
+            {
+                coordinator.activeResizeActions[action] = ResizeKeyBinding.key(for: event)
+                NotificationCenter.default.post(
+                    name: .paneResizeCommand,
+                    object: nil,
+                    userInfo: ["action": action, "paneID": pane.id]
+                )
+                return nil
+            }
             let flags = event.modifierFlags.intersection([.shift, .command, .control, .option])
             if event.keyCode == 36 && flags == .shift,
                 let termView = coordinator.appState?.activePane?.terminalController?.terminalView,
@@ -821,12 +845,62 @@ private struct KeyboardShortcutView: NSViewRepresentable {
             return event
         }
 
+        coordinator.keyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { event in
+            let shouldHandleEvent = WindowEventRouting.shouldHandleMainWindowEvent(
+                hostWindow: coordinator.hostWindow,
+                eventWindow: event.window
+            )
+            guard shouldHandleEvent else { return event }
+            let key = ResizeKeyBinding.key(for: event)
+            let released = coordinator.activeResizeActions.filter { $0.value == key }.map(\.key)
+            for action in released {
+                NotificationCenter.default.post(
+                    name: .paneResizeReleased,
+                    object: nil,
+                    userInfo: ["action": action]
+                )
+                coordinator.activeResizeActions.removeValue(forKey: action)
+            }
+            return released.isEmpty ? event : nil
+        }
+
+        coordinator.windowLossObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification,
+            object: coordinator.hostWindow,
+            queue: .main
+        ) { [weak coordinator] _ in
+            MainActor.assumeIsolated {
+                guard let coordinator else { return }
+                for action in Array(coordinator.activeResizeActions.keys) {
+                    NotificationCenter.default.post(
+                        name: .paneResizeReleased,
+                        object: nil,
+                        userInfo: ["action": action]
+                    )
+                }
+                coordinator.activeResizeActions.removeAll()
+            }
+        }
+
         coordinator.mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
             let shouldHandleEvent = WindowEventRouting.shouldHandleMainWindowEvent(
                 hostWindow: coordinator.hostWindow,
                 eventWindow: event.window
             )
             guard shouldHandleEvent else { return event }
+            for action in Array(coordinator.activeResizeActions.keys) {
+                NotificationCenter.default.post(
+                    name: .paneResizeReleased,
+                    object: nil,
+                    userInfo: ["action": action]
+                )
+            }
+            coordinator.activeResizeActions.removeAll()
+            if let hitView = event.window?.contentView?.hitTest(event.locationInWindow),
+                hitView is ResizeHandleNativeView
+            {
+                return event
+            }
             if let appState = coordinator.appState, let tab = appState.activeTab {
                 let loc = event.locationInWindow
                 for pane in tab.panes {
@@ -890,15 +964,21 @@ private struct KeyboardShortcutView: NSViewRepresentable {
         var onSwitchTab: (Int) -> Void = { _ in }
         var onRefreshPane: () -> Void = {}
         var appState: AppState?
+        var appSettings: AppSettings?
+        var activeResizeActions: [ResizeAction: String] = [:]
         weak var hostWindow: NSWindow?
         nonisolated(unsafe) var keyMonitor: Any?
+        nonisolated(unsafe) var keyUpMonitor: Any?
         nonisolated(unsafe) var mouseMonitor: Any?
         nonisolated(unsafe) var scrollWheelMonitor: Any?
+        nonisolated(unsafe) var windowLossObserver: NSObjectProtocol?
 
         deinit {
             if let monitor = keyMonitor { NSEvent.removeMonitor(monitor) }
+            if let monitor = keyUpMonitor { NSEvent.removeMonitor(monitor) }
             if let monitor = mouseMonitor { NSEvent.removeMonitor(monitor) }
             if let monitor = scrollWheelMonitor { NSEvent.removeMonitor(monitor) }
+            if let windowLossObserver { NotificationCenter.default.removeObserver(windowLossObserver) }
         }
     }
 }

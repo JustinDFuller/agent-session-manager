@@ -15,3 +15,5 @@ Both operations persist across app relaunches.
 ## Scope
 
 Pane reordering is within a single tab only. Moving a pane to a different tab is not supported.
+
+Pane-grid proportions belong to grid positions, so reordering panes does not move the saved column or row sizes with an individual pane. Adding or removing panes resets only an axis whose number of tracks changes; the other axis retains its proportions.

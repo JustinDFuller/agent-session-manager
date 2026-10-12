@@ -80,6 +80,67 @@ final class ResizeHandleInteractionTests: XCTestCase {
             32
         )
     }
+
+    func testResizeKeyRoutesOnlyFromTheFocusedMainTerminalWithoutASheet() {
+        let bindings = PaneResizeShortcutBindings()
+        let action = ResizeCommandRouting.action(
+            key: "→",
+            modifiers: [.command, .option],
+            bindings: bindings,
+            isMainWindow: true,
+            terminalHasFocus: true,
+            hasAttachedSheet: false
+        )
+
+        XCTAssertEqual(action, ResizeAction(direction: .right, larger: false))
+    }
+
+    func testResizeKeyRemainsAvailableOutsideTheFocusedMainTerminal() {
+        let bindings = PaneResizeShortcutBindings()
+        XCTAssertNil(
+            ResizeCommandRouting.action(
+                key: "→",
+                modifiers: [.command, .option],
+                bindings: bindings,
+                isMainWindow: false,
+                terminalHasFocus: true,
+                hasAttachedSheet: false
+            )
+        )
+        XCTAssertNil(
+            ResizeCommandRouting.action(
+                key: "→",
+                modifiers: [.command, .option],
+                bindings: bindings,
+                isMainWindow: true,
+                terminalHasFocus: false,
+                hasAttachedSheet: false
+            )
+        )
+        XCTAssertNil(
+            ResizeCommandRouting.action(
+                key: "→",
+                modifiers: [.command, .option],
+                bindings: bindings,
+                isMainWindow: true,
+                terminalHasFocus: true,
+                hasAttachedSheet: true
+            )
+        )
+    }
+
+    func testSingleTrackResizeBindingStillProducesAConsumableCommand() {
+        let action = ResizeCommandRouting.action(
+            key: "←",
+            modifiers: [.command, .option],
+            bindings: PaneResizeShortcutBindings(),
+            isMainWindow: true,
+            terminalHasFocus: true,
+            hasAttachedSheet: false
+        )
+
+        XCTAssertEqual(action, ResizeAction(direction: .left, larger: false))
+    }
 }
 
 @MainActor

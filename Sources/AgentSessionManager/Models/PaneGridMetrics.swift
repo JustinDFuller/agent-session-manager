@@ -1,4 +1,5 @@
 import Foundation
+
 struct PaneGridMetrics {
     let grid: GridLayout
     let viewport: CGSize
@@ -38,6 +39,12 @@ struct PaneGridMetrics {
     var rowOffsets: [Double] {
         rowSizes.indices.map { index in
             4 + rowSizes.prefix(index).reduce(0, +) + Double(index) * 4
+        }
+    }
+
+    static func dividerPositions(sizes: [Double]) -> [Double] {
+        sizes.indices.dropLast().map { boundary in
+            4 + sizes.prefix(boundary + 1).reduce(0, +) + Double(boundary) * 4 + 2
         }
     }
 

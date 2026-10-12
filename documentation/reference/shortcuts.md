@@ -24,6 +24,21 @@ Keyboard shortcuts open, close, and move through tabs and panes without leaving 
 
 **Settings → Shortcuts** contains the configurable shortcut fields. Existing app shortcuts accept one key with their displayed modifiers, and the ⌘1 through ⌘9 tab-switching shortcuts are fixed.
 
+The **Pane Resizing** group contains independently configurable shortcuts for four directions and two step sizes. Defaults use ⌘⌥ plus an arrow for a four-point step, and ⌘⌥⇧ plus an arrow for a sixteen-point step. Each binding accepts a letter, number, or arrow key with Command and optional modifiers. Press Escape during capture to cancel, or choose **Disable** to stop that combination from resizing panes. A key already assigned to another app or pane resize shortcut is rejected.
+
+Pane-resize shortcuts act while a terminal pane has keyboard focus and move one shared grid divider at a time. The selected divider stays selected at its minimum or maximum; the shortcut does not continue by moving another divider. Status-line height is controlled with the handle above the status line.
+
+| Action | Default | Step |
+| --- | --- | --- |
+| Resize Left | ⌘⌥← | 4 points |
+| Resize Right | ⌘⌥→ | 4 points |
+| Resize Up | ⌘⌥↑ | 4 points |
+| Resize Down | ⌘⌥↓ | 4 points |
+| Resize Left (Larger Step) | ⌘⌥⇧← | 16 points |
+| Resize Right (Larger Step) | ⌘⌥⇧→ | 16 points |
+| Resize Up (Larger Step) | ⌘⌥⇧↑ | 16 points |
+| Resize Down (Larger Step) | ⌘⌥⇧↓ | 16 points |
+
 ## Terminal editing
 
 ⌘C and ⌘V copy and paste in the active pane. A pane's context menu contains the same **Copy** and **Paste** actions.

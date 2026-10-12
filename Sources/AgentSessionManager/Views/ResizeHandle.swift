@@ -115,6 +115,20 @@ struct ResizeHandleInteraction {
     }
 }
 
+enum ResizeCommandRouting {
+    static func action(
+        key: String,
+        modifiers: NSEvent.ModifierFlags,
+        bindings: PaneResizeShortcutBindings,
+        isMainWindow: Bool,
+        terminalHasFocus: Bool,
+        hasAttachedSheet: Bool
+    ) -> ResizeAction? {
+        guard isMainWindow, terminalHasFocus, !hasAttachedSheet else { return nil }
+        return bindings.action(key: key, modifiers: modifiers)
+    }
+}
+
 final class ResizeHandleNativeView: NSView {
     private(set) var interaction = ResizeHandleInteraction()
     private var axis: ResizeAxis = .columns
