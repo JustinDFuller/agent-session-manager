@@ -122,6 +122,7 @@ struct PaneView: View {
         )
         .onChange(of: pane.terminalController?.processState) { _, newState in
             guard case .exited = newState else { return }
+            if pane.harness == .codex { pane.statusLineMonitor?.codexProcessExited() }
             switch appSettings.exitBehavior {
             case .prompt:
                 break

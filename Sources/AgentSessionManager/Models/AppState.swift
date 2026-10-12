@@ -248,6 +248,7 @@ final class AppState {
     }
 
     func clearNotification(paneID: UUID) {
+        tabs.flatMap(\.panes).first { $0.id == paneID }?.statusLineMonitor?.acknowledgeCodexAttention()
         MacNotificationCoordinator.shared.markPaneAcknowledged(paneID: paneID)
         if let notification = notifications.first(where: { $0.paneID == paneID }) {
             TracingService.shared.record(
@@ -264,6 +265,10 @@ final class AppState {
     }
 
     func clearNotification(paneID: UUID, kind: NotificationKind) {
+        if [.codexStop, .codexPermissionRequest, .codexQuestion].contains(kind) {
+            tabs.flatMap(\.panes).first { $0.id == paneID }?.statusLineMonitor?
+                .acknowledgeCodexAttention(kind: kind)
+        }
         guard notifications.contains(where: { $0.paneID == paneID && $0.kind == kind }) else { return }
         TracingService.shared.record(
             "pane.notification.cleared",
@@ -273,6 +278,21 @@ final class AppState {
                 "reason": "kind_specific",
             ])
         notifications.removeAll { $0.paneID == paneID && $0.kind == kind }
+        if kind == .codexQuestion,
+            let tab = tabs.first(where: { $0.panes.contains { $0.id == paneID } }),
+            let pane = tab.panes.first(where: { $0.id == paneID }),
+            pane.statusLineMonitor?.isCodexPermissionAttentionActive == true
+        {
+            addNotification(
+                paneID: pane.id,
+                paneName: pane.name,
+                tabID: tab.id,
+                tabName: tab.name,
+                isPriority: pane.isPriority,
+                event: .codexPermissionRequest
+            )
+            return
+        }
         MacNotificationCoordinator.shared.removeDeliveredNotifications(forPaneID: paneID)
         SessionPersistence.save(appState: self)
     }

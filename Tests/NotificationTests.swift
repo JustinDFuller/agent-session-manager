@@ -14,6 +14,7 @@ private func restoreNotificationSettings(into settings: AppSettings) {
     settings.isPRMergedNotificationsEnabled = config.isPRMergedNotificationsEnabled
     settings.alwaysShowNotificationsSidebar = config.alwaysShowNotificationsSidebar
     settings.isClaudeStopNotificationEnabled = config.isClaudeStopNotificationEnabled
+    settings.isCodexCompletionNotificationEnabled = config.isCodexCompletionNotificationEnabled
     settings.isOpencodeStopNotificationEnabled = config.isOpencodeStopNotificationEnabled
     settings.isCodexCompletionNotificationEnabled = config.isCodexCompletionNotificationEnabled
 }
@@ -221,6 +222,7 @@ final class NotificationTests: XCTestCase {
         settings.isPriorityNotificationsEnabled = false
         settings.isMacOSBannerNotificationsEnabled = false
         settings.alwaysShowNotificationsSidebar = false
+        settings.isCodexCompletionNotificationEnabled = false
         SettingsPersistence.saveNotificationSettings(appSettings: settings)
 
         let restored = AppSettings()
@@ -229,6 +231,7 @@ final class NotificationTests: XCTestCase {
         XCTAssertFalse(restored.isPriorityNotificationsEnabled)
         XCTAssertFalse(restored.isMacOSBannerNotificationsEnabled)
         XCTAssertFalse(restored.alwaysShowNotificationsSidebar)
+        XCTAssertFalse(restored.isCodexCompletionNotificationEnabled)
     }
 
     func testClaudeStopNotificationEnabledRoundTrip() {
@@ -358,8 +361,10 @@ final class NotificationTests: XCTestCase {
         try Data(#"{"sidebarSide":"right","isPriorityEnabled":true}"#.utf8).write(to: url)
         let restored = AppSettings()
         restored.isClaudeStopNotificationEnabled = false
+        restored.isCodexCompletionNotificationEnabled = false
         restoreNotificationSettings(into: restored)
         XCTAssertTrue(restored.isClaudeStopNotificationEnabled)
+        XCTAssertTrue(restored.isCodexCompletionNotificationEnabled)
     }
 
     func testAlwaysShowNotificationsSidebarRoundTrip() {

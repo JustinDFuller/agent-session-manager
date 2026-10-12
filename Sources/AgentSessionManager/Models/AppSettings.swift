@@ -126,6 +126,7 @@ final class AppSettings {
     var isMacOSBannerNotificationsEnabled: Bool = true
     var isCursorNotificationHookAttentionEnabled: Bool = true
     var isClaudeStopNotificationEnabled: Bool = true
+    var isCodexCompletionNotificationEnabled: Bool = true
     var isOpencodeStopNotificationEnabled: Bool = true
     var isCodexCompletionNotificationEnabled: Bool = true
     var continueOnRestart: Bool = true

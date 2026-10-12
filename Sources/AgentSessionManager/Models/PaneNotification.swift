@@ -11,6 +11,9 @@ enum NotificationKind: String, Codable {
     case cursorStop
     case opencodeStop
     case opencodePermissionRequest
+    case codexStop
+    case codexPermissionRequest
+    case codexQuestion
 }
 
 struct PaneAttentionEvent: Equatable {
@@ -28,6 +31,9 @@ struct PaneAttentionEvent: Equatable {
         case cursorStop = "cursor_stop"
         case opencodeStop = "opencode_stop"
         case opencodePermissionRequest = "opencode_permission_request"
+        case codexStop = "codex_stop"
+        case codexPermissionRequest = "codex_permission_request"
+        case codexQuestion = "codex_question"
     }
 
     static let fallbackReason = "Attention needed"
@@ -66,6 +72,18 @@ struct PaneAttentionEvent: Equatable {
 
     static var opencodeStop: PaneAttentionEvent {
         PaneAttentionEvent(source: .opencodeStop, reason: "OpenCode finished responding")
+    }
+
+    static var codexStop: PaneAttentionEvent {
+        PaneAttentionEvent(source: .codexStop, reason: "Codex finished responding")
+    }
+
+    static var codexPermissionRequest: PaneAttentionEvent {
+        PaneAttentionEvent(source: .codexPermissionRequest, reason: "Codex needs your approval")
+    }
+
+    static var codexQuestion: PaneAttentionEvent {
+        PaneAttentionEvent(source: .codexQuestion, reason: "Codex is waiting for your answer")
     }
 
     static func osc777(_ text: String) -> PaneAttentionEvent? {

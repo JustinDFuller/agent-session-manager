@@ -568,8 +568,11 @@ final class AgentControlResourceRouter {
         let state = paneActivityState(
             processState: pane.terminalController?.processState,
             isWorking: pane.statusLineMonitor?.isClaudeWorking == true
-                || pane.statusLineMonitor?.isOpenCodeWorking == true,
-            isStopped: pane.statusLineMonitor?.isClaudeStopped == true,
+                || pane.statusLineMonitor?.isOpenCodeWorking == true
+                || pane.statusLineMonitor?.isCodexWorking == true,
+            isStopped: pane.statusLineMonitor?.isClaudeStopped == true
+                || pane.statusLineMonitor?.isCursorStopped == true
+                || pane.statusLineMonitor?.isCodexStopped == true,
             sessionState: pane.statusLineMonitor?.currentData?.sessionStatus?.state,
             hasNotification: appState.notifications.contains { $0.paneID == pane.id })
         return state.rawValue
