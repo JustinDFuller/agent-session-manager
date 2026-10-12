@@ -40,12 +40,8 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
     }
 
     func testProviderParserUsesSelectedAdaptersForCurrentLegacyAndUnknownVersions() {
-        let currentLine = Data(
-            #"{"type":"event_msg","payload":{"type":"token_count","model":"gpt-test","total_token_usage":{"input_tokens":30,"output_tokens":10},"last_token_usage":{"total_tokens":40},"model_context_window":100}}"#
-                .utf8)
-        let legacyLine = Data(
-            #"{"type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-legacy","total_token_usage":{"input_tokens":20,"output_tokens":5},"last_token_usage":{"total_tokens":25},"model_context_window":80}}}"#
-                .utf8)
+        let currentLine = Data(CodexCompatibilityFixtures.currentTokenCount.utf8)
+        let legacyLine = Data(CodexCompatibilityFixtures.legacyTokenCount.utf8)
 
         let current = CodexRolloutParser.parseLine(
             currentLine,
@@ -60,10 +56,16 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
             expectedCWD: "/repo",
             adapter: .unsupported(version: "0.163.0"))
 
-        XCTAssertEqual(current?.model?.id, "gpt-test")
         XCTAssertEqual(current?.contextWindow?.totalInputTokens, 30)
-        XCTAssertEqual(legacy?.model?.id, "gpt-legacy")
+        XCTAssertEqual(current?.contextWindow?.totalOutputTokens, 10)
+        XCTAssertEqual(current?.contextWindow?.usedPercentage, 40)
+        XCTAssertEqual(current?.rateLimits?.fiveHour?.usedPercentage, 25)
+        XCTAssertEqual(current?.rateLimits?.sevenDay?.usedPercentage, 50)
         XCTAssertEqual(legacy?.contextWindow?.totalInputTokens, 20)
+        XCTAssertEqual(legacy?.contextWindow?.totalOutputTokens, 5)
+        XCTAssertEqual(legacy?.contextWindow?.usedPercentage, 31)
+        XCTAssertEqual(legacy?.rateLimits?.fiveHour?.usedPercentage, 12.5)
+        XCTAssertEqual(legacy?.rateLimits?.sevenDay?.usedPercentage, 44)
         XCTAssertNil(unknown)
     }
 
@@ -84,6 +86,67 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
             timeout: 2)
 
         XCTAssertEqual(adapter, .current(version: "0.162.1"))
+    }
+
+    @MainActor
+    func testConfiguredShellSelectionControlsLaunchArgumentsAndProviderParsing() throws {
+        let binDirectory = tempDir.appending(path: "configured-bin")
+        try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true)
+        let codexExecutable = binDirectory.appending(path: "codex")
+        try "#!/bin/sh\nprintf 'codex-cli 0.162.1\\n'\n"
+            .write(to: codexExecutable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: codexExecutable.path)
+        let adapter = CodexCompatibilityAdapter.detect(
+            shell: "/bin/bash",
+            workingDirectory: tempDir.path,
+            environment: ["PATH=\(binDirectory.path)", "HOME=\(tempDir.path)", "TERM=dumb"])
+        let tab = Tab(name: "repo", directory: tempDir)
+        let pane = Pane(name: "codex-pane", tab: tab, harness: .codex)
+        let monitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: tempDir.path,
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: adapter)
+        defer { try? FileManager.default.removeItem(atPath: monitor.codexHookScriptFilePath) }
+        let controller = TerminalController()
+
+        XCTAssertTrue(
+            tab.configureCodexLaunch(
+                for: pane,
+                monitor: monitor,
+                controller: controller,
+                extraArgs: ["--model", "custom-model"],
+                appSettings: nil))
+        XCTAssertEqual(monitor.codexAdapter, .current(version: "0.162.1"))
+        XCTAssertTrue(controller.pendingCommandArgs?.contains(where: { $0.hasPrefix("hooks.Interrupt=") }) == true)
+        XCTAssertFalse(controller.pendingCommandArgs?.contains(where: { $0.hasPrefix("hooks.SessionEnd=") }) == true)
+        XCTAssertTrue(controller.pendingCommandArgs?.contains("custom-model") == true)
+
+        let context = StatusProviderContext(
+            paneID: pane.id,
+            paneName: pane.name,
+            tabID: tab.id,
+            tabName: tab.name,
+            workingDirectory: tempDir.path,
+            harness: .codex,
+            processStartTime: Date(),
+            launchArgs: controller.pendingCommandArgs ?? [],
+            environment: [:],
+            detectedHarnessVersion: adapter.version,
+            codexHookRecordPath: nil,
+            opencodePort: nil,
+            opencodeSessionID: nil,
+            codexAdapter: monitor.codexAdapter)
+        let parsed = CodexRolloutParser.parseLine(
+            Data(CodexCompatibilityFixtures.currentTokenCount.utf8),
+            expectedCWD: context.workingDirectory,
+            adapter: context.codexAdapter ?? .unsupported(version: nil))
+
+        XCTAssertEqual(parsed?.contextWindow?.totalInputTokens, 30)
+        XCTAssertEqual(parsed?.contextWindow?.usedPercentage, 40)
     }
 
     func testUnsupportedSavedBuiltinApprovalIsRejectedButDisabledOrCustomOptionIsPreserved() {

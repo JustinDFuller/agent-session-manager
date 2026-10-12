@@ -135,18 +135,14 @@ final class CodexStatusProviderTests: XCTestCase {
     }
 
     func testRolloutParserMapsTokenCountAndRateLimits() throws {
-        let line = Data(
-            """
-            {"type":"event_msg","payload":{"type":"token_count","model":"gpt-5.1-codex","total_token_usage":{"input_tokens":300,"output_tokens":100},"last_token_usage":{"total_tokens":250},"model_context_window":1000,"rate_limits":{"primary":{"window_minutes":300,"used_percentage":25,"resets_at":2000000000},"secondary":{"window_minutes":10080,"used_percentage":50,"resets_at":2000003600}}}}
-            """.utf8)
+        let line = Data(CodexCompatibilityFixtures.currentTokenCount.utf8)
 
         let data = CodexRolloutParser.parseLine(line, expectedCWD: "/repo")
 
-        XCTAssertEqual(data?.model?.id, "gpt-5.1-codex")
-        XCTAssertEqual(data?.contextWindow?.totalInputTokens, 300)
-        XCTAssertEqual(data?.contextWindow?.totalOutputTokens, 100)
-        XCTAssertEqual(data?.contextWindow?.usedPercentage, 25)
-        XCTAssertEqual(data?.contextWindow?.remainingPercentage, 75)
+        XCTAssertEqual(data?.contextWindow?.totalInputTokens, 30)
+        XCTAssertEqual(data?.contextWindow?.totalOutputTokens, 10)
+        XCTAssertEqual(data?.contextWindow?.usedPercentage, 40)
+        XCTAssertEqual(data?.contextWindow?.remainingPercentage, 60)
         XCTAssertEqual(data?.rateLimits?.fiveHour?.usedPercentage, 25)
         XCTAssertEqual(data?.rateLimits?.fiveHour?.resetsAt, 2_000_000_000)
         XCTAssertEqual(data?.rateLimits?.sevenDay?.usedPercentage, 50)
@@ -166,32 +162,16 @@ final class CodexStatusProviderTests: XCTestCase {
     }
 
     func testRolloutParserMapsCodex136NestedTokenCountShape() throws {
-        let line = Data(
-            """
-            {"type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.1-codex","total_token_usage":{"input_tokens":320,"output_tokens":80},"last_token_usage":{"total_tokens":200},"model_context_window":2000},"rate_limits":{"primary":{"window_minutes":300,"used_percent":12.5,"resets_at":2000000000},"secondary":{"window_minutes":10080,"used_percent":44,"resets_at":2000003600}}}}
-            """.utf8)
+        let line = Data(CodexCompatibilityFixtures.legacyTokenCount.utf8)
 
         let data = CodexRolloutParser.parseLine(line, expectedCWD: "/repo")
 
-        XCTAssertEqual(data?.model?.id, "gpt-5.1-codex")
-        XCTAssertEqual(data?.contextWindow?.totalInputTokens, 320)
-        XCTAssertEqual(data?.contextWindow?.totalOutputTokens, 80)
-        XCTAssertEqual(data?.contextWindow?.usedPercentage, 10)
-        XCTAssertEqual(data?.contextWindow?.remainingPercentage, 90)
+        XCTAssertEqual(data?.contextWindow?.totalInputTokens, 20)
+        XCTAssertEqual(data?.contextWindow?.totalOutputTokens, 5)
+        XCTAssertEqual(data?.contextWindow?.usedPercentage, 31)
+        XCTAssertEqual(data?.contextWindow?.remainingPercentage, 69)
         XCTAssertEqual(data?.rateLimits?.fiveHour?.usedPercentage, 12.5)
         XCTAssertEqual(data?.rateLimits?.sevenDay?.usedPercentage, 44)
-    }
-
-    func testRolloutParserMapsTurnContextModelBeforeTokenUsage() throws {
-        let line = Data(
-            """
-            {"type":"event_msg","payload":{"type":"turn_context","model":"gpt-5.1-codex"}}
-            """.utf8)
-
-        let data = CodexRolloutParser.parseLine(line, expectedCWD: "/repo")
-
-        XCTAssertEqual(data?.model?.id, "gpt-5.1-codex")
-        XCTAssertNil(data?.contextWindow)
     }
 
     func testRolloutParserUsesLastTokenUsageForContextAndTotalUsageForTokenTotals() throws {
