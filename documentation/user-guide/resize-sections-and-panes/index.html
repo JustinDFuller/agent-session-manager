@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Adjust the space used by the tab bar, notification sidebar, and terminal panes.">
+    <title>Resize Sections and Panes · Agent Session Manager</title>
+    <link rel="stylesheet" href="/assets/css/style.css">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="/">
+          <img class="brand-logo" src="/assets/img/app-icon.png" alt="" width="30" height="30">
+          <span>Agent Session Manager</span>
+        </a>
+        <nav class="top-nav" aria-label="Primary navigation">
+          <a href="/docs/">Documentation</a>
+        </nav>
+        <details class="mobile-nav">
+          <summary>Menu</summary>
+          <nav aria-label="Mobile navigation">
+            <a href="/docs/">Documentation</a>
+          </nav>
+        </details>
+      </div>
+    </header>
+
+    <div class="release-notice" role="note" aria-label="Alpha release notice">
+      <div class="release-notice-inner">
+        <strong>Alpha release</strong>
+        <span>Agent Session Manager is a v0 release. It is known to work, but may still have bugs and compatibility issues.</span>
+      </div>
+    </div>
+
+    <div class="site-frame">
+      
+      <aside class="sidebar">
+        <a class="sidebar-home" href="/">Overview</a>
+        
+        <section class="nav-group">
+          <h2>Tutorials</h2>
+          <ul>
+            
+            <li><a href="/documentation/user-guide/quickstart/">Quickstart</a></li>
+            
+          </ul>
+        </section>
+        
+        <section class="nav-group">
+          <h2>How-to Guides</h2>
+          <ul>
+            
+            <li><a href="/download/">Download</a></li>
+            
+            <li><a href="/documentation/user-guide/install/">Install and First Launch</a></li>
+            
+            <li><a href="/documentation/user-guide/agent-tools/">Agent Tools</a></li>
+            
+            <li><a href="/documentation/user-guide/claude-code/">Claude Code</a></li>
+            
+            <li><a href="/documentation/user-guide/codex/">Codex</a></li>
+            
+            <li><a href="/documentation/user-guide/cursor/">Cursor</a></li>
+            
+            <li><a href="/documentation/user-guide/opencode/">OpenCode</a></li>
+            
+            <li><a href="/documentation/user-guide/agent-control/">Agent Control</a></li>
+            
+            <li><a href="/documentation/user-guide/tabs-and-panes/">Tabs and Panes</a></li>
+            
+            <li><a href="/documentation/user-guide/project-isolation/">Project Isolation</a></li>
+            
+            <li><a href="/documentation/user-guide/continue-after-restart/">Continue After Restart</a></li>
+            
+            <li><a href="/documentation/user-guide/reorder-tabs-and-panes/">Reorder Tabs and Panes</a></li>
+            
+            <li><a href="/documentation/user-guide/focus-pane/">Focus Pane</a></li>
+            
+            <li><a href="/documentation/user-guide/activity-indicators/">Activity Indicators</a></li>
+            
+            <li><a href="/documentation/user-guide/profiles/">Profiles</a></li>
+            
+            <li><a href="/documentation/user-guide/tool-options/">Tool Options</a></li>
+            
+            <li><a href="/documentation/user-guide/terminal-scrollback/">Terminal Scrollback</a></li>
+            
+            <li><a href="/documentation/user-guide/status-line/">Status Line</a></li>
+            
+            <li><a class="current" aria-current="page" href="/documentation/user-guide/resize-sections-and-panes/">Resize Sections and Panes</a></li>
+            
+            <li><a href="/documentation/user-guide/notifications/">Notifications</a></li>
+            
+            <li><a href="/documentation/user-guide/worktree-cleanup/">Worktree Cleanup</a></li>
+            
+            <li><a href="/documentation/user-guide/github-pull-requests/">GitHub Pull Requests</a></li>
+            
+            <li><a href="/documentation/user-guide/troubleshooting/">Troubleshooting</a></li>
+            
+          </ul>
+        </section>
+        
+        <section class="nav-group">
+          <h2>Reference</h2>
+          <ul>
+            
+            <li><a href="/documentation/user-guide/shortcuts/">Keyboard Shortcuts</a></li>
+            
+            <li><a href="/documentation/reference/supported-tools/">Supported Tools</a></li>
+            
+          </ul>
+        </section>
+        
+        <section class="nav-group">
+          <h2>Explanation</h2>
+          <ul>
+            
+            <li><a href="/documentation/user-guide/overview/">Overview</a></li>
+            
+            <li><a href="/documentation/user-guide/core-concepts/">Core Concepts</a></li>
+            
+          </ul>
+        </section>
+        
+      </aside>
+      
+
+      <main id="main-content" class="content">
+        
+        <p class="eyebrow"><a href="/docs/">Documentation</a></p>
+        
+        <article class="doc-article">
+  <header class="doc-header">
+    <h1>Resize Sections and Panes</h1>
+    <p class="lede">Adjust the space used by the tab bar, notification sidebar, and terminal panes.</p>
+  </header>
+  <p>Resize the tab bar, notification sidebar, or pane grid to give the active work more room while keeping the same tabs and terminal sessions.</p>
+
+<h2 id="resize-a-section">Resize a section</h2>
+
+<p>Drag the divider below the tab bar to change its height. Drag the divider beside the notification sidebar to change its width. The neighboring area gives up the same amount of space, and the sidebar keeps its preferred width when you hide and show it.</p>
+
+<p>To set section sizes directly, open <strong>Settings → Panes → Layout</strong> and use <strong>Tab Bar Height</strong> or <strong>Notification Sidebar Width</strong>. Choose <strong>Reset Section Sizes</strong> to restore the default 44-point tab bar and 240-point sidebar.</p>
+
+<h2 id="resize-the-pane-grid">Resize the pane grid</h2>
+
+<p>Drag a divider between pane rows or columns. The divider changes the two adjoining tracks across the grid; other tracks keep their sizes. Empty cells remain in their existing positions, and panes keep their running terminal sessions.</p>
+
+<p>Double-click a divider or choose <strong>Reset Resize … Size</strong> from its context menu to equalize just its two adjoining tracks. The tracks keep their combined space, and every other track stays the same. Choose <strong>Reset Pane Sizes</strong> from the grid context menu to reset all rows and columns in the current tab.</p>
+
+<p>You can also resize from the active terminal with the default <strong>⌘⌥ arrow</strong> shortcuts. Each shortcut moves the divider by four points. Use <strong>⌘⌥⇧ arrow</strong> for a sixteen-point step. At an outside edge, the shortcut uses the divider on the other side of the active pane. If that divider reaches its limit, movement stops there.</p>
+
+<p>In a middle column, the left and right shortcuts select the dividers on either side of that column, so either neighbor can give space to the active pane. To give space back across a divider, activate the pane on the other side and use the shortcut that points back across that same divider. The selected divider highlights while keyboard resizing is active.</p>
+
+<h2 id="change-pane-resize-shortcuts">Change pane resize shortcuts</h2>
+
+<p>Open <strong>Settings → Shortcuts → Pane Resizing</strong> and select a shortcut button. Press a letter, number, or arrow key with Command and any optional modifiers. Press Escape to cancel capture. Choose <strong>Disable</strong> to stop that combination from resizing panes.</p>
+
+<p>Each of the four directions has a normal and a larger-step shortcut. Settings rejects keys that conflict with another app or pane resize shortcut and keeps the previous assignment. Pane resize shortcuts act while a terminal pane has keyboard focus.</p>
+
+<h2 id="resize-a-panes-status-line">Resize a pane’s status line</h2>
+
+<p>Drag the thin handle above a pane’s status line to change its visible height. The terminal keeps at least 64 points of space. If the pane becomes too short, the status line keeps its preferred height for later and shows a scrollable viewport; resizing the pane larger restores more of that preferred height. Double-click the handle or choose <strong>Reset Resize status line for … Size</strong> from its context menu to return to content-based height. This changes only that pane and does not change the status-line rows saved in Settings or its profile.</p>
+
+<h2 id="related-documentation">Related documentation</h2>
+
+<ul>
+  <li><a href="/documentation/user-guide/shortcuts/">Keyboard Shortcuts</a></li>
+  <li><a href="/documentation/user-guide/tabs-and-panes/">Tabs and Panes</a></li>
+  <li><a href="/documentation/user-guide/focus-pane/">Focus Pane</a></li>
+</ul>
+
+</article>
+
+      </main>
+    </div>
+
+    <footer class="site-footer">
+      <div>
+        <strong>Agent Session Manager</strong>
+        <span>Native macOS session management for parallel AI agent work.</span>
+      </div>
+    </footer>
+  </body>
+</html>

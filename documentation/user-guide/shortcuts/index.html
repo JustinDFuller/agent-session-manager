@@ -89,6 +89,8 @@
             
             <li><a href="/documentation/user-guide/status-line/">Status Line</a></li>
             
+            <li><a href="/documentation/user-guide/resize-sections-and-panes/">Resize Sections and Panes</a></li>
+            
             <li><a href="/documentation/user-guide/notifications/">Notifications</a></li>
             
             <li><a href="/documentation/user-guide/worktree-cleanup/">Worktree Cleanup</a></li>
@@ -179,7 +181,63 @@
 
 <h2 id="shortcut-configuration">Shortcut configuration</h2>
 
-<p><strong>Settings → Shortcuts</strong> contains the configurable shortcut fields. Each field accepts one key, and the command modifier remains fixed. The ⌘1 through ⌘9 tab-switching shortcuts are fixed.</p>
+<p><strong>Settings → Shortcuts</strong> contains the configurable shortcut fields. Existing app shortcuts accept one key with their displayed modifiers, and the ⌘1 through ⌘9 tab-switching shortcuts are fixed.</p>
+
+<p>The <strong>Pane Resizing</strong> group contains independently configurable shortcuts for four directions and two step sizes. Defaults use ⌘⌥ plus an arrow for a four-point step, and ⌘⌥⇧ plus an arrow for a sixteen-point step. Each binding accepts a letter, number, or arrow key with Command and optional modifiers. Press Escape during capture to cancel, or choose <strong>Disable</strong> to stop that combination from resizing panes. A key already assigned to another app or pane resize shortcut is rejected.</p>
+
+<p>Pane-resize shortcuts act while a terminal pane has keyboard focus and move one shared grid divider at a time. The selected divider stays selected at its minimum or maximum; the shortcut does not continue by moving another divider. Status-line height is controlled with the handle above the status line.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Action</th>
+      <th>Default</th>
+      <th>Step</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Resize Left</td>
+      <td>⌘⌥←</td>
+      <td>4 points</td>
+    </tr>
+    <tr>
+      <td>Resize Right</td>
+      <td>⌘⌥→</td>
+      <td>4 points</td>
+    </tr>
+    <tr>
+      <td>Resize Up</td>
+      <td>⌘⌥↑</td>
+      <td>4 points</td>
+    </tr>
+    <tr>
+      <td>Resize Down</td>
+      <td>⌘⌥↓</td>
+      <td>4 points</td>
+    </tr>
+    <tr>
+      <td>Resize Left (Larger Step)</td>
+      <td>⌘⌥⇧←</td>
+      <td>16 points</td>
+    </tr>
+    <tr>
+      <td>Resize Right (Larger Step)</td>
+      <td>⌘⌥⇧→</td>
+      <td>16 points</td>
+    </tr>
+    <tr>
+      <td>Resize Up (Larger Step)</td>
+      <td>⌘⌥⇧↑</td>
+      <td>16 points</td>
+    </tr>
+    <tr>
+      <td>Resize Down (Larger Step)</td>
+      <td>⌘⌥⇧↓</td>
+      <td>16 points</td>
+    </tr>
+  </tbody>
+</table>
 
 <h2 id="terminal-editing">Terminal editing</h2>
 
@@ -189,6 +247,7 @@
 
 <ul>
   <li><a href="/documentation/user-guide/tabs-and-panes/">Tabs and Panes</a></li>
+  <li><a href="/documentation/user-guide/resize-sections-and-panes/">Resize Sections and Panes</a></li>
   <li><a href="/documentation/user-guide/focus-pane/">Focus Pane</a></li>
   <li><a href="/documentation/reference/supported-tools/">Supported Tools</a></li>
 </ul>
