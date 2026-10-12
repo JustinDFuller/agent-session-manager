@@ -170,6 +170,9 @@ Other status-line events remain trace events:
 | `statusline.codex.tailer_attachment` | Codex rollout watcher waits for its file or recovers after replacement |
 | `statusline.codex.tailer_stopped` | Codex rollout watcher stops |
 | `statusline.codex.tailer_read` | Codex rollout tailer reads a bounded batch; includes line/update counts and whether the read was startup catch-up |
+| `statusline.codex.tailer_read_failed` | A bounded rollout read failed; the event contains only a fixed result code |
+| `statusline.codex.source_failed` | The bound rollout source became unavailable and rich conversation facts were cleared |
+| `statusline.codex.source_recovered` | The bound rollout source produced current data after an unavailable period |
 | `statusline.codex.parsed_update` | Codex rollout parsing produced a supported update; records model/token/context/rate-limit field presence |
 | `statusline.codex.state_unavailable` | Reserved legacy event for Codex state DB failures |
 | `statusline.codex.session_ambiguous` | Reserved legacy event for ambiguous Codex state rows |

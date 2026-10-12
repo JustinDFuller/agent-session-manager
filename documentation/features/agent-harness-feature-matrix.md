@@ -60,10 +60,10 @@ The catalog controls whether a chip can be selected for a harness. A selectable 
 
 | Chip ID | Claude Code | Cursor | Codex | OpenCode | Source or gap |
 |---|---|---|---|---|---|
-| `model` | Implemented | Implemented | Partial | Implemented | Claude hook JSON; Cursor `afterAgentResponse` hook; Codex SQLite/rollout metadata for supported versions; OpenCode `GET /session/:id`. |
+| `model` | Implemented | Implemented | Partial | Implemented | Claude hook JSON; Cursor `afterAgentResponse` hook; Codex root `turn_context` metadata and exact-identity SQLite enrichment for supported versions; OpenCode `GET /session/:id`. |
 | `worktree` | Implemented | Implemented | Implemented | Implemented | App-owned checkout directory plus Git branch. |
 | `cost` | Implemented | N/A | N/A | Implemented | Claude hook JSON; OpenCode `GET /session/:id`. |
-| `context` | Implemented | N/A | Partial | N/A | Claude hook JSON percentage; Codex rollout token count for supported versions; OpenCode does not expose context window size in 1.17.x. |
+| `context` | Implemented | N/A | Partial | N/A | Claude hook JSON percentage; Codex cumulative token totals and normalized current occupancy from supported rollout records; OpenCode does not expose context window size in 1.17.x. |
 | `effort` | Implemented | N/A | N/A | N/A | Claude hook JSON. |
 | `thinking` | Implemented | N/A | N/A | N/A | Claude hook JSON. |
 | `vimMode` | Implemented | N/A | N/A | N/A | Claude hook JSON. |
@@ -72,13 +72,13 @@ The catalog controls whether a chip can be selected for a harness. A selectable 
 | `linesAdded` | Implemented | Implemented | Implemented | Implemented | App-owned `git diff --shortstat HEAD`. |
 | `linesRemoved` | Implemented | Implemented | Implemented | Implemented | App-owned `git diff --shortstat HEAD`. |
 | `duration` | Implemented | Implemented | Implemented | Implemented | App-owned process duration. |
-| `contextRemaining` | Implemented | N/A | Partial | N/A | Claude hook JSON percentage; Codex rollout token count for supported versions; OpenCode does not expose context window size in 1.17.x. |
-| `inputTokens` | Implemented | N/A | Partial | Implemented | Claude hook JSON; Codex rollout token count for supported versions; OpenCode `GET /session/:id`. |
-| `outputTokens` | Implemented | N/A | Partial | Implemented | Claude hook JSON; Codex rollout token count for supported versions; OpenCode `GET /session/:id`. |
-| `rate5h` | Implemented | N/A | Partial | N/A | Claude hook JSON; Codex primary 300-minute rate window for supported versions; OpenCode does not expose rate limits. |
-| `rate7d` | Implemented | N/A | Partial | N/A | Claude hook JSON; Codex secondary 10,080-minute rate window for supported versions; OpenCode does not expose rate limits. |
-| `rate5hReset` | Implemented | N/A | Partial | N/A | Claude hook JSON; Codex primary 300-minute rate window for supported versions; OpenCode does not expose rate limits. |
-| `rate7dReset` | Implemented | N/A | Partial | N/A | Claude hook JSON; Codex secondary 10,080-minute rate window for supported versions; OpenCode does not expose rate limits. |
+| `contextRemaining` | Implemented | N/A | Partial | N/A | Claude hook JSON percentage; Codex cumulative token totals and normalized current occupancy from supported rollout records; OpenCode does not expose context window size in 1.17.x. |
+| `inputTokens` | Implemented | N/A | Partial | Implemented | Claude hook JSON; Codex cumulative token totals and normalized current occupancy from supported rollout records; OpenCode `GET /session/:id`. |
+| `outputTokens` | Implemented | N/A | Partial | Implemented | Claude hook JSON; Codex cumulative token totals and normalized current occupancy from supported rollout records; OpenCode `GET /session/:id`. |
+| `rate5h` | Implemented | N/A | Partial | N/A | Claude hook JSON; Codex standard-bucket primary 300-minute rate window for supported versions; OpenCode does not expose rate limits. |
+| `rate7d` | Implemented | N/A | Partial | N/A | Claude hook JSON; Codex standard-bucket secondary 10,080-minute rate window for supported versions; OpenCode does not expose rate limits. |
+| `rate5hReset` | Implemented | N/A | Partial | N/A | Claude hook JSON; Codex standard-bucket primary 300-minute rate window for supported versions; OpenCode does not expose rate limits. |
+| `rate7dReset` | Implemented | N/A | Partial | N/A | Claude hook JSON; Codex standard-bucket secondary 10,080-minute rate window for supported versions; OpenCode does not expose rate limits. |
 | `version` | Implemented | Implemented | Implemented | Implemented | Claude hook JSON; Cursor and Codex run `<command> --version`; OpenCode uses `GET /global/health`. |
 | `outputStyle` | Implemented | N/A | N/A | N/A | Claude hook JSON. |
 | `exceeds200k` | Implemented | N/A | N/A | N/A | Claude hook JSON. |
