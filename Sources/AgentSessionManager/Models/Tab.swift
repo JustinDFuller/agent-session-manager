@@ -62,7 +62,10 @@ final class Tab: Identifiable {
     var name: String
     var directory: URL
     var baseBranchOverride: String?
-    var panes: [Pane] = []
+    var gridSizePreferences = PaneGridSizePreferences()
+    var panes: [Pane] = [] {
+        didSet { gridSizePreferences.reconcile(layout: GridLayout.forPaneCount(panes.count)) }
+    }
     var lastActivePaneID: UUID?
     var focusedPaneID: UUID?
 

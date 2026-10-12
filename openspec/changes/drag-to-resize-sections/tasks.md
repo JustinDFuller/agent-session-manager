@@ -2,10 +2,10 @@
 
 ## 1. Geometry and compatible resize preferences
 
-- [ ] 1.1 Extend the grid geometry model with preferred weights, minimum-aware effective track sizing, adjacent-pair adjustment, directional boundary selection, and changed-axis reconciliation; verify unit tests cover conservation, fixed third tracks, partial grids, every edge and middle track, empty cells, no fallback at a blocked boundary, bounds, normalization, and shrink/enlarge restoration.
-- [ ] 1.2 Add global layout settings including eight independently editable resize bindings, per-tab grid preferences, and per-pane optional status height with independent decoding and save/restore support; verify old-session defaults, missing/invalid binding isolation, disabled and conflicting restored bindings, invalid scalar/axis isolation, partial pane restore, layout resets retaining shortcuts, and round-trip persistence in unit tests.
-- [ ] 1.3 Add the new settings file to isolated Dev UI cleanup and both Makefile reset lists; verify cleanup inventories contain `layout-settings.json` and no production-targeted test invocation is introduced.
-- [ ] 1.4 Create the internal section-resizing feature guide, its referencing feature skill, and the AGENTS.md feature entry in the required order; verify paths resolve and the documented ownership and allocation rules match this design and unit tests.
+- [x] 1.1 Extend the grid geometry model with preferred weights, minimum-aware effective track sizing, adjacent-pair adjustment, directional boundary selection, and changed-axis reconciliation; verify unit tests cover conservation, fixed third tracks, partial grids, every edge and middle track, empty cells, no fallback at a blocked boundary, bounds, normalization, and shrink/enlarge restoration.
+- [x] 1.2 Add global layout settings including eight independently editable resize bindings, per-tab grid preferences, and per-pane optional status height with independent decoding and save/restore support; verify old-session defaults, missing/invalid binding isolation, disabled and conflicting restored bindings, invalid scalar/axis isolation, partial pane restore, layout resets retaining shortcuts, and round-trip persistence in unit tests.
+- [x] 1.3 Add the new settings file to isolated Dev UI cleanup and both Makefile reset lists; verify cleanup inventories contain `layout-settings.json` and no production-targeted test invocation is introduced.
+- [x] 1.4 Create the internal section-resizing feature guide, its referencing feature skill, and the AGENTS.md feature entry in the required order; verify paths resolve and the documented ownership and allocation rules match this design and unit tests.
 
 ## 2. Shared divider interactions and global sections
 

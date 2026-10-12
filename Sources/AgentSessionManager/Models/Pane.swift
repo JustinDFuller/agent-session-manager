@@ -41,6 +41,7 @@ enum Harness: String, Codable, CaseIterable, Sendable {
 final class Pane: Identifiable {
     let id: UUID
     var name: String
+    var statusLineHeight: Double?
     var harness: Harness
     var worktreeDirectory: URL?
     var worktreeIsManaged: Bool = false

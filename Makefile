@@ -247,7 +247,7 @@ docs-check:
 	@bash "$(CURDIR)/scripts/check-docs.sh"
 
 reset-app-state:
-	@for f in sessions.json settings.json codex-settings.json cursor-settings.json \
+	@for f in sessions.json layout-settings.json settings.json codex-settings.json cursor-settings.json \
     opencode-settings.json opencode-env-var-settings.json \
     statusline-settings.json active-tools-settings.json \
     default-branch.json notification-settings.json restart-settings.json \
@@ -265,7 +265,7 @@ reset-app-state:
 	@echo "App state reset."
 
 reset-app-state-dev:
-	@for f in sessions.json settings.json codex-settings.json cursor-settings.json \
+	@for f in sessions.json layout-settings.json settings.json codex-settings.json cursor-settings.json \
     opencode-settings.json opencode-env-var-settings.json \
     statusline-settings.json active-tools-settings.json \
     default-branch.json notification-settings.json restart-settings.json \

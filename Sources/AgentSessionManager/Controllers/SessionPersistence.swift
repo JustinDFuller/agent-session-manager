@@ -113,7 +113,36 @@ struct PersistedTab: Codable {
     var name: String
     var directory: String
     var baseBranchOverride: String?
+    var gridSizePreferences: PaneGridSizePreferences?
     var panes: [PersistedPane]
+
+    enum CodingKeys: String, CodingKey { case id, name, directory, baseBranchOverride, gridSizePreferences, panes }
+
+    init(
+        id: UUID,
+        name: String,
+        directory: String,
+        baseBranchOverride: String? = nil,
+        gridSizePreferences: PaneGridSizePreferences? = nil,
+        panes: [PersistedPane]
+    ) {
+        self.id = id
+        self.name = name
+        self.directory = directory
+        self.baseBranchOverride = baseBranchOverride
+        self.gridSizePreferences = gridSizePreferences
+        self.panes = panes
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        directory = try container.decode(String.self, forKey: .directory)
+        baseBranchOverride = try? container.decodeIfPresent(String.self, forKey: .baseBranchOverride)
+        gridSizePreferences = try? container.decodeIfPresent(PaneGridSizePreferences.self, forKey: .gridSizePreferences)
+        panes = try container.decode([PersistedPane].self, forKey: .panes)
+    }
 }
 
 struct PersistedPane: Codable {
@@ -130,6 +159,7 @@ struct PersistedPane: Codable {
     var extraArgs: [String]
     var opencodeSessionID: String?
     var agentControlInjectionEnabled: Bool?
+    var statusLineHeight: Double?
 
     enum CodingKeys: String, CodingKey {
         case id, name, harness, isPriority, isMerged, isClosed, worktreeDirectory, worktreeIsManaged
@@ -139,6 +169,7 @@ struct PersistedPane: Codable {
         case extraArgs
         case opencodeSessionID
         case agentControlInjectionEnabled
+        case statusLineHeight
     }
 
     init(
@@ -146,7 +177,7 @@ struct PersistedPane: Codable {
         isClosed: Bool = false,
         worktreeDirectory: String? = nil, worktreeIsManaged: Bool = false, profileID: UUID? = nil,
         scrollbackOverride: ScrollbackLimit? = nil, extraArgs: [String] = [], opencodeSessionID: String? = nil,
-        agentControlInjectionEnabled: Bool? = nil
+        agentControlInjectionEnabled: Bool? = nil, statusLineHeight: Double? = nil
     ) {
         self.id = id
         self.name = name
@@ -161,6 +192,7 @@ struct PersistedPane: Codable {
         self.extraArgs = extraArgs
         self.opencodeSessionID = opencodeSessionID
         self.agentControlInjectionEnabled = agentControlInjectionEnabled
+        self.statusLineHeight = Self.validStatusLineHeight(statusLineHeight)
     }
 
     init(from decoder: Decoder) throws {
@@ -181,6 +213,8 @@ struct PersistedPane: Codable {
         extraArgs = (try? container.decodeIfPresent([String].self, forKey: .extraArgs)) ?? []
         opencodeSessionID = try container.decodeIfPresent(String.self, forKey: .opencodeSessionID)
         agentControlInjectionEnabled = try container.decodeIfPresent(Bool.self, forKey: .agentControlInjectionEnabled)
+        let decodedHeight = try? container.decode(Double.self, forKey: .statusLineHeight)
+        statusLineHeight = Self.validStatusLineHeight(decodedHeight)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -198,6 +232,12 @@ struct PersistedPane: Codable {
         try container.encode(extraArgs, forKey: .extraArgs)
         try container.encodeIfPresent(opencodeSessionID, forKey: .opencodeSessionID)
         try container.encodeIfPresent(agentControlInjectionEnabled, forKey: .agentControlInjectionEnabled)
+        try container.encodeIfPresent(statusLineHeight, forKey: .statusLineHeight)
+    }
+
+    private static func validStatusLineHeight(_ height: Double?) -> Double? {
+        guard let height, height.isFinite, (24...256).contains(height) else { return nil }
+        return height
     }
 }
 
@@ -217,6 +257,7 @@ struct SessionPersistence {
                 name: tab.name,
                 directory: tab.directory.path,
                 baseBranchOverride: tab.baseBranchOverride,
+                gridSizePreferences: tab.gridSizePreferences,
                 panes: tab.panes.compactMap { pane -> PersistedPane? in
                     guard pane.harness != .shell else { return nil }
                     return PersistedPane(
@@ -232,7 +273,8 @@ struct SessionPersistence {
                         scrollbackOverride: pane.scrollbackOverride,
                         extraArgs: pane.extraArgs,
                         opencodeSessionID: pane.opencodeSessionID,
-                        agentControlInjectionEnabled: pane.agentControlInjectionEnabled
+                        agentControlInjectionEnabled: pane.agentControlInjectionEnabled,
+                        statusLineHeight: pane.statusLineHeight
                     )
                 }
             )
@@ -257,10 +299,16 @@ struct SessionPersistence {
             tabs: tabs, activeTabIndex: activeTabIndex, pendingNotifications: pendingNotifications)
     }
 
-    static func save(appState: AppState) {
+    @discardableResult
+    static func save(appState: AppState) -> Bool {
         let session = makePersistedSession(appState: appState)
-        guard let data = try? JSONEncoder().encode(session) else { return }
-        try? data.write(to: sessionURL)
+        guard let data = try? JSONEncoder().encode(session) else { return false }
+        do {
+            try data.write(to: sessionURL, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
     }
 
     static func persistedDirectoryURL(for path: String) -> URL? {
@@ -366,11 +414,14 @@ struct SessionPersistence {
                 )
                 pane.isMerged = persistedPane.isMerged
                 pane.isClosed = persistedPane.isClosed
+                pane.statusLineHeight = persistedPane.statusLineHeight
                 pane.bindNotifications(
                     appState: appState,
                     isPriority: persistedPane.isPriority
                 )
             }
+            tab.gridSizePreferences = persistedTab.gridSizePreferences ?? PaneGridSizePreferences()
+            tab.gridSizePreferences.reconcile(layout: GridLayout.forPaneCount(tab.panes.count))
             appState.tabs.append(tab)
         }
         if let index = session.activeTabIndex, index < appState.tabs.count {
