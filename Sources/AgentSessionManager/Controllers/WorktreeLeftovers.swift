@@ -73,6 +73,45 @@ enum WorktreeLeftovers {
         return outcomes
     }
 
+    static func size(of folder: URL) -> Int64 {
+        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey]
+        guard
+            let enumerator = FileManager.default.enumerator(
+                at: folder, includingPropertiesForKeys: Array(keys), options: [], errorHandler: { _, _ in true })
+        else { return 0 }
+        var total: Int64 = 0
+        for case let url as URL in enumerator {
+            let values = try? url.resourceValues(forKeys: keys)
+            total += Int64(values?.totalFileAllocatedSize ?? values?.fileAllocatedSize ?? 0)
+        }
+        return total
+    }
+
+    static func removeUnregistered(_ leftover: WorktreeLeftover) async -> WorktreeCleanupResult {
+        let folder = leftover.checkout
+        func refused(_ reason: String) -> WorktreeCleanupResult {
+            WorktreeCleanupResult(checkout: folder, outcome: .kept(reason: reason))
+        }
+        guard !leftover.isRegistered else { return refused("Git lists it as a worktree.") }
+        let parent = folder.deletingLastPathComponent().resolvingSymlinksInPath().path
+        let managed = managedFolders(of: leftover.repository).map { $0.resolvingSymlinksInPath().path }
+        guard managed.contains(parent) else { return refused("It is not directly inside a managed worktrees folder.") }
+        guard FileManager.default.fileExists(atPath: folder.path) else {
+            return WorktreeCleanupResult(checkout: folder, outcome: .deleted(branch: .notRequested))
+        }
+        do {
+            let listing = try await GitRunner.output(["worktree", "list", "--porcelain"], in: leftover.repository)
+            let resolved = folder.resolvingSymlinksInPath().path
+            let registered = Tab.parseWorktreeListPorcelain(listing)
+                .contains { URL(filePath: $0.path).resolvingSymlinksInPath().path == resolved }
+            guard !registered else { return refused("Git lists it as a worktree.") }
+            try FileManager.default.removeItem(at: folder)
+            return WorktreeCleanupResult(checkout: folder, outcome: .deleted(branch: .notRequested))
+        } catch {
+            return WorktreeCleanupResult(checkout: folder, outcome: .failed(reason: error.localizedDescription))
+        }
+    }
+
     private static func scan(repository: URL, openCheckouts: Set<String>, now: Date) async -> [WorktreeLeftover] {
         guard FileManager.default.fileExists(atPath: repository.path),
             let listing = try? await GitRunner.output(["worktree", "list", "--porcelain"], in: repository)

@@ -525,6 +525,7 @@ private struct PanesContent: View {
                                 to: SettingsPersistence.cleanUpLeftoversAtLaunchFile)
                         }
                 }
+                WorktreeLeftoversList()
                 SettingRow(
                     title: "Continue on Restart",
                     description:
