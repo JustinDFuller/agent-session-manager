@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import XCTest
 
@@ -98,6 +99,92 @@ final class ClaudeNotificationFlowTests: BaseTestCase {
         waitForDisappear(nameField, timeout: 30)
         waitFor(app.staticTexts["pane-name-\(name)"].firstMatch, timeout: 20)
 
+        let claudeTerminal = app.descendants(matching: .any)
+            .matching(identifier: "pane-terminal-\(name)").firstMatch
+        waitFor(claudeTerminal)
+        claudeTerminal.click()
+        let worktreeURL = GitUITestWorkspace.directoryURL
+            .appending(path: ".agent-session-manager/worktrees/\(name)")
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+        let expectedWorktreePath = worktreeURL.path.filter { !$0.isWhitespace }
+        typealias PasteboardRepresentation = (type: NSPasteboard.PasteboardType, data: Data)
+        let priorPasteboardItems: [[PasteboardRepresentation]] = {
+            var snapshots: [[PasteboardRepresentation]] = []
+            for pasteboardItem in NSPasteboard.general.pasteboardItems ?? [] {
+                var representations: [PasteboardRepresentation] = []
+                for type in pasteboardItem.types {
+                    if let data = pasteboardItem.data(forType: type) {
+                        representations.append((type: type, data: data))
+                    }
+                }
+                snapshots.append(representations)
+            }
+            return snapshots
+        }()
+        defer {
+            NSPasteboard.general.clearContents()
+            var restoredItems: [NSPasteboardItem] = []
+            for representations in priorPasteboardItems {
+                let item = NSPasteboardItem()
+                for representation in representations {
+                    item.setData(representation.data, forType: representation.type)
+                }
+                restoredItems.append(item)
+            }
+            if !restoredItems.isEmpty {
+                _ = NSPasteboard.general.writeObjects(restoredItems)
+            }
+        }
+        var trustAccepted = false
+        var startupReady = false
+        let startupDeadline = Date().addingTimeInterval(60)
+        while Date() < startupDeadline && !startupReady {
+            claudeTerminal.typeKey("a", modifierFlags: .command)
+            claudeTerminal.typeKey("c", modifierFlags: .command)
+            let terminalOutput = NSPasteboard.general.string(forType: .string) ?? ""
+            let normalizedOutput = terminalOutput.filter { !$0.isWhitespace }
+            let trustPromptIsVisible =
+                normalizedOutput.contains("Accessingworkspace:")
+                && normalizedOutput.contains("Quicksafetycheck:")
+                && normalizedOutput.contains("No,exit")
+                && normalizedOutput.contains("Yes,Itrustthisfolder")
+
+            if trustPromptIsVisible && !trustAccepted {
+                guard normalizedOutput.contains(expectedWorktreePath) else {
+                    XCTFail("Claude Code showed a trust prompt for a different workspace")
+                    break
+                }
+                let exitOptionIsSelected =
+                    normalizedOutput.contains("›No,exit")
+                    || normalizedOutput.contains("❯No,exit")
+                    || normalizedOutput.contains(">No,exit")
+                let trustOptionIsSelected =
+                    normalizedOutput.contains("›Yes,Itrustthisfolder")
+                    || normalizedOutput.contains("❯Yes,Itrustthisfolder")
+                    || normalizedOutput.contains(">Yes,Itrustthisfolder")
+                if exitOptionIsSelected {
+                    claudeTerminal.typeKey(.downArrow, modifierFlags: [])
+                } else if !trustOptionIsSelected {
+                    XCTFail("Claude Code showed an unexpected workspace trust selection")
+                    break
+                }
+                claudeTerminal.typeKey(.enter, modifierFlags: [])
+                trustAccepted = true
+            }
+
+            startupReady =
+                !trustPromptIsVisible
+                && normalizedOutput.contains("ClaudeCodev")
+                && normalizedOutput.contains("UITestWorkspace/.agent-session-manager/worktrees/\(name)")
+            if !startupReady {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+            }
+        }
+        _ = try XCTUnwrap(
+            startupReady ? true : nil,
+            "Claude Code did not reach its interactive workspace prompt within 60 seconds")
+
         let sessionURL = UITestAppSupport.directory.appending(path: "sessions.json")
         let sessions = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: sessionURL)) as? [String: Any])
         let tabs = try XCTUnwrap(sessions["tabs"] as? [[String: Any]])
@@ -108,9 +195,16 @@ final class ClaudeNotificationFlowTests: BaseTestCase {
     }
 
     private func waitForLiveRecord(
-        at url: URL, timeout: TimeInterval = 90, matching predicate: @escaping ([String: Any]) -> Bool
+        at url: URL,
+        timeout: TimeInterval = 90,
+        notBeforeTimeInterval: TimeInterval? = nil,
+        matching predicate: @escaping ([String: Any]) -> Bool
     ) throws -> [String: Any] {
         var found: [String: Any]?
+        let fractionalTimestampFormatter = ISO8601DateFormatter()
+        fractionalTimestampFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let wholeTimestampFormatter = ISO8601DateFormatter()
+        wholeTimestampFormatter.formatOptions = [.withInternetDateTime]
         let expectation = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
                 guard let data = try? Data(contentsOf: url),
@@ -118,11 +212,76 @@ final class ClaudeNotificationFlowTests: BaseTestCase {
                 else { return false }
                 found = text.split(separator: "\n").suffix(100).compactMap { line in
                     try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
-                }.last(where: predicate)
+                }.last { record in
+                    if let notBeforeTimeInterval {
+                        let recordTime: TimeInterval?
+                        if let numericTimestamp = record["timestamp"] as? TimeInterval {
+                            recordTime = numericTimestamp
+                        } else if let timestamp = record["timestamp"] as? String {
+                            recordTime =
+                                fractionalTimestampFormatter.date(from: timestamp)?.timeIntervalSince1970
+                                ?? wholeTimestampFormatter.date(from: timestamp)?.timeIntervalSince1970
+                        } else {
+                            recordTime = nil
+                        }
+                        guard let recordTime, recordTime >= notBeforeTimeInterval else { return false }
+                    }
+                    return predicate(record)
+                }
                 return found != nil
             }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed, "Expected real Claude event")
         return try XCTUnwrap(found)
+    }
+
+    private func assertNotificationReason(
+        in row: XCUIElement, since timestamp: TimeInterval, canonicalReason: String
+    ) {
+        var observedReason: String?
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline && observedReason == nil {
+            if let data = try? Data(contentsOf: hookLogURL),
+                let text = String(data: data.suffix(262_144), encoding: .utf8)
+            {
+                let records = text.split(separator: "\n").suffix(100).compactMap { line in
+                    try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+                }
+                observedReason = records.last { record in
+                    guard record["hook_event_name"] as? String == "Notification",
+                        let eventTimestamp = record["timestamp"] as? TimeInterval,
+                        eventTimestamp >= timestamp
+                    else { return false }
+                    return (record["message"] as? String).map { !$0.isEmpty } == true
+                        || (record["title"] as? String).map { !$0.isEmpty } == true
+                }.flatMap { record in
+                    let message = record["message"] as? String
+                    let rawReason = message.flatMap { $0.isEmpty ? nil : $0 } ?? record["title"] as? String
+                    let normalizedReason = rawReason?
+                        .components(separatedBy: .whitespacesAndNewlines)
+                        .filter { !$0.isEmpty }
+                        .joined(separator: " ")
+                    return normalizedReason.flatMap { $0.isEmpty ? nil : $0 }
+                }
+            }
+            if observedReason == nil {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            }
+        }
+        let reasonSource = observedReason == nil ? "canonical" : "Notification hook"
+        let expectedReason = observedReason ?? canonicalReason
+        let reasonVisible = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", expectedReason), object: row)
+        let result = XCTWaiter.wait(for: [reasonVisible], timeout: 10)
+        XCTAssertEqual(
+            result, .completed,
+            "Expected the notification row to show its canonical reason or latest live Claude Notification reason: "
+                + expectedReason)
+        let evidence = XCTAttachment(
+            string: "reason_source=\(reasonSource)\nexpected_reason=\(expectedReason)"
+                + "\nnotification_row_label=\(row.label)")
+        evidence.name = "Claude notification reason evidence"
+        evidence.lifetime = .keepAlways
+        add(evidence)
     }
 
     private func launchBackgroundSleep() throws {
@@ -155,17 +314,39 @@ final class ClaudeNotificationFlowTests: BaseTestCase {
                 && (record["background_tasks"] as? [[String: Any]])?.isEmpty == true
                 && (record["session_crons"] as? [[String: Any]])?.isEmpty == true
         }
-        waitFor(app.buttons["notification-row-background-alert"], timeout: 10)
-        waitFor(app.staticTexts["Claude finished responding"].firstMatch)
+        let notificationRow = app.buttons["notification-row-background-alert"]
+        waitFor(notificationRow, timeout: 10)
+        let completionReasonVisible = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", "Claude finished responding"),
+            object: notificationRow)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [completionReasonVisible], timeout: 10), .completed,
+            "Expected the completed background-work row to show the canonical Claude stop reason")
     }
 
     func testQuestionProducesRealAttention() throws {
         try openClaudePane(named: "question-alert")
         try launchBackgroundSleep()
+        let promptTimestamp = Date().timeIntervalSince1970
         typeTerminalCommand(
             "Use AskUserQuestion now to ask me to choose Red or Blue. You must call the tool, not ask in prose.")
-        waitFor(app.buttons["notification-row-question-alert"], timeout: 90)
-        waitFor(app.staticTexts["Claude has a question"].firstMatch)
+        let prompt = try waitForLiveRecord(at: hookLogURL) { record in
+            record["hook_event_name"] as? String == "UserPromptSubmit"
+                && (record["timestamp"] as? TimeInterval ?? 0) >= promptTimestamp
+        }
+        let transcript = URL(filePath: try XCTUnwrap(prompt["transcript_path"] as? String))
+        _ = try waitForLiveRecord(at: transcript, notBeforeTimeInterval: promptTimestamp) { record in
+            guard let message = record["message"] as? [String: Any],
+                let content = message["content"] as? [[String: Any]]
+            else { return false }
+            return content.contains {
+                $0["type"] as? String == "tool_use" && $0["name"] as? String == "AskUserQuestion"
+            }
+        }
+        let notificationRow = app.buttons["notification-row-question-alert"]
+        waitFor(notificationRow, timeout: 90)
+        assertNotificationReason(
+            in: notificationRow, since: promptTimestamp, canonicalReason: "Claude has a question")
         screenshot("claude-question-attention")
     }
 
@@ -173,11 +354,27 @@ final class ClaudeNotificationFlowTests: BaseTestCase {
         try openClaudePane(named: "plan-alert")
         try launchBackgroundSleep()
         typeTerminalCommand("/plan")
+        let promptTimestamp = Date().timeIntervalSince1970
         typeTerminalCommand(
             "Plan one small change: create hello.txt containing hello. Do not implement or inspect files. Present the plan and call ExitPlanMode to request approval now."
         )
-        waitFor(app.buttons["notification-row-plan-alert"], timeout: 90)
-        waitFor(app.staticTexts["Claude needs plan approval"].firstMatch)
+        let prompt = try waitForLiveRecord(at: hookLogURL) { record in
+            record["hook_event_name"] as? String == "UserPromptSubmit"
+                && (record["timestamp"] as? TimeInterval ?? 0) >= promptTimestamp
+        }
+        let transcript = URL(filePath: try XCTUnwrap(prompt["transcript_path"] as? String))
+        _ = try waitForLiveRecord(at: transcript, notBeforeTimeInterval: promptTimestamp) { record in
+            guard let message = record["message"] as? [String: Any],
+                let content = message["content"] as? [[String: Any]]
+            else { return false }
+            return content.contains {
+                $0["type"] as? String == "tool_use" && $0["name"] as? String == "ExitPlanMode"
+            }
+        }
+        let notificationRow = app.buttons["notification-row-plan-alert"]
+        waitFor(notificationRow, timeout: 90)
+        assertNotificationReason(
+            in: notificationRow, since: promptTimestamp, canonicalReason: "Claude needs plan approval")
         screenshot("claude-plan-approval-attention")
     }
 
@@ -198,8 +395,9 @@ final class ClaudeNotificationFlowTests: BaseTestCase {
         }
         app.typeKey(.escape, modifierFlags: [])
         _ = try waitForLiveRecord(at: hookLogURL, timeout: 100) { $0["notification_type"] as? String == "idle_prompt" }
-        waitFor(app.buttons["notification-row-interrupt-alert"], timeout: 10)
-        XCTAssertFalse(app.staticTexts["Claude finished responding"].exists)
+        let notificationRow = app.buttons["notification-row-interrupt-alert"]
+        waitFor(notificationRow, timeout: 10)
+        XCTAssertFalse(notificationRow.label.contains("Claude finished responding"))
         let working = app.descendants(matching: .any).matching(identifier: "pane-activity-working-interrupt-alert")
             .firstMatch
         waitForDisappear(working)

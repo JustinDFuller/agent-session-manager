@@ -119,7 +119,7 @@ final class SectionResizingSettingsFlowTests: BaseTestCase {
         XCTAssertEqual(restoredCapture.label, "⌘⌥X")
     }
 
-    func testAppShortcutEditorRejectsExistingResizeBinding() {
+    func testAppShortcutEditorRejectsExistingResizeBinding() throws {
         app.typeKey(",", modifierFlags: .command)
         let shortcutsTab = app.descendants(matching: .any)
             .matching(identifier: "settings-sidebar-shortcuts").firstMatch
@@ -128,6 +128,7 @@ final class SectionResizingSettingsFlowTests: BaseTestCase {
 
         let newTabKey = app.textFields["settings-shortcut-key-new-tab"]
         waitFor(newTabKey)
+        let originalNewTabKey = try XCTUnwrap(newTabKey.value as? String)
         newTabKey.click()
         newTabKey.typeKey("a", modifierFlags: .command)
         newTabKey.typeText("y")
@@ -147,5 +148,15 @@ final class SectionResizingSettingsFlowTests: BaseTestCase {
 
         XCTAssertEqual(newTabKey.value as? String, "y")
         waitFor(app.staticTexts["settings-shortcut-error-new-tab"])
+
+        capture.click()
+        app.typeKey(.leftArrow, modifierFlags: [.command, .option])
+        XCTAssertEqual(capture.label, "⌘⌥←")
+
+        newTabKey.click()
+        newTabKey.typeKey("a", modifierFlags: .command)
+        newTabKey.typeText(originalNewTabKey)
+        newTabKey.typeKey(.tab, modifierFlags: [])
+        XCTAssertEqual(newTabKey.value as? String, originalNewTabKey)
     }
 }
