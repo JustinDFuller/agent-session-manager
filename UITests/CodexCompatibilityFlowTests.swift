@@ -48,6 +48,10 @@ final class CodexCompatibilityFlowTests: BaseTestCase {
         if codexToggle.value as? Int != 1 { codexToggle.click() }
         XCTAssertEqual(codexToggle.value as? Int, 1)
 
+        let guidanceAttachment = XCTAttachment(screenshot: settingsWindow.screenshot())
+        guidanceAttachment.name = "codex-approval-guidance"
+        guidanceAttachment.lifetime = .keepAlways
+        add(guidanceAttachment)
         let approvalDescription = settingsWindow.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] %@", "approval timing")
         ).firstMatch
