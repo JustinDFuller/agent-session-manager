@@ -1,6 +1,6 @@
 # Agent Harness Feature Matrix
 
-This is the canonical, code-observed audit of Agent Session Manager integration points for Claude Code, Cursor, Codex, and OpenCode as of **July 27, 2026**. It describes the app implementation, not upstream CLI feasibility. The internal `.shell` pane type is excluded.
+This is the canonical, code-observed audit of Agent Session Manager integration points for Claude Code, Cursor, Codex, and OpenCode as of **October 12, 2026**. It describes the app implementation, not upstream CLI feasibility. The internal `.shell` pane type is excluded. Codex compatibility has source and unit-test coverage in progress; installed-CLI runtime acceptance remains pending.
 
 ## Legend
 
@@ -32,9 +32,9 @@ This is the canonical, code-observed audit of Agent Session Manager integration 
 | Restart existing process | Implemented | Implemented | Implemented | Implemented | Controller replacement preserves the existing monitor and callback wiring. |
 | Quick refresh and continue | Implemented | Implemented | Implemented | Implemented | Monitor replacement goes through `Pane.installStatusLineMonitor`, which reattaches callbacks. Cursor quick refresh preserves `AGENT_SESSION_MANAGER_PANE_ID`. |
 | Refresh with new settings | Implemented | Implemented | Implemented | Implemented | Monitor/controller replacement goes through pane install methods that rewire callbacks. |
-| Rich status provider | Implemented | Partial | Partial | Implemented | Claude uses `statusLine`; Cursor adds hook model data; Codex adds version-gated SQLite/rollout data for 0.136.x; OpenCode polls the per-pane HTTP API. |
+| Rich status provider | Implemented | Partial | Partial | Implemented | Claude uses `statusLine`; Cursor adds hook model data; Codex selects version-gated adapters for 0.162.x and legacy 0.136.x, while exact foreground metrics and runtime acceptance remain in progress; OpenCode polls the per-pane HTTP API. |
 | Shared baseline status | Implemented | Implemented | Implemented | Implemented | Worktree, branch, duration, lines changed, PR, and profile chips are app-owned where data is available. Cursor and Codex fetch versions; OpenCode uses `GET /global/health`. |
-| Native attention integration | Implemented | Partial | Missing | Implemented | Claude uses `Notification` (broadened to `permission_prompt\|elicitation_dialog\|idle_prompt\|agent_needs_input`) plus `Stop` background-work gating (`background_tasks` and `session_crons`) to suppress false "finished" `Stop` notifications, and suppress `idle_prompt` only for confirmed pending work; otherwise idle recovers interrupted foreground turns. `PreToolUse` question and plan events produce attention; Cursor uses `stop`, but setting changes do not refresh existing Cursor panes. OpenCode uses SSE `session.idle` and `permission.asked` events with a 15-second polling fallback. |
+| Native attention integration | Implemented | Partial | Missing | Implemented | Claude uses `Notification` (broadened to `permission_prompt\|elicitation_dialog\|idle_prompt\|agent_needs_input`) plus `Stop` background-work gating (`background_tasks` and `session_crons`) to suppress false "finished" `Stop` notifications, and suppress `idle_prompt` only for confirmed pending work; otherwise idle recovers interrupted foreground turns. `PreToolUse` question and plan events produce attention; Cursor uses `stop`, but setting changes do not refresh existing Cursor panes. Codex compatibility hooks are selected by version, but pane attention delivery remains pending. OpenCode uses SSE `session.idle` and `permission.asked` events with a 15-second polling fallback. |
 | Shared terminal attention | Implemented | Implemented | Implemented | Implemented | BEL and OSC 777 flow through `TerminalController`. |
 | Notification sidebar and banners | Partial | Partial | Partial | Partial | Delivery exists, but new-pane and controller-replacement lifecycle gaps can prevent callbacks from being attached. |
 | Notification persistence | Implemented | Implemented | Implemented | Implemented | Pending in-app notifications are stored in `sessions.json`. |
@@ -100,7 +100,7 @@ The catalog controls whether a chip can be selected for a harness. A selectable 
 
 ## Known Gaps
 
-- Codex rollout parsing is currently supported only for Codex `0.136.x`; unknown versions degrade to baseline/state DB facts.
+- Codex recognizes the `0.162.x` current adapter and retains the `0.136.x` legacy adapter; the legacy contract has no `Interrupt` event, and unrecognized versions receive baseline-only integration. Exhausted hook-queue write retries produce redacted diagnostics without guaranteeing event delivery. The current adapter's installed-CLI behavior and repaired rich status remain unverified until real Dev acceptance is recorded.
 
 ## Harness Guides
 
