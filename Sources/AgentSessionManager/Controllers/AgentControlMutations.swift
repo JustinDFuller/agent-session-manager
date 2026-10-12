@@ -492,6 +492,7 @@ final class AgentControlMutationRouter {
         let tab = Tab(
             name: name, directory: directory, baseBranchOverride: baseBranch?.isEmpty == true ? nil : baseBranch)
         appState.tabs.append(tab)
+        KnownRepositories.record([directory])
         appState.activeTabID = tab.id
         appState.activePaneID = nil
         SessionPersistence.save(appState: appState)

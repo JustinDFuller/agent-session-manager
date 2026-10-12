@@ -478,6 +478,7 @@ struct ContentView: View {
                 let cleanup = TraceCleanupService(tracesDirectory: appSettings.resolvedTracingDirectoryURL)
                 traceCleanupService = cleanup
                 SessionPersistence.restore(into: appState, appSettings: appSettings)
+                LaunchCleanup.start(appState: appState, appSettings: appSettings)
                 await SessionPersistence.checkForResolvedPRsAfterRestore(appState: appState)
             }
             await MacNotificationCoordinator.shared.requestAuthorizationIfNeeded()

@@ -22,8 +22,8 @@
 
 ## 4. Known repositories and launch cleanup
 
-- [ ] 4.1 Add `known-repositories.json` that records a root when a tab is created or restored, drops missing folders, and seeds from restored tabs on first launch; verify unit tests for add, restore, missing-folder removal, seeding, and corrupt-file isolation.
-- [ ] 4.2 Add the launch sweep with prune, the managed-folder filter, the eligibility rules (no open pane, clean, fully pushed, unlocked, unchanged for 24 hours), the branch setting, and per-removal and per-skip trace events; verify unit tests with real repositories and modified timestamps cover every eligibility rule, the 24-hour boundary, repositories with no tab, and the setting off.
+- [x] 4.1 Add `known-repositories.json` that records a root when a tab is created or restored, drops missing folders, and seeds from restored tabs on first launch; verify unit tests for add, restore, missing-folder removal, seeding, and corrupt-file isolation.
+- [x] 4.2 Add the launch sweep with prune, the managed-folder filter, the eligibility rules (no open pane, clean, fully pushed, unlocked, unchanged for 24 hours), the branch setting, and per-removal and per-skip trace events; verify unit tests with real repositories and modified timestamps cover every eligibility rule, the 24-hour boundary, repositories with no tab, and the setting off.
 - [ ] 4.3 Run the sweep once after session restore in the background without dialogs; verify a real Dev app launch against seeded real repositories removes a clean old leftover, keeps a dirty one, and the traces list each decision.
 
 ## 5. Leftovers list in Settings

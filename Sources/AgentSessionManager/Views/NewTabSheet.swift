@@ -92,6 +92,7 @@ struct NewTabSheet: View {
                             baseBranchOverride: trimmed.isEmpty ? nil : trimmed
                         )
                         appState.tabs.append(tab)
+                        KnownRepositories.record([dir])
                         appState.activeTabID = tab.id
                         dismiss()
                     }

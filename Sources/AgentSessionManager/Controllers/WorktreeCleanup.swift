@@ -59,7 +59,7 @@ enum WorktreeCleanup {
         repository: URL, checkout: URL, isUsedByOtherPane: Bool = false
     ) async throws -> WorktreeAssessment {
         let status = try await GitRunner.output(
-            ["status", "--porcelain=v1", "-z", "--untracked-files=all"], in: checkout)
+            ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"], in: checkout)
         let (modified, untracked) = countChanges(porcelainZ: status)
         let head = try await GitRunner.output(["rev-parse", "--abbrev-ref", "HEAD"], in: checkout)
             .trimmingCharacters(in: .whitespacesAndNewlines)
