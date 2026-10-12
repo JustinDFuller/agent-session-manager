@@ -310,14 +310,14 @@ final class WorktreeCloseFlow {
             keepLabel: plural ? "Keep Worktrees" : "Keep Worktree")
     }
 
-    private static func processIDs(in panes: [Pane]) -> [Int32] {
+    static func processIDs(in panes: [Pane]) -> [Int32] {
         panes.compactMap { pane in
             guard case .running(let pid) = pane.terminalController?.processState else { return nil }
             return pid
         }
     }
 
-    private static func waitForExit(of processIDs: [Int32]) async {
+    static func waitForExit(of processIDs: [Int32]) async {
         guard !processIDs.isEmpty else { return }
         let deadline = ContinuousClock.now + processExitTimeout
         while ContinuousClock.now < deadline, processIDs.contains(where: { kill($0, 0) == 0 }) {
