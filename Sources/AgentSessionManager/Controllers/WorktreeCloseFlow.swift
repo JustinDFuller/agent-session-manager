@@ -252,7 +252,7 @@ final class WorktreeCloseFlow {
         var seen: Set<String> = []
         var result: [Candidate] = []
         for pane in panes where pane.worktreeIsManaged {
-            guard let checkout = pane.worktreeDirectory, seen.insert(key(checkout)).inserted else { continue }
+            guard let checkout = pane.worktreePath, seen.insert(key(checkout)).inserted else { continue }
             result.append(Candidate(pane: pane, checkout: checkout))
         }
         return result
