@@ -1,8 +1,6 @@
 import XCTest
 
 final class WorktreeCleanupFlowTests: BaseTestCase {
-    private let paneWait: TimeInterval = 25
-
     override func setUp() {
         super.setUp()
         try? Data("\"head\"".utf8).write(to: UITestAppSupport.directory.appending(path: "worktree-base-ref.json"))
@@ -16,7 +14,7 @@ final class WorktreeCleanupFlowTests: BaseTestCase {
         closePane(named: "wt-unsaved")
         let unsavedKeep = app.windows.buttons["Keep Worktree"].firstMatch
         let deleteAnyway = app.windows.buttons["Delete Anyway"].firstMatch
-        waitFor(deleteAnyway, timeout: paneWait)
+        waitFor(deleteAnyway, timeout: cleanupWait)
         XCTAssertTrue(unsavedKeep.exists)
         XCTAssertTrue(showsText("Worktree Has Unsaved Work"))
         XCTAssertTrue(
@@ -31,7 +29,7 @@ final class WorktreeCleanupFlowTests: BaseTestCase {
 
         openPane(named: "wt-unsaved")
         closePane(named: "wt-unsaved")
-        waitFor(deleteAnyway, timeout: paneWait)
+        waitFor(deleteAnyway, timeout: cleanupWait)
         deleteAnyway.click()
         waitForDisappear(app.staticTexts["pane-name-wt-unsaved"].firstMatch, timeout: 10)
         waitUntil { !FileManager.default.fileExists(atPath: GitUITestWorkspace.worktreeURL(folder: "wt-unsaved").path) }
@@ -54,7 +52,7 @@ final class WorktreeCleanupFlowTests: BaseTestCase {
 
         closePane(named: "wt-shared")
         let ok = app.windows.buttons["OK"].firstMatch
-        waitFor(ok, timeout: paneWait)
+        waitFor(ok, timeout: cleanupWait)
         XCTAssertTrue(showsText("Worktree Kept"))
         XCTAssertTrue(
             showsText("Another pane is still using it."))
@@ -72,14 +70,14 @@ final class WorktreeCleanupFlowTests: BaseTestCase {
 
         app.typeKey("k", modifierFlags: .command)
         let deleteWorktrees = app.windows.buttons["Delete Worktrees"].firstMatch
-        waitFor(deleteWorktrees, timeout: paneWait)
+        waitFor(deleteWorktrees, timeout: cleanupWait)
         XCTAssertTrue(app.windows.buttons["Keep Worktrees"].firstMatch.exists)
         XCTAssertTrue(app.windows.buttons["Cancel"].firstMatch.exists)
         screenshot("22-tab-close-dialog")
         deleteWorktrees.click()
 
         let keep = app.windows.buttons["Keep Worktree"].firstMatch
-        waitFor(keep, timeout: paneWait)
+        waitFor(keep, timeout: cleanupWait)
         XCTAssertTrue(app.windows.buttons["Delete Anyway"].firstMatch.exists)
         XCTAssertTrue(
             showsText("wt-tab-dirty has unsaved work"))
@@ -101,7 +99,7 @@ final class WorktreeCleanupFlowTests: BaseTestCase {
         openPane(named: "wt-cancel")
         app.typeKey("k", modifierFlags: .command)
         let cancel = app.windows.buttons["Cancel"].firstMatch
-        waitFor(cancel, timeout: paneWait)
+        waitFor(cancel, timeout: cleanupWait)
         cancel.click()
         waitForDisappear(cancel)
         XCTAssertTrue(app.buttons["tab-button-CleanupTab"].firstMatch.exists)
@@ -154,70 +152,6 @@ final class WorktreeCleanupFlowTests: BaseTestCase {
         waitFor(app.staticTexts["settings-leftovers-empty"].firstMatch, timeout: 15)
         screenshot("27-leftovers-empty")
     }
-
-    private func showsText(_ text: String) -> Bool {
-        let predicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)
-        return app.sheets.staticTexts.matching(predicate).firstMatch.exists
-    }
-
-    private func makeUnsavedWorktree(folder: String) {
-        GitUITestWorkspace.addManagedSecondaryWorktree(folder: folder, newTrackingBranch: "track-\(folder)")
-        let checkout = GitUITestWorkspace.worktreeURL(folder: folder)
-        try? Data("committed".utf8).write(to: checkout.appending(path: "committed.txt"))
-        GitUITestWorkspace.runGitOrFail(["add", "committed.txt"], cwd: checkout)
-        GitUITestWorkspace.runGitOrFail(
-            ["-c", "user.email=uitest@example.com", "-c", "user.name=uitest", "commit", "-m", "local work"],
-            cwd: checkout)
-        try? Data("scratch".utf8).write(to: checkout.appending(path: "scratch.txt"))
-    }
-
-    private func openPane(named name: String) {
-        app.typeKey("p", modifierFlags: .command)
-        let field = app.textFields["new-pane-name-field"]
-        waitFor(field)
-        field.click()
-        field.typeText(name)
-        app.buttons["new-pane-open-button"].click()
-        waitForDisappear(field, timeout: paneWait)
-        waitFor(app.staticTexts.matching(identifier: "pane-name-\(name)").firstMatch, timeout: 10)
-    }
-
-    private func closePane(named name: String) {
-        app.descendants(matching: .any).matching(identifier: "pane-close-\(name)").firstMatch.click()
-        let delete = app.windows.buttons["Delete Worktree"].firstMatch
-        if delete.waitForExistence(timeout: 5) { delete.click() }
-    }
-
-    private func openSettingsPanes() {
-        app.typeKey(",", modifierFlags: .command)
-        let sidebar = app.descendants(matching: .any).matching(identifier: "settings-sidebar-panes").firstMatch
-        waitFor(sidebar, timeout: 10)
-        sidebar.click()
-    }
-
-    private func select(_ row: XCUIElement) {
-        let isOn = (row.value as? NSNumber)?.intValue == 1 || (row.value as? String) == "1"
-        if !isOn { row.click() }
-    }
-
-    private func scrollToVisible(_ element: XCUIElement) {
-        let window = app.windows["AgentSessionManager Settings"]
-        let content = window.scrollViews.containing(.button, identifier: "settings-leftovers-refresh").firstMatch
-        var attempts = 0
-        while !element.exists || !window.frame.contains(element.frame), attempts < 20 {
-            content.scroll(byDeltaX: 0, deltaY: -400)
-            attempts += 1
-        }
-        waitFor(element)
-    }
-
-    private func waitUntil(timeout: TimeInterval = 30, _ condition: () -> Bool) {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition(), Date() < deadline {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-        }
-        XCTAssertTrue(condition(), "Condition was not met within \(timeout)s")
-    }
 }
 
 final class LaunchCleanupFlowTests: BaseTestCase {
@@ -233,6 +167,17 @@ final class LaunchCleanupFlowTests: BaseTestCase {
         GitUITestWorkspace.ageWorktree(folder: "stale-dirty", days: 3)
         let known = try? JSONEncoder().encode([GitUITestWorkspace.directoryURL.path])
         try? known?.write(to: UITestAppSupport.directory.appending(path: "known-repositories.json"))
+        try? Data(#"{"schemaVersion":1,"enabled":true}"#.utf8).write(
+            to: UITestAppSupport.directory.appending(path: "debug-settings.json"))
+    }
+
+    private func recordedSweepDecisions() -> String {
+        let traces = UITestAppSupport.directory.appending(path: "traces")
+        guard
+            let files = FileManager.default.enumerator(at: traces, includingPropertiesForKeys: nil)?
+                .compactMap({ $0 as? URL }).filter({ $0.pathExtension == "jsonl" })
+        else { return "" }
+        return files.compactMap { try? String(contentsOf: $0, encoding: .utf8) }.joined(separator: "\n")
     }
 
     func testLaunchRemovesAStaleCleanLeftoverAndKeepsTheRest() {
@@ -253,6 +198,23 @@ final class LaunchCleanupFlowTests: BaseTestCase {
         XCTAssertTrue(GitUITestWorkspace.localBranches().contains("track-stale-dirty"))
         XCTAssertTrue(GitUITestWorkspace.localBranches().contains("track-fresh-clean"))
         screenshot("28-after-launch-cleanup")
+
+        var decisions = recordedSweepDecisions()
+        let traceDeadline = Date().addingTimeInterval(15)
+        while !decisions.contains("worktree.leftover.skipped"), Date() < traceDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+            decisions = recordedSweepDecisions()
+        }
+        XCTAssertTrue(decisions.contains("worktree.leftover.removed"))
+        XCTAssertTrue(decisions.contains("worktree.leftover.skipped"))
+        XCTAssertTrue(decisions.contains("stale-clean"))
+        XCTAssertTrue(decisions.contains("stale-dirty"))
+        XCTAssertTrue(decisions.contains("fresh-clean"))
+        if let outputPath = ProcessInfo.processInfo.environment["SCREENSHOTS_OUTPUT_PATH"] {
+            try? decisions.write(
+                to: URL(filePath: outputPath).appending(path: "launch-sweep-traces.jsonl"),
+                atomically: true, encoding: .utf8)
+        }
 
         app.typeKey(",", modifierFlags: .command)
         let sidebar = app.descendants(matching: .any).matching(identifier: "settings-sidebar-panes").firstMatch
