@@ -564,7 +564,8 @@ final class AgentControlMutationRouter {
             try Task.checkCancellation()
         } catch is CancellationError {
             if resolved.wasCreated {
-                try? await tab.cleanupManagedWorktree(at: resolved.checkoutURL)
+                _ = await tab.removeCreatedWorktree(
+                    at: resolved.checkoutURL, deleteBranch: appSettings.deleteBranchWithWorktree)
             }
             throw CancellationError()
         }
@@ -575,7 +576,8 @@ final class AgentControlMutationRouter {
             try Task.checkCancellation()
         } catch is CancellationError {
             if resolved.wasCreated {
-                try? await tab.cleanupManagedWorktree(at: resolved.checkoutURL)
+                _ = await tab.removeCreatedWorktree(
+                    at: resolved.checkoutURL, deleteBranch: appSettings.deleteBranchWithWorktree)
             }
             throw CancellationError()
         }
@@ -755,13 +757,17 @@ final class AgentControlMutationRouter {
         }
         var results: [AgentControlCleanupResult] = []
         for pane in panes where pane.worktreeIsManaged {
-            do {
-                try await tab.cleanupWorktree(for: pane)
+            let result = await tab.removeWorktree(of: pane, deleteBranch: appSettings.deleteBranchWithWorktree)
+            switch result?.outcome {
+            case .deleted:
                 results.append(AgentControlCleanupResult(paneID: pane.id, status: "deleted", error: nil))
-            } catch {
+            case .kept(let reason):
+                results.append(AgentControlCleanupResult(paneID: pane.id, status: "kept", error: reason))
+            case .failed(let reason):
                 results.append(
-                    AgentControlCleanupResult(
-                        paneID: pane.id, status: "failed", error: String(error.localizedDescription.prefix(200))))
+                    AgentControlCleanupResult(paneID: pane.id, status: "failed", error: String(reason.prefix(200))))
+            case nil:
+                break
             }
         }
         return results

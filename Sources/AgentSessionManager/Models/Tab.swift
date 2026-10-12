@@ -19,6 +19,8 @@ struct GitCommandError: Error, LocalizedError, Equatable {
 struct GitWorktreeListEntry: Equatable {
     var path: String
     var branch: String?
+    var isLocked = false
+    var isPrunable = false
 }
 
 enum WorktreeResolutionError: Error, LocalizedError, Equatable {
@@ -113,13 +115,19 @@ final class Tab: Identifiable {
         var entries: [GitWorktreeListEntry] = []
         var currentPath: String?
         var currentBranch: String?
+        var currentLocked = false
+        var currentPrunable = false
 
         func flush() {
             if let path = currentPath {
-                entries.append(GitWorktreeListEntry(path: path, branch: currentBranch))
+                entries.append(
+                    GitWorktreeListEntry(
+                        path: path, branch: currentBranch, isLocked: currentLocked, isPrunable: currentPrunable))
             }
             currentPath = nil
             currentBranch = nil
+            currentLocked = false
+            currentPrunable = false
         }
 
         for line in output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
@@ -132,6 +140,10 @@ final class Tab: Identifiable {
                 currentPath = String(line.dropFirst("worktree ".count))
             } else if line.hasPrefix("branch ") {
                 currentBranch = String(line.dropFirst("branch ".count))
+            } else if line == "locked" || line.hasPrefix("locked ") {
+                currentLocked = true
+            } else if line == "prunable" || line.hasPrefix("prunable ") {
+                currentPrunable = true
             }
         }
         flush()
@@ -379,88 +391,11 @@ final class Tab: Identifiable {
     }
 
     private func runGitOutput(_ args: [String]) async throws -> String {
-        let cwd = directory.path
-        return try await TracingService.shared.withSpan(
-            "tab.git.command",
-            attributes: ["cwd": cwd, "args": args.joined(separator: " ")]
-        ) {
-            let process = Process()
-            let output = try await withTaskCancellationHandler(
-                operation: {
-                    try await withCheckedThrowingContinuation { continuation in
-                        let outPipe = Pipe()
-                        let errPipe = Pipe()
-                        process.executableURL = URL(filePath: "/usr/bin/git")
-                        process.arguments = args
-                        process.currentDirectoryURL = self.directory
-                        process.standardOutput = outPipe
-                        process.standardError = errPipe
-                        process.terminationHandler = { proc in
-                            let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-                            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                            if proc.terminationStatus == 0 {
-                                continuation.resume(returning: String(data: outData, encoding: .utf8) ?? "")
-                            } else {
-                                let stderr = String(data: errData, encoding: .utf8) ?? ""
-                                continuation.resume(
-                                    throwing: GitCommandError(
-                                        arguments: args, exitCode: proc.terminationStatus, stderr: stderr))
-                            }
-                        }
-                        do {
-                            try process.run()
-                        } catch {
-                            continuation.resume(throwing: error)
-                        }
-                    }
-                },
-                onCancel: {
-                    if process.isRunning { process.terminate() }
-                })
-            try Task.checkCancellation()
-            return output
-        }
+        try await GitRunner.output(args, in: directory)
     }
 
     private func runGit(_ args: [String]) async throws {
-        let cwd = directory.path
-        try await TracingService.shared.withSpan(
-            "tab.git.command",
-            attributes: ["cwd": cwd, "args": args.joined(separator: " ")]
-        ) {
-            let process = Process()
-            try await withTaskCancellationHandler(
-                operation: {
-                    try await withCheckedThrowingContinuation { continuation in
-                        let errPipe = Pipe()
-                        process.executableURL = URL(filePath: "/usr/bin/git")
-                        process.arguments = args
-                        process.currentDirectoryURL = self.directory
-                        process.standardOutput = FileHandle.nullDevice
-                        process.standardError = errPipe
-                        process.terminationHandler = { proc in
-                            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                            let stderr = String(data: errData, encoding: .utf8) ?? ""
-                            if proc.terminationStatus == 0 {
-                                continuation.resume()
-                            } else {
-                                continuation.resume(
-                                    throwing: GitCommandError(
-                                        arguments: args, exitCode: proc.terminationStatus, stderr: stderr))
-                            }
-                        }
-                        do {
-                            try process.run()
-                        } catch {
-                            continuation.resume(throwing: error)
-                        }
-                    }
-                },
-                onCancel: {
-                    if process.isRunning { process.terminate() }
-                })
-            try Task.checkCancellation()
-        }
+        _ = try await GitRunner.output(args, in: directory)
     }
 
     @discardableResult
@@ -802,15 +737,16 @@ final class Tab: Identifiable {
         panes.removeAll { $0.id == pane.id }
     }
 
-    func cleanupWorktree(for pane: Pane) async throws {
-        guard pane.worktreeIsManaged, let path = pane.worktreeDirectory else { return }
-        guard FileManager.default.fileExists(atPath: path.path) else { return }
-        try await runGit(["worktree", "remove", path.path])
+    func removeWorktree(
+        of pane: Pane, force: Bool = false, deleteBranch: Bool
+    ) async -> WorktreeCleanupResult? {
+        guard pane.worktreeIsManaged, let path = pane.worktreeDirectory else { return nil }
+        return await WorktreeCleanup.remove(
+            repository: directory, checkout: path, force: force, deleteBranch: deleteBranch)
     }
 
-    func cleanupManagedWorktree(at path: URL) async throws {
-        guard FileManager.default.fileExists(atPath: path.path) else { return }
-        try await runGit(["worktree", "remove", path.path])
+    func removeCreatedWorktree(at path: URL, deleteBranch: Bool) async -> WorktreeCleanupResult {
+        await WorktreeCleanup.remove(repository: directory, checkout: path, deleteBranch: deleteBranch)
     }
 
     func movePane(from source: IndexSet, to destination: Int) {

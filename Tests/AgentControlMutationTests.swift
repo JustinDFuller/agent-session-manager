@@ -164,10 +164,14 @@ final class AgentControlMutationTests: XCTestCase {
     func testCleanupPolicyRequiresChoiceAndReportsPartialFailures() async throws {
         let state = AppState()
         let settings = AppSettings()
-        let tab = Tab(name: "Managed Tab", directory: URL(filePath: NSTemporaryDirectory()))
+        let base = URL(filePath: NSTemporaryDirectory()).appending(path: "cleanup-failure-\(UUID().uuidString)")
+        let checkout = base.appending(path: "checkout")
+        try FileManager.default.createDirectory(at: checkout, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let tab = Tab(name: "Managed Tab", directory: base)
         let pane = tab.addPane(
             name: "Managed Pane", harness: .claude,
-            worktreeDirectory: URL(filePath: NSTemporaryDirectory()), worktreeIsManaged: true,
+            worktreeDirectory: checkout, worktreeIsManaged: true,
             appSettings: settings)
         state.tabs = [tab]
         state.activeTabID = tab.id

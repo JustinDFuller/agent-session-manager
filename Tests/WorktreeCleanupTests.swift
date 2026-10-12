@@ -118,8 +118,9 @@ final class WorktreeCleanupGitIntegrationTests: XCTestCase {
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: worktreeURL.path))
 
-        try await tab.cleanupWorktree(for: pane)
+        let result = await tab.removeWorktree(of: pane, deleteBranch: false)
 
+        XCTAssertEqual(result?.isDeleted, true)
         XCTAssertFalse(FileManager.default.fileExists(atPath: worktreeURL.path))
     }
 
@@ -135,7 +136,8 @@ final class WorktreeCleanupGitIntegrationTests: XCTestCase {
             name: "external", tab: tab, harness: .claude, worktreeDirectory: externalPath, worktreeIsManaged: false)
         XCTAssertFalse(pane.worktreeIsManaged)
 
-        try await tab.cleanupWorktree(for: pane)
+        let result = await tab.removeWorktree(of: pane, deleteBranch: true)
+        XCTAssertNil(result)
         XCTAssertTrue(FileManager.default.fileExists(atPath: externalPath.path))
 
         try FileManager.default.removeItem(at: externalPath)
@@ -153,7 +155,8 @@ final class WorktreeCleanupGitIntegrationTests: XCTestCase {
             name: "takeover", tab: tab, harness: .codex, worktreeDirectory: worktreeURL, worktreeIsManaged: true)
         XCTAssertTrue(pane.worktreeIsManaged)
 
-        try await tab.cleanupWorktree(for: pane)
+        let result = await tab.removeWorktree(of: pane, deleteBranch: false)
+        XCTAssertEqual(result?.isDeleted, true)
         XCTAssertFalse(FileManager.default.fileExists(atPath: worktreeURL.path))
     }
 
@@ -165,7 +168,8 @@ final class WorktreeCleanupGitIntegrationTests: XCTestCase {
             name: "nonexistent", tab: tab, harness: .claude, worktreeDirectory: nonexistent, worktreeIsManaged: true)
         XCTAssertTrue(pane.worktreeIsManaged)
 
-        try await tab.cleanupWorktree(for: pane)
+        let result = await tab.removeWorktree(of: pane, deleteBranch: false)
+        XCTAssertEqual(result?.isDeleted, true)
     }
 
     func testCleanupWorktreeWorksAfterClosePane() async throws {
@@ -185,7 +189,40 @@ final class WorktreeCleanupGitIntegrationTests: XCTestCase {
         tab.closePane(pane)
         XCTAssertFalse(tab.panes.contains(where: { $0.id == pane.id }))
 
-        try await tab.cleanupWorktree(for: pane)
+        let result = await tab.removeWorktree(of: pane, deleteBranch: false)
+        XCTAssertEqual(result?.isDeleted, true)
         XCTAssertFalse(FileManager.default.fileExists(atPath: worktreeURL.path))
+    }
+
+    func testRemoveWorktreeNeverRemovesRegisteredWorktreeOutsideManagedFoldersForUnmanagedPane() async throws {
+        let repository = try GitTestRepository.make()
+        defer { repository.cleanUp() }
+        let outside = repository.root.deletingLastPathComponent().appending(path: "tmp-agent-worktree")
+        try repository.git(["worktree", "add", outside.path, "-b", "scratch", "main"])
+        let tab = Tab(name: "T", directory: repository.root)
+        let pane = Pane(
+            name: "scratch", tab: tab, harness: .claude, worktreeDirectory: outside, worktreeIsManaged: false)
+        let result = await tab.removeWorktree(of: pane, force: true, deleteBranch: true)
+        XCTAssertNil(result)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.path))
+        XCTAssertTrue(try repository.isRegistered(outside))
+        XCTAssertTrue(try repository.branches().contains("scratch"))
+    }
+
+    func testRemoveWorktreeWithoutWorktreeDirectoryDoesNothing() async {
+        let tab = Tab(name: "T", directory: URL(filePath: "/tmp"))
+        let pane = Pane(name: "p", tab: tab, harness: .claude, worktreeDirectory: nil, worktreeIsManaged: true)
+        let result = await tab.removeWorktree(of: pane, deleteBranch: true)
+        XCTAssertNil(result)
+    }
+
+    func testRemoveCreatedWorktreeRemovesAndDeletesBranch() async throws {
+        let repository = try GitTestRepository.make()
+        defer { repository.cleanUp() }
+        let checkout = try repository.addManagedWorktree(name: "created")
+        let tab = Tab(name: "T", directory: repository.root)
+        let result = await tab.removeCreatedWorktree(at: checkout, deleteBranch: true)
+        XCTAssertEqual(result.outcome, .deleted(branch: .deleted("created")))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: checkout.path))
     }
 }

@@ -62,14 +62,16 @@ final class WorktreeResolutionTests: XCTestCase {
         XCTAssertFalse(resolved.isExternalTakeover)
         XCTAssertTrue(resolved.processDirectory.path.hasSuffix(Tab.gitWorktreeAddPath(name: slug)))
 
-        try await tab.cleanupWorktree(
-            for: Pane(
+        _ = await tab.removeWorktree(
+            of: Pane(
                 name: slug,
                 tab: tab,
                 harness: .claude,
                 worktreeDirectory: resolved.processDirectory,
                 worktreeIsManaged: true
-            ))
+            ),
+            deleteBranch: false
+        )
     }
 
     func testNovelSimpleNameWithoutDefaultBranchThrows() async throws {
@@ -93,14 +95,16 @@ final class WorktreeResolutionTests: XCTestCase {
         XCTAssertEqual(resolved.paneTitle, "loose-branch")
         XCTAssertFalse(resolved.isExternalTakeover)
 
-        try await tab.cleanupWorktree(
-            for: Pane(
+        _ = await tab.removeWorktree(
+            of: Pane(
                 name: "loose-branch",
                 tab: tab,
                 harness: .claude,
                 worktreeDirectory: resolved.processDirectory,
                 worktreeIsManaged: true
-            ))
+            ),
+            deleteBranch: false
+        )
     }
 
     func testPrimaryCheckoutBranchReturnsExternalTakeover() async throws {
@@ -126,14 +130,16 @@ final class WorktreeResolutionTests: XCTestCase {
         XCTAssertFalse(resolved.isExternalTakeover)
         XCTAssertTrue(resolved.processDirectory.path.hasSuffix(rel))
 
-        try await tab.cleanupWorktree(
-            for: Pane(
+        _ = await tab.removeWorktree(
+            of: Pane(
                 name: "wt-sidecar",
                 tab: tab,
                 harness: .claude,
                 worktreeDirectory: resolved.processDirectory,
                 worktreeIsManaged: true
-            ))
+            ),
+            deleteBranch: false
+        )
     }
 
     func testRemoteStyleRefFetchesAndCreatesWorktree() async throws {

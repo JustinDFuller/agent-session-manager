@@ -373,6 +373,7 @@ struct ContentView: View {
                 if let value = SettingsPersistence.load(WorktreeCleanupBehavior.self, from: "worktree-cleanup.json") {
                     appSettings.worktreeCleanupBehavior = value
                 }
+                SettingsPersistence.loadWorktreeCleanupFlags(into: appSettings)
                 if let value = SettingsPersistence.load(
                     ExistingWorktreeManagement.self, from: "existing-worktree-management.json")
                 {
@@ -583,7 +584,7 @@ struct ContentView: View {
                 pendingCleanupTab = nil
                 tab.closePane(pane)
                 SessionPersistence.save(appState: appState)
-                Task { try? await tab.cleanupWorktree(for: pane) }
+                Task { _ = await tab.removeWorktree(of: pane, deleteBranch: appSettings.deleteBranchWithWorktree) }
             }
             Button("Cancel", role: .cancel) {
                 pendingCleanupPane = nil
@@ -613,7 +614,7 @@ struct ContentView: View {
                 appState.clearNotification(paneID: pane.id)
                 tab.closePane(pane)
                 SessionPersistence.save(appState: appState)
-                Task { try? await tab.cleanupWorktree(for: pane) }
+                Task { _ = await tab.removeWorktree(of: pane, deleteBranch: appSettings.deleteBranchWithWorktree) }
             }
             Button("Cancel", role: .cancel) {
                 if let pane = pendingPRResolutionPane, let tab = pendingPRResolutionTab {
@@ -673,7 +674,7 @@ struct ContentView: View {
         case .delete where pane.worktreeIsManaged:
             tab.closePane(pane)
             SessionPersistence.save(appState: appState)
-            Task { try? await tab.cleanupWorktree(for: pane) }
+            Task { _ = await tab.removeWorktree(of: pane, deleteBranch: appSettings.deleteBranchWithWorktree) }
         default:
             tab.closePane(pane)
             SessionPersistence.save(appState: appState)
