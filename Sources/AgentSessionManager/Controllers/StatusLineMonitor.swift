@@ -45,7 +45,11 @@ final class StatusLineMonitor {
     let hookLogFilePath: String
     let hookLogScriptFilePath: String
     let codexHookRecordFilePath: String
+    let codexHookQueueFilePath: String
+    let codexHookDiagnosticFilePath: String
     let codexHookScriptFilePath: String
+    let codexLaunchGeneration: String
+    let codexAdapter: CodexCompatibilityAdapter?
     private let workingDirectory: String?
     let harness: Harness
     private let isClaude: Bool
@@ -103,10 +107,12 @@ final class StatusLineMonitor {
         opencodePort: Int? = nil,
         opencodeSessionID: String? = nil,
         opencodeEnvironment: [String: String] = [:],
+        codexAdapter: CodexCompatibilityAdapter? = nil,
         customFieldEnvironment: [String: String] = [:]
     ) {
         self.paneID = paneID
-        self.paneName = paneName.isEmpty ? String(paneID.uuidString.prefix(8)) : paneName
+        let resolvedPaneName = paneName.isEmpty ? String(paneID.uuidString.prefix(8)) : paneName
+        self.paneName = resolvedPaneName
         self.tabID = tabID
         self.tabName = tabName
         self.workingDirectory = workingDirectory
@@ -123,10 +129,20 @@ final class StatusLineMonitor {
             NSTemporaryDirectory() + "agent-session-manager-claude-hooklog-script-\(paneID.uuidString).py"
         codexHookRecordFilePath =
             NSTemporaryDirectory() + "agent-session-manager-codex-session-\(paneID.uuidString).json"
-        codexHookScriptFilePath =
+        let resolvedCodexLaunchGeneration = UUID().uuidString
+        codexLaunchGeneration = resolvedCodexLaunchGeneration
+        self.codexAdapter = codexAdapter
+        let resolvedCodexHookQueueFilePath =
+            NSTemporaryDirectory()
+            + "agent-session-manager-codex-hooks-\(paneID.uuidString)-\(resolvedCodexLaunchGeneration).jsonl"
+        codexHookQueueFilePath = resolvedCodexHookQueueFilePath
+        let resolvedCodexHookDiagnosticFilePath =
+            NSTemporaryDirectory()
+            + "agent-session-manager-codex-hook-diagnostic-\(paneID.uuidString)-\(resolvedCodexLaunchGeneration).txt"
+        codexHookDiagnosticFilePath = resolvedCodexHookDiagnosticFilePath
+        let resolvedCodexHookScriptFilePath =
             NSTemporaryDirectory() + "agent-session-manager-codex-hook-\(paneID.uuidString).py"
-        let resolvedPaneName = self.paneName
-        let resolvedCodexHookRecordPath = codexHookRecordFilePath
+        codexHookScriptFilePath = resolvedCodexHookScriptFilePath
         providerContext = workingDirectory.map { cwd in
             StatusProviderContext(
                 paneID: paneID,
@@ -139,9 +155,13 @@ final class StatusLineMonitor {
                 launchArgs: [],
                 environment: [:],
                 detectedHarnessVersion: nil,
-                codexHookRecordPath: harness == .codex ? resolvedCodexHookRecordPath : nil,
+                codexHookRecordPath: nil,
                 opencodePort: opencodePort,
                 opencodeSessionID: opencodeSessionID,
+                codexHookQueuePath: harness == .codex ? resolvedCodexHookQueueFilePath : nil,
+                codexHookDiagnosticPath: harness == .codex ? resolvedCodexHookDiagnosticFilePath : nil,
+                codexLaunchGeneration: harness == .codex ? resolvedCodexLaunchGeneration : nil,
+                codexAdapter: harness == .codex ? codexAdapter : nil,
                 opencodeEnvironment: opencodeEnvironment
             )
         }
@@ -389,6 +409,8 @@ final class StatusLineMonitor {
         try? FileManager.default.removeItem(atPath: hookLogScriptFilePath)
         try? FileManager.default.removeItem(atPath: codexHookRecordFilePath)
         try? FileManager.default.removeItem(atPath: codexHookScriptFilePath)
+        try? FileManager.default.removeItem(atPath: codexHookQueueFilePath)
+        try? FileManager.default.removeItem(atPath: codexHookDiagnosticFilePath)
     }
 
     func configureCursorAttentionWatcher(enabled: Bool) {
@@ -1226,36 +1248,99 @@ extension StatusLineMonitor {
 }
 
 extension StatusLineMonitor {
-    func writeCodexHookScript() {
+    func writeCodexHookScript() throws {
         let script = """
             #!/usr/bin/env python3
+            import fcntl
             import json
             import os
             import sys
             import time
 
+            def report_failure(code):
+                try:
+                    path = os.environ.get("AGENT_SESSION_MANAGER_CODEX_HOOK_DIAGNOSTIC_PATH")
+                    if not path:
+                        return
+                    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                    os.write(descriptor, code.encode("ascii")[:64])
+                    os.close(descriptor)
+                except BaseException:
+                    pass
+
+            def silent_exception(error_type, error_value, error_traceback):
+                report_failure("hook_write_failed")
+
+            sys.excepthook = silent_exception
+
+            def bounded(value, limit=128):
+                if not isinstance(value, str):
+                    return None
+                return value.encode("utf-8", errors="replace")[:limit].decode("utf-8", errors="ignore")
+
             payload = json.load(sys.stdin)
+            hook_event_name = bounded(payload.get("hook_event_name"), 64) or ""
             record = {
                 "pane_id": os.environ.get("AGENT_SESSION_MANAGER_PANE_ID", ""),
                 "tab_id": os.environ.get("AGENT_SESSION_MANAGER_TAB_ID", ""),
-                "session_id": payload.get("session_id", ""),
-                "cwd": payload.get("cwd", ""),
-                "model": payload.get("model"),
-                "transcript_path": payload.get("transcript_path"),
-                "hook_event_name": payload.get("hook_event_name", ""),
-                "timestamp": time.time()
+                "launch_generation": os.environ.get("AGENT_SESSION_MANAGER_CODEX_LAUNCH_GENERATION", ""),
+                "hook_event_name": hook_event_name,
+                "session_id": bounded(payload.get("session_id")),
+                "turn_id": bounded(payload.get("turn_id")),
+                "request_id": bounded(payload.get("request_id")),
+                "timestamp": time.time(),
+                "source": bounded(payload.get("source"), 64) or "hook",
+                "model": bounded(payload.get("model"), 128),
+                "transcript_path": bounded(payload.get("transcript_path"), 1024),
+                "result": "interrupted" if hook_event_name == "Interrupt" else None
             }
-            path = os.environ["AGENT_SESSION_MANAGER_CODEX_HOOK_RECORD_PATH"]
-            tmp_path = path + ".tmp"
-            with open(tmp_path, "w", encoding="utf-8") as handle:
-                json.dump(record, handle, separators=(",", ":"))
-            os.replace(tmp_path, path)
+            encoded = json.dumps(record, separators=(",", ":")).encode("utf-8") + b"\\n"
+            path = os.environ["AGENT_SESSION_MANAGER_CODEX_HOOK_QUEUE_PATH"]
+            with open(path, "a+b", buffering=0) as handle:
+                lock_deadline = time.monotonic() + 0.4
+                while True:
+                    try:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= lock_deadline:
+                            report_failure("queue_lock_timeout")
+                            sys.exit(0)
+                        time.sleep(0.01)
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() + len(encoded) > 1048576:
+                    start = max(0, handle.tell() - 917504)
+                    handle.seek(start)
+                    existing = handle.read(917504)
+                    if start > 0:
+                        existing = existing[existing.find(b"\\n") + 1:] if b"\\n" in existing else b""
+                    handle.seek(0)
+                    handle.truncate()
+                    handle.write(existing)
+                handle.seek(0, os.SEEK_END)
+                handle.write(encoded)
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
             """
-        try? script.write(to: URL(filePath: codexHookScriptFilePath), atomically: true, encoding: .utf8)
-        try? FileManager.default.setAttributes(
+        try script.write(to: URL(filePath: codexHookScriptFilePath), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
             [.posixPermissions: 0o700],
             ofItemAtPath: codexHookScriptFilePath)
-        FileManager.default.createFile(atPath: codexHookRecordFilePath, contents: nil)
+        if !FileManager.default.createFile(atPath: codexHookQueueFilePath, contents: nil),
+            !FileManager.default.fileExists(atPath: codexHookQueueFilePath)
+        {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: codexHookQueueFilePath)
+        if !FileManager.default.createFile(atPath: codexHookDiagnosticFilePath, contents: nil),
+            !FileManager.default.fileExists(atPath: codexHookDiagnosticFilePath)
+        {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: codexHookDiagnosticFilePath)
     }
 
     func writeHookLogScript() {
