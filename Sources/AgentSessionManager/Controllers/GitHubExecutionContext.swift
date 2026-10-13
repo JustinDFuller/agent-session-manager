@@ -20,7 +20,7 @@ struct GitHubExecutionContext: Sendable {
             timeout: timeout)
         var mergedEnvironment = inheritedEnvironment
         for name in [
-            "HOME", "PATH", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "GH_HOST", "GH_TOKEN",
+            "HOME", "PATH", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "GH_HOST", "GH_REPO", "GH_TOKEN",
             "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
         ] where mergedEnvironment[name] == nil {
             mergedEnvironment[name] = shellEnvironment[name]
@@ -48,7 +48,7 @@ struct GitHubExecutionContext: Sendable {
         else { return [:] }
         let exported = output[markerRange.upperBound...]
         let allowed = Set([
-            "HOME", "PATH", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "GH_HOST", "GH_TOKEN",
+            "HOME", "PATH", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "GH_HOST", "GH_REPO", "GH_TOKEN",
             "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
         ])
         var result: [String: String] = [:]

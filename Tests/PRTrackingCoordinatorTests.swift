@@ -469,6 +469,39 @@ final class PRTrackingCoordinatorTests: XCTestCase {
         XCTAssertEqual(dataUpdates, 0)
     }
 
+    func testSuccessfulQueryRecoversVisiblePRAfterFailure() {
+        let coordinator = PRTrackingCoordinator()
+        let paneID = UUID()
+        let existing = PullRequest(number: 17, title: "Current", state: "open", url: "u")
+        var deliveredData: PullRequest?
+        var deliveredStatus: StatusLineData.PRTrackingState?
+        coordinator.subscribers[paneID] = PRTrackingCoordinator.SubscriberRecord(
+            workingDirectory: "/tmp",
+            owner: "owner",
+            repo: "repo",
+            branchName: "feature",
+            lastData: existing,
+            status: .current,
+            callback: { deliveredData = $0 },
+            statusCallback: { deliveredStatus = $0 },
+            isActive: true)
+        coordinator.applyQueryFailure(.authentication, paneIDs: [paneID])
+        let alias = "pane_" + paneID.uuidString.replacingOccurrences(of: "-", with: "")
+        let result: [String: Any] = [
+            alias: [
+                "pullRequests": [
+                    "nodes": [["number": 18, "title": "Recovered", "state": "OPEN", "url": "url"]]
+                ]
+            ]
+        ]
+
+        XCTAssertEqual(coordinator.deliverPRResults(from: result, paneIDs: [paneID]), 1)
+        XCTAssertEqual(coordinator.subscribers[paneID]?.lastData?.number, 18)
+        XCTAssertEqual(coordinator.subscribers[paneID]?.status, .current)
+        XCTAssertEqual(deliveredData?.number, 18)
+        XCTAssertEqual(deliveredStatus, .current)
+    }
+
     func testPartialGraphQLResultRetainsPRAndReportsParseFailure() {
         let coordinator = PRTrackingCoordinator()
         let paneID = UUID()

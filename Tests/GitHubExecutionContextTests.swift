@@ -15,18 +15,22 @@ final class GitHubExecutionContextTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wrapper.path)
         let shell = root.appending(path: "interactive-shell")
         try
-            "#!/bin/sh\nexport PATH='\(bin.path)'\nexport GH_TOKEN=shell-secret\nexport GH_CONFIG_DIR=/shell/config\nprintf 'startup noise\\n'\nprintf '\\n\(GitHubExecutionContext.environmentMarker)\\n'\n/usr/bin/env -0\n"
+            "#!/bin/sh\nexport PATH='\(bin.path)'\nexport GH_TOKEN=shell-secret\nexport GH_CONFIG_DIR=/shell/config\nexport GH_REPO=github.com/shell-owner/shell-repo\nprintf 'startup noise\\n'\nprintf '\\n\(GitHubExecutionContext.environmentMarker)\\n'\n/usr/bin/env -0\n"
             .write(
                 to: shell, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shell.path)
 
         let context = await GitHubExecutionContext.resolve(
-            inheritedEnvironment: ["PATH": "/fallback", "GH_TOKEN": "inherited-secret"],
+            inheritedEnvironment: [
+                "PATH": "/fallback", "GH_TOKEN": "inherited-secret",
+                "GH_REPO": "github.com/inherited-owner/inherited-repo",
+            ],
             shellPath: shell.path)
 
         XCTAssertEqual(context.executable?.path, wrapper.path)
         XCTAssertEqual(context.environment["GH_TOKEN"], "inherited-secret")
         XCTAssertEqual(context.environment["GH_CONFIG_DIR"], "/shell/config")
+        XCTAssertEqual(context.environment["GH_REPO"], "github.com/inherited-owner/inherited-repo")
         XCTAssertTrue(context.environment["PATH"]?.contains(bin.path) == true)
         XCTAssertFalse(context.environment.values.contains("shell-secret"))
     }
@@ -78,11 +82,12 @@ final class GitHubExecutionContextTests: XCTestCase {
 
     func testExportedEnvironmentIgnoresStartupNoiseAndUnapprovedValues() {
         let text =
-            "startup banner\n\(GitHubExecutionContext.environmentMarker)\nPATH=/bin\0GH_TOKEN=secret\0PASSWORD=secret\0"
+            "startup banner\n\(GitHubExecutionContext.environmentMarker)\nPATH=/bin\0GH_REPO=github.com/owner/repo\0GH_TOKEN=secret\0PASSWORD=secret\0"
 
         let environment = GitHubExecutionContext.parseExportedEnvironment(Data(text.utf8))
 
         XCTAssertEqual(environment["PATH"], "/bin")
+        XCTAssertEqual(environment["GH_REPO"], "github.com/owner/repo")
         XCTAssertEqual(environment["GH_TOKEN"], "secret")
         XCTAssertNil(environment["PASSWORD"])
     }
