@@ -105,6 +105,40 @@ extension Pane {
                 )
             }
         }
+        statusLineMonitor?.onCodexSessionBound = { [weak appState, weak self] id, transcriptPath in
+            Task { @MainActor in
+                guard let pane = self else { return }
+                pane.codexSessionID = id
+                pane.codexTranscriptPath = transcriptPath
+                pane.codexFreshStartNotice = false
+                if let requestedID = pane.codexExpectedResumeSessionID {
+                    pane.codexExpectedResumeSessionID = nil
+                    if requestedID != id {
+                        InvariantReporter.shared.violated(
+                            .codexContinuationIdentity,
+                            context: [
+                                "pane.id": pane.id.uuidString,
+                                "pane.name": pane.name,
+                                "tab.id": pane.tab?.id.uuidString ?? "unknown",
+                                "tab.name": pane.tab?.name ?? "unknown",
+                                "requested_session_id_prefix": String(requestedID.prefix(12)),
+                                "bound_session_id_prefix": String(id.prefix(12)),
+                            ])
+                    }
+                }
+                TracingService.shared.record(
+                    "session.pane.codex_identity.saved",
+                    attributes: [
+                        "pane.id": pane.id.uuidString,
+                        "pane.name": pane.name,
+                        "tab.id": pane.tab?.id.uuidString ?? "unknown",
+                        "tab.name": pane.tab?.name ?? "unknown",
+                        "session_id_prefix": String(id.prefix(12)),
+                        "transcript_available": transcriptPath == nil ? "false" : "true",
+                    ])
+                if let appState { SessionPersistence.save(appState: appState) }
+            }
+        }
         statusLineMonitor?.onOpencodeSessionBound = { [weak appState, weak self] id in
             Task { @MainActor in
                 self?.opencodeRaceLossRestarted = false

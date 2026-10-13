@@ -371,6 +371,64 @@ final class SessionPersistenceNotificationTests: XCTestCase {
         XCTAssertEqual(disabledEvent.attributes["result"], "disabled")
     }
 
+    func testRestoreLegacyCodexPaneShowsFreshStartNotice() throws {
+        let subdirectory = "session-restore-legacy-codex-\(UUID().uuidString)"
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: subdirectory)
+        let worktree = FileManager.default.temporaryDirectory
+            .appending(path: "codex-legacy-restore-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let paneID = UUID()
+        let tabID = UUID()
+        let session = PersistedSession(
+            tabs: [
+                PersistedTab(
+                    id: tabID,
+                    name: "legacy-codex-tab",
+                    directory: worktree.path,
+                    baseBranchOverride: nil,
+                    panes: [
+                        PersistedPane(
+                            id: paneID,
+                            name: "legacy-codex-pane",
+                            harness: .codex,
+                            worktreeDirectory: worktree.path,
+                            extraArgs: ["--model", "gpt-5.1"],
+                            agentControlInjectionEnabled: false
+                        )
+                    ]
+                )
+            ],
+            activeTabIndex: 0
+        )
+        try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        try JSONEncoder().encode(session).write(to: appSupport.appending(path: "sessions.json"))
+        PersistenceHelpers.overrideAppSupportSubdirectory = subdirectory
+        let settings = AppSettings()
+        settings.agentControlInjectionPolicy = .never
+        settings.continueOnRestart = true
+        let appState = AppState()
+        defer {
+            for tab in appState.tabs {
+                for pane in tab.panes {
+                    pane.terminalController?.terminate()
+                    pane.removeStatusLineMonitor()
+                }
+            }
+            PersistenceHelpers.overrideAppSupportSubdirectory = nil
+            try? FileManager.default.removeItem(at: appSupport)
+            try? FileManager.default.removeItem(at: worktree)
+        }
+
+        SessionPersistence.restore(into: appState, appSettings: settings)
+
+        let restoredPane = try XCTUnwrap(appState.tabs.first?.panes.first)
+        XCTAssertEqual(restoredPane.id, paneID)
+        XCTAssertNil(restoredPane.codexSessionID)
+        XCTAssertNil(restoredPane.codexTranscriptPath)
+        XCTAssertTrue(restoredPane.codexFreshStartNotice)
+    }
+
     func testOpenCodeSessionIDRoundTripInPersistedPane() throws {
         let persisted = PersistedPane(
             id: UUID(), name: "p", harness: .opencode,
@@ -379,6 +437,37 @@ final class SessionPersistenceNotificationTests: XCTestCase {
         let data = try JSONEncoder().encode(persisted)
         let decoded = try JSONDecoder().decode(PersistedPane.self, from: data)
         XCTAssertEqual(decoded.opencodeSessionID, "ses_abc123")
+    }
+
+    func testCodexIdentityRoundTripsWithPersistedPane() throws {
+        let persisted = PersistedPane(
+            id: UUID(), name: "p", harness: .codex,
+            profileID: UUID(),
+            extraArgs: ["--model", "gpt-5.1"],
+            codexSessionID: "session-current",
+            codexTranscriptPath: "/tmp/current-rollout.jsonl"
+        )
+        let decoded = try JSONDecoder().decode(PersistedPane.self, from: JSONEncoder().encode(persisted))
+        XCTAssertEqual(decoded.codexSessionID, "session-current")
+        XCTAssertEqual(decoded.codexTranscriptPath, "/tmp/current-rollout.jsonl")
+        XCTAssertEqual(decoded.extraArgs, ["--model", "gpt-5.1"])
+        XCTAssertEqual(decoded.profileID, persisted.profileID)
+    }
+
+    func testLegacyCodexPaneDefaultsConversationIdentityNil() throws {
+        let json = Data(
+            """
+            {
+              "id": "00000000-0000-0000-0000-000000000001",
+              "name": "p",
+              "harness": "codex",
+              "isPriority": false,
+              "worktreeIsManaged": false
+            }
+            """.utf8)
+        let decoded = try JSONDecoder().decode(PersistedPane.self, from: json)
+        XCTAssertNil(decoded.codexSessionID)
+        XCTAssertNil(decoded.codexTranscriptPath)
     }
 
     func testLegacyPaneDefaultsOpenCodeSessionIDNil() throws {
@@ -475,6 +564,52 @@ final class SessionPersistenceNotificationTests: XCTestCase {
 
         XCTAssertEqual(pane.opencodeSessionID, "ses_from_monitor")
         XCTAssertFalse(pane.opencodeRaceLossRestarted)
+    }
+
+    func testCodexBindingMismatchReportsInvariantAndUpdatesSavedForegroundIdentity() async throws {
+        InvariantReporter.shared.resetForTesting()
+        InvariantReporter.shared.enableTestCapture()
+        defer { InvariantReporter.shared.resetForTesting() }
+        let subdirectory = "agent-session-manager-codex-identity-\(UUID().uuidString)"
+        let support = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: subdirectory)
+        PersistenceHelpers.overrideAppSupportSubdirectory = subdirectory
+        defer {
+            PersistenceHelpers.overrideAppSupportSubdirectory = nil
+            try? FileManager.default.removeItem(at: support)
+        }
+        let appState = AppState()
+        let tab = Tab(id: UUID(), name: "T", directory: URL(filePath: "/tmp"))
+        let pane = Pane(name: "P", tab: tab, harness: .codex)
+        tab.panes.append(pane)
+        appState.tabs.append(tab)
+        pane.codexExpectedResumeSessionID = "requested-session"
+        pane.installTerminalController(TerminalController())
+        let monitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: "/tmp",
+            harness: .codex,
+            processStartTime: Date(),
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"))
+        pane.installStatusLineMonitor(monitor)
+        pane.bindNotifications(appState: appState, isPriority: false)
+
+        monitor.onCodexSessionBound?("bound-session", "/tmp/rollout.jsonl")
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(pane.codexSessionID, "bound-session")
+        XCTAssertEqual(pane.codexTranscriptPath, "/tmp/rollout.jsonl")
+        XCTAssertNil(pane.codexExpectedResumeSessionID)
+        XCTAssertTrue(
+            InvariantReporter.shared.violationsForTesting.contains {
+                $0.invariantID == "codex.continuation.identity"
+                    && $0.context["requested_session_id_prefix"] == "requested-se"
+                    && $0.context["bound_session_id_prefix"] == "bound-sessio"
+            })
     }
 
     func testOpencodePortRaceLossRestartsPaneWithFreshPortOnce() async {

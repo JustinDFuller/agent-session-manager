@@ -30,6 +30,46 @@ struct PaneView: View {
                 statusLine
             }
 
+            if pane.terminalController != nil, case .failed(let error) = pane.setupState {
+                VStack(spacing: 12) {
+                    Text(error)
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.center)
+                    Button("Dismiss") { pane.setupState = nil }
+                        .buttonStyle(.bordered)
+                }
+                .padding(16)
+                .background(Theme.overlayMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.1)))
+                .accessibilityIdentifier("pane-refresh-error-\(pane.name)")
+            }
+            if pane.terminalController != nil,
+                case .codexResumeUnavailable(_, let reason) = pane.setupState
+            {
+                codexResumeRecovery(reason)
+                    .padding(16)
+                    .background(Theme.overlayMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.1)))
+                    .accessibilityIdentifier("codex-continuation-recovery-\(pane.name)")
+            }
+            if pane.codexFreshStartNotice {
+                VStack(spacing: 8) {
+                    Text("No saved Codex conversation identity was available, so this pane started fresh.")
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.center)
+                    Button("Dismiss") { pane.codexFreshStartNotice = false }
+                        .buttonStyle(.bordered)
+                }
+                .padding(16)
+                .background(Theme.overlayMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.1)))
+                .accessibilityIdentifier("codex-continuation-fresh-start-\(pane.name)")
+            }
             if case .exited(let code) = pane.terminalController?.processState,
                 appSettings.exitBehavior == .prompt
             {
@@ -562,6 +602,9 @@ struct PaneView: View {
             .layoutPriority(1)
             .id(pane.restartToken)
             .accessibilityIdentifier("pane-terminal-\(pane.name)")
+        } else if case .codexResumeUnavailable(_, let reason) = pane.setupState {
+            codexResumeRecovery(reason)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if case .failed(let error) = pane.setupState {
             VStack(spacing: 12) {
                 Text(error)
@@ -584,6 +627,28 @@ struct PaneView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .layoutPriority(1)
         }
+    }
+
+    private func codexResumeRecovery(_ reason: String) -> some View {
+        VStack(spacing: 12) {
+            Text(reason)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
+            HStack(spacing: 8) {
+                Button("Retry") {
+                    pane.tab?.retryCodexContinuation(pane, startNew: false, appSettings: appSettings)
+                }
+                Button("Start New Conversation") {
+                    pane.tab?.retryCodexContinuation(pane, startNew: true, appSettings: appSettings)
+                }
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(16)
+        .background(Theme.overlayMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.1)))
     }
 
     @ViewBuilder

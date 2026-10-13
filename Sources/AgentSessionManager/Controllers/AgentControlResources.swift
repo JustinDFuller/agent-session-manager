@@ -591,6 +591,7 @@ final class AgentControlResourceRouter {
         switch state {
         case .loading: return "loading"
         case .failed: return "failed"
+        case .codexResumeUnavailable: return "codex_continuation_unavailable"
         case nil: return nil
         }
     }
