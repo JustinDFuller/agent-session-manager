@@ -286,7 +286,7 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
         ]) { _, new in new }
 
         let input = """
-            {"hook_event_name":"PermissionRequest","session_id":"session-safe","turn_id":"turn-safe","cwd":"\(tempDir.path)","model":"gpt-test","prompt":"SENSITIVE_PROMPT_SENTINEL","tool_input":{"command":"SENSITIVE_COMMAND_SENTINEL"},"tool_response":"SENSITIVE_OUTPUT_SENTINEL"}
+            {"hook_event_name":"PermissionRequest","session_id":"session-safe","turn_id":"turn-safe","cwd":"\(tempDir.path)","model":"gpt-test","prompt":"SENSITIVE_PROMPT_SENTINEL","tool_input":{"command":"SENSITIVE_COMMAND_SENTINEL"},"tool_response":"SENSITIVE_OUTPUT_SENTINEL","authorization":"SENSITIVE_CREDENTIAL_SENTINEL","api_key":"SENSITIVE_API_KEY_SENTINEL"}
             """
         func runHook(_ payload: Data) throws -> HookProcessResult {
             let process = Process()
@@ -368,6 +368,8 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
         XCTAssertFalse(recoveredQueueText.contains("SENSITIVE_PROMPT_SENTINEL"))
         XCTAssertFalse(recoveredQueueText.contains("SENSITIVE_COMMAND_SENTINEL"))
         XCTAssertFalse(recoveredQueueText.contains("SENSITIVE_OUTPUT_SENTINEL"))
+        XCTAssertFalse(recoveredQueueText.contains("SENSITIVE_CREDENTIAL_SENTINEL"))
+        XCTAssertFalse(recoveredQueueText.contains("SENSITIVE_API_KEY_SENTINEL"))
         XCTAssertFalse(recoveredQueueText.contains("prompt"))
         XCTAssertTrue(recoveredQueueText.contains("session-safe"))
         XCTAssertTrue(recoveredQueueText.contains("turn-safe"))
