@@ -221,7 +221,7 @@ final class PRTrackingCoordinatorTests: XCTestCase {
         let paneID = UUID()
         let existing = PullRequest(number: 42, title: "Open", state: "open", url: "url")
         var deliveredPRs: [PullRequest?] = []
-        var deliveredStatuses: [PRTrackingStatus] = []
+        var deliveredStatuses: [StatusLineData.PRTrackingState?] = []
         coordinator.subscribers[paneID] = PRTrackingCoordinator.SubscriberRecord(
             workingDirectory: "/tmp",
             owner: "owner",
@@ -234,7 +234,7 @@ final class PRTrackingCoordinatorTests: XCTestCase {
             isActive: true
         )
 
-        coordinator.handleBatchResponse(makeQueryResult(failure: .authentication), token: 0)
+        coordinator.handleBatchResponse(makeQueryResult(paneIDs: [paneID], failure: .authentication), token: 0)
 
         XCTAssertEqual(coordinator.subscribers[paneID]?.lastData?.number, 42)
         XCTAssertEqual(coordinator.subscribers[paneID]?.status, .failed(.authentication))
@@ -246,7 +246,7 @@ final class PRTrackingCoordinatorTests: XCTestCase {
         let coordinator = PRTrackingCoordinator()
         let paneID = UUID()
         var deliveredPRs: [PullRequest?] = []
-        var deliveredStatuses: [PRTrackingStatus] = []
+        var deliveredStatuses: [StatusLineData.PRTrackingState?] = []
         coordinator.subscribers[paneID] = PRTrackingCoordinator.SubscriberRecord(
             workingDirectory: "/tmp",
             owner: "owner",
@@ -260,10 +260,10 @@ final class PRTrackingCoordinatorTests: XCTestCase {
         )
 
         coordinator.handleBatchResponse(
-            makeQueryResult(outData: try batchResponse(paneID: paneID, nodes: [])), token: 0)
+            makeQueryResult(paneIDs: [paneID], outData: try batchResponse(paneID: paneID, nodes: [])), token: 0)
 
         XCTAssertNil(coordinator.subscribers[paneID]?.lastData)
-        XCTAssertEqual(coordinator.subscribers[paneID]?.status, .noPullRequest)
+        XCTAssertEqual(coordinator.subscribers[paneID]?.status, .absent)
         XCTAssertEqual(deliveredPRs.count, 1)
         XCTAssertNil(deliveredPRs[0])
 
@@ -276,11 +276,11 @@ final class PRTrackingCoordinatorTests: XCTestCase {
             ]
         ]
         coordinator.handleBatchResponse(
-            makeQueryResult(outData: try batchResponse(paneID: paneID, nodes: found)), token: 0)
+            makeQueryResult(paneIDs: [paneID], outData: try batchResponse(paneID: paneID, nodes: found)), token: 0)
 
         XCTAssertEqual(coordinator.subscribers[paneID]?.lastData?.number, 43)
         XCTAssertEqual(coordinator.subscribers[paneID]?.status, .current)
-        XCTAssertEqual(deliveredStatuses, [.noPullRequest, .current])
+        XCTAssertEqual(deliveredStatuses, [.absent, .current])
     }
 
     func testMissingPRResponseAliasIsFailureAndRetainsCachedPR() {
@@ -299,7 +299,7 @@ final class PRTrackingCoordinatorTests: XCTestCase {
         )
         let outData = Data(#"{"data":{}}"#.utf8)
 
-        coordinator.handleBatchResponse(makeQueryResult(outData: outData), token: 0)
+        coordinator.handleBatchResponse(makeQueryResult(paneIDs: [paneID], outData: outData), token: 0)
 
         XCTAssertEqual(coordinator.subscribers[paneID]?.lastData?.number, 42)
         XCTAssertEqual(coordinator.subscribers[paneID]?.status, .failed(.parse))
@@ -444,6 +444,422 @@ final class PRTrackingCoordinatorTests: XCTestCase {
         XCTAssertEqual(result?.repo, "repo")
     }
 
+    func testFailedQueryRetainsPRAndDoesNotDeliverResolutionTransition() {
+        let coordinator = PRTrackingCoordinator()
+        let paneID = UUID()
+        let existing = PullRequest(number: 17, title: "Current", state: "open", url: "u")
+        var dataUpdates = 0
+        var deliveredStatus: StatusLineData.PRTrackingState?
+        coordinator.subscribers[paneID] = PRTrackingCoordinator.SubscriberRecord(
+            workingDirectory: "/tmp",
+            owner: "owner",
+            repo: "repo",
+            branchName: "feature",
+            lastData: existing,
+            status: .current,
+            callback: { _ in dataUpdates += 1 },
+            statusCallback: { deliveredStatus = $0 },
+            isActive: true)
+
+        coordinator.applyQueryFailure(.authentication, paneIDs: [paneID])
+
+        XCTAssertEqual(coordinator.subscribers[paneID]?.lastData?.number, 17)
+        XCTAssertEqual(coordinator.subscribers[paneID]?.status, .failed(.authentication))
+        XCTAssertEqual(deliveredStatus, .failed(.authentication))
+        XCTAssertEqual(dataUpdates, 0)
+    }
+
+    func testPartialGraphQLResultRetainsPRAndReportsParseFailure() {
+        let coordinator = PRTrackingCoordinator()
+        let paneID = UUID()
+        let existing = PullRequest(number: 17, title: "Current", state: "open", url: "u")
+        var dataUpdates = 0
+        var latestStatus: StatusLineData.PRTrackingState?
+        coordinator.subscribers[paneID] = PRTrackingCoordinator.SubscriberRecord(
+            workingDirectory: "/tmp",
+            owner: "owner",
+            repo: "repo",
+            branchName: "feature",
+            lastData: existing,
+            status: .current,
+            callback: { _ in dataUpdates += 1 },
+            statusCallback: { latestStatus = $0 },
+            isActive: true)
+
+        XCTAssertEqual(coordinator.deliverPRResults(from: [:], paneIDs: [paneID]), 0)
+        XCTAssertEqual(coordinator.subscribers[paneID]?.lastData?.number, 17)
+        XCTAssertEqual(coordinator.subscribers[paneID]?.status, .failed(.parse))
+        XCTAssertEqual(latestStatus, .failed(.parse))
+        XCTAssertEqual(dataUpdates, 0)
+    }
+
+    func testQueryFailureOnlyUpdatesPaneIDs() {
+        let coordinator = PRTrackingCoordinator()
+        let queriedPaneID = UUID()
+        let excludedPaneID = UUID()
+        var excludedStatus: StatusLineData.PRTrackingState?
+        coordinator.subscribers[queriedPaneID] = makeRecord(owner: "owner", repo: "repo", branch: "main")
+        coordinator.subscribers[excludedPaneID] = PRTrackingCoordinator.SubscriberRecord(
+            workingDirectory: "/tmp",
+            owner: "owner",
+            repo: "repo",
+            branchName: nil,
+            callback: { _ in XCTFail("An excluded pane must not receive PR data") },
+            statusCallback: { excludedStatus = $0 },
+            isActive: true)
+
+        coordinator.applyQueryFailure(.authentication, paneIDs: [queriedPaneID])
+
+        XCTAssertEqual(coordinator.subscribers[queriedPaneID]?.status, .failed(.authentication))
+        XCTAssertNil(coordinator.subscribers[excludedPaneID]?.status)
+        XCTAssertNil(excludedStatus)
+    }
+
+    func testPRResultsOnlyUpdatePaneIDs() {
+        let coordinator = PRTrackingCoordinator()
+        let queriedPaneID = UUID()
+        let excludedPaneID = UUID()
+        var excludedStatus: StatusLineData.PRTrackingState?
+        coordinator.subscribers[queriedPaneID] = makeRecord(owner: "owner", repo: "repo", branch: "main")
+        coordinator.subscribers[excludedPaneID] = PRTrackingCoordinator.SubscriberRecord(
+            workingDirectory: "/tmp",
+            owner: "owner",
+            repo: "repo",
+            branchName: nil,
+            callback: { _ in XCTFail("An excluded pane must not receive PR data") },
+            statusCallback: { excludedStatus = $0 },
+            isActive: true)
+        let alias = "pane_" + queriedPaneID.uuidString.replacingOccurrences(of: "-", with: "")
+
+        XCTAssertEqual(
+            coordinator.deliverPRResults(
+                from: [alias: ["pullRequests": ["nodes": []]]], paneIDs: [queriedPaneID]),
+            0)
+
+        XCTAssertEqual(coordinator.subscribers[queriedPaneID]?.status, .absent)
+        XCTAssertNil(coordinator.subscribers[excludedPaneID]?.status)
+        XCTAssertNil(excludedStatus)
+    }
+
+    func testRepositoryIdentityStartsImmediateCycle() async throws {
+        let settingsDirectory = makeTempSettingsDir(
+            backgroundRefreshEnabled: true, backgroundIntervalSeconds: 60)
+        defer { cleanupTempSettingsDir(settingsDirectory) }
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: settingsDirectory)
+        try Data("true".utf8).write(to: support.appending(path: "pr-tracking-settings.json"))
+        let repository = try createGitRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        let paneID = UUID()
+        let alias = "pane_" + paneID.uuidString.replacingOccurrences(of: "-", with: "")
+        let response = Data("{\"data\":{\"\(alias)\":{\"pullRequests\":{\"nodes\":[]}}}}".utf8)
+        let requestExpectation = expectation(description: "GitHub query starts")
+        let absentExpectation = expectation(description: "Initial PR result is delivered")
+        var latestStatus: StatusLineData.PRTrackingState?
+        let runner = PRTrackingTestRunner(response: response, onRun: { requestExpectation.fulfill() })
+        let coordinator = PRTrackingCoordinator(cliRunner: runner)
+        let record = PRTrackingCoordinator.SubscriberRecord(
+            workingDirectory: repository.path,
+            callback: { _ in },
+            statusCallback: { status in
+                latestStatus = status
+                if status == .absent { absentExpectation.fulfill() }
+            },
+            isActive: true)
+        coordinator.subscribers[paneID] = record
+
+        coordinator.setRepositoryIdentity(
+            paneID: paneID,
+            identityToken: record.identityToken,
+            workingDirectory: repository.path,
+            owner: "owner",
+            repo: "repo")
+        await fulfillment(of: [requestExpectation, absentExpectation], timeout: 5)
+
+        XCTAssertEqual(latestStatus, .absent)
+        let query = try XCTUnwrap(runner.lastInput)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: query) as? [String: String])
+        XCTAssertTrue(try XCTUnwrap(body["query"]).contains(alias))
+        coordinator.unsubscribe(paneID: paneID)
+    }
+
+    func testPollingCycleClosesTelemetrySpanWhenEnabled() async throws {
+        let settingsDirectory = makeTempSettingsDir(
+            backgroundRefreshEnabled: true, backgroundIntervalSeconds: 60)
+        defer { cleanupTempSettingsDir(settingsDirectory) }
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: settingsDirectory)
+        try Data("true".utf8).write(to: support.appending(path: "pr-tracking-settings.json"))
+        let appSettings = AppSettings()
+        appSettings.debugModeEnabled = true
+        TracingService.shared.configure(from: appSettings)
+        defer {
+            appSettings.debugModeEnabled = false
+            TracingService.shared.configure(from: appSettings)
+            TracingService.shared.resetForTesting()
+        }
+        let repository = try createGitRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        let paneID = UUID()
+        let alias = "pane_" + paneID.uuidString.replacingOccurrences(of: "-", with: "")
+        let response = Data("{\"data\":{\"\(alias)\":{\"pullRequests\":{\"nodes\":[]}}}}".utf8)
+        let absentExpectation = expectation(description: "Initial PR result is delivered")
+        let runner = PRTrackingTestRunner(response: response, onRun: {})
+        let coordinator = PRTrackingCoordinator(cliRunner: runner)
+        coordinator.subscribers[paneID] = PRTrackingCoordinator.SubscriberRecord(
+            workingDirectory: repository.path,
+            owner: "owner",
+            repo: "repo",
+            paneName: "telemetry-test",
+            callback: { _ in },
+            statusCallback: { status in
+                if status == .absent { absentExpectation.fulfill() }
+            },
+            isActive: true)
+
+        coordinator.runCycle()
+        await fulfillment(of: [absentExpectation], timeout: 5)
+
+        let globalTrace = appSettings.resolvedTracingDirectoryURL
+            .appending(path: "_global/global.jsonl")
+        var traceLines: [String] = []
+        for _ in 0..<20 {
+            if let contents = try? String(contentsOf: globalTrace, encoding: .utf8) {
+                traceLines = contents.split(whereSeparator: \.isNewline).map(String.init)
+                if traceLines.contains(where: { $0.contains("pr.poll.cycle") && $0.contains("\"ok\"") }) {
+                    break
+                }
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let cycleSpan = try XCTUnwrap(
+            traceLines.compactMap { line -> [String: Any]? in
+                guard let data = line.data(using: .utf8) else { return nil }
+                return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            }.first { $0["name"] as? String == "pr.poll.cycle" })
+        let attributes = try XCTUnwrap(cycleSpan["attributes"] as? [String: String])
+        XCTAssertEqual(attributes["result"], "ok")
+        coordinator.unsubscribe(paneID: paneID)
+    }
+
+    func testTrackingDisabledDuringBranchLookupEndsCycleWithoutQuery() async throws {
+        let settingsDirectory = makeTempSettingsDir(
+            backgroundRefreshEnabled: true, backgroundIntervalSeconds: 60)
+        defer { cleanupTempSettingsDir(settingsDirectory) }
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: settingsDirectory)
+        let trackingSettings = support.appending(path: "pr-tracking-settings.json")
+        try Data("true".utf8).write(to: trackingSettings)
+        let appSettings = AppSettings()
+        appSettings.debugModeEnabled = true
+        TracingService.shared.configure(from: appSettings)
+        defer {
+            appSettings.debugModeEnabled = false
+            TracingService.shared.configure(from: appSettings)
+            TracingService.shared.resetForTesting()
+        }
+        let branchLookupStarted = expectation(description: "Branch lookup is suspended")
+        let branchGate = AsyncStream<String?>.makeStream()
+        let runner = PRTrackingTestRunner(response: Data(), onRun: {})
+        let coordinator = PRTrackingCoordinator(
+            cliRunner: runner,
+            branchFetcher: { _ in
+                branchLookupStarted.fulfill()
+                var iterator = branchGate.stream.makeAsyncIterator()
+                guard let branch = await iterator.next() else { return nil }
+                return branch
+            })
+        let paneID = UUID()
+        coordinator.subscribers[paneID] = PRTrackingCoordinator.SubscriberRecord(
+            workingDirectory: "/tmp/repository",
+            owner: "owner",
+            repo: "repo",
+            callback: { _ in },
+            isActive: true)
+
+        coordinator.runCycle()
+        await fulfillment(of: [branchLookupStarted], timeout: 5)
+        try Data("false".utf8).write(to: trackingSettings)
+        branchGate.continuation.yield("feature")
+        branchGate.continuation.finish()
+
+        let globalTrace = appSettings.resolvedTracingDirectoryURL
+            .appending(path: "_global/global.jsonl")
+        var traceLines: [String] = []
+        for _ in 0..<20 {
+            if let contents = try? String(contentsOf: globalTrace, encoding: .utf8) {
+                traceLines = contents.split(whereSeparator: \.isNewline).map(String.init)
+                if traceLines.contains(where: {
+                    $0.contains("pr.poll.cycle") && $0.contains("tracking_disabled")
+                }) {
+                    break
+                }
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let cycleSpan = try XCTUnwrap(
+            traceLines.compactMap { line -> [String: Any]? in
+                guard let data = line.data(using: .utf8) else { return nil }
+                return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            }.first { $0["name"] as? String == "pr.poll.cycle" })
+        let attributes = try XCTUnwrap(cycleSpan["attributes"] as? [String: String])
+        XCTAssertEqual(attributes["result"], "tracking_disabled")
+        XCTAssertNil(runner.lastInput)
+        XCTAssertNil(coordinator.subscribers[paneID]?.status)
+        coordinator.unsubscribe(paneID: paneID)
+    }
+
+    func testMixedQueryableAndUnqueryableBranchesOnlyUpdateQueryParticipants() async throws {
+        let settingsDirectory = makeTempSettingsDir(
+            backgroundRefreshEnabled: true, backgroundIntervalSeconds: 60)
+        defer { cleanupTempSettingsDir(settingsDirectory) }
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: settingsDirectory)
+        try Data("true".utf8).write(to: support.appending(path: "pr-tracking-settings.json"))
+        let repository = try createGitRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        let queriedPaneID = UUID()
+        let excludedPaneID = UUID()
+        let queryAlias = "pane_" + queriedPaneID.uuidString.replacingOccurrences(of: "-", with: "")
+        let excludedAlias = "pane_" + excludedPaneID.uuidString.replacingOccurrences(of: "-", with: "")
+        let response = Data("{\"data\":{\"\(queryAlias)\":{\"pullRequests\":{\"nodes\":[]}}}}".utf8)
+        let requestExpectation = expectation(description: "Queryable branch is requested")
+        let absentExpectation = expectation(description: "Queryable branch result is delivered")
+        var excludedStatus: StatusLineData.PRTrackingState?
+        let stalePR = PullRequest(number: 3, title: "Other branch", state: "open", url: "u")
+        var excludedPR: PullRequest? = stalePR
+        let runner = PRTrackingTestRunner(response: response, onRun: { requestExpectation.fulfill() })
+        let coordinator = PRTrackingCoordinator(cliRunner: runner)
+        coordinator.subscribers[queriedPaneID] = PRTrackingCoordinator.SubscriberRecord(
+            workingDirectory: repository.path,
+            owner: "owner",
+            repo: "repo",
+            callback: { _ in },
+            statusCallback: { status in
+                if status == .absent { absentExpectation.fulfill() }
+            },
+            isActive: true)
+        coordinator.subscribers[excludedPaneID] = PRTrackingCoordinator.SubscriberRecord(
+            workingDirectory: repository.deletingLastPathComponent().appending(path: UUID().uuidString).path,
+            owner: "owner",
+            repo: "repo",
+            lastData: stalePR,
+            status: .current,
+            callback: { excludedPR = $0 },
+            statusCallback: { excludedStatus = $0 },
+            isActive: true)
+
+        coordinator.runCycle()
+        await fulfillment(of: [requestExpectation, absentExpectation], timeout: 5)
+
+        XCTAssertEqual(coordinator.subscribers[queriedPaneID]?.status, .absent)
+        XCTAssertNil(coordinator.subscribers[excludedPaneID]?.status)
+        XCTAssertNil(excludedStatus)
+        XCTAssertNil(coordinator.subscribers[excludedPaneID]?.lastData)
+        XCTAssertNil(excludedPR)
+        let query = try XCTUnwrap(runner.lastInput)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: query) as? [String: String])
+        let queryText = try XCTUnwrap(body["query"])
+        XCTAssertTrue(queryText.contains(queryAlias))
+        XCTAssertFalse(queryText.contains(excludedAlias))
+        coordinator.unsubscribe(paneID: queriedPaneID)
+        coordinator.unsubscribe(paneID: excludedPaneID)
+    }
+
+    func testStaleRepositoryIdentityCannotUpdateReplacedSubscription() {
+        let coordinator = PRTrackingCoordinator()
+        let paneID = UUID()
+        var status: StatusLineData.PRTrackingState?
+        let original = PRTrackingCoordinator.SubscriberRecord(
+            workingDirectory: "/tmp/old",
+            callback: { _ in },
+            statusCallback: { status = $0 },
+            isActive: true)
+        let replacement = PRTrackingCoordinator.SubscriberRecord(
+            workingDirectory: "/tmp/new",
+            callback: { _ in },
+            statusCallback: { status = $0 },
+            isActive: true)
+        coordinator.subscribers[paneID] = replacement
+
+        coordinator.setRepositoryIdentity(
+            paneID: paneID,
+            identityToken: original.identityToken,
+            workingDirectory: original.workingDirectory,
+            owner: "old-owner",
+            repo: "old-repo")
+
+        XCTAssertNil(coordinator.subscribers[paneID]?.owner)
+        XCTAssertNil(coordinator.subscribers[paneID]?.repo)
+        XCTAssertNil(status)
+    }
+
+    func testMissingRepositoryIdentityClearsOldPRWithoutReportingAbsence() {
+        let coordinator = PRTrackingCoordinator()
+        let paneID = UUID()
+        let existing = PullRequest(number: 9, title: "Old branch", state: "open", url: "u")
+        var deliveredPR: PullRequest? = existing
+        var latestStatus: StatusLineData.PRTrackingState? = .current
+        let record = PRTrackingCoordinator.SubscriberRecord(
+            workingDirectory: "/tmp",
+            owner: "owner",
+            repo: "repo",
+            branchName: "old-branch",
+            lastData: existing,
+            status: .current,
+            callback: { deliveredPR = $0 },
+            statusCallback: { latestStatus = $0 },
+            isActive: true)
+        coordinator.subscribers[paneID] = record
+
+        coordinator.setRepositoryIdentity(
+            paneID: paneID,
+            identityToken: record.identityToken,
+            workingDirectory: record.workingDirectory,
+            owner: nil,
+            repo: nil)
+
+        XCTAssertNil(coordinator.subscribers[paneID]?.lastData)
+        XCTAssertNil(deliveredPR)
+        XCTAssertNil(coordinator.subscribers[paneID]?.status)
+        XCTAssertNil(latestStatus)
+    }
+
+    func testSuccessfulPRAndConfirmedAbsenceUpdateVisibleState() {
+        let coordinator = PRTrackingCoordinator()
+        let paneID = UUID()
+        var latestStatus: StatusLineData.PRTrackingState?
+        coordinator.subscribers[paneID] = PRTrackingCoordinator.SubscriberRecord(
+            workingDirectory: "/tmp",
+            owner: "owner",
+            repo: "repo",
+            branchName: "feature",
+            callback: { _ in },
+            statusCallback: { latestStatus = $0 },
+            isActive: true)
+        let alias = "pane_" + paneID.uuidString.replacingOccurrences(of: "-", with: "")
+        let found: [String: Any] = [
+            alias: [
+                "pullRequests": [
+                    "nodes": [
+                        [
+                            "number": 17, "title": "Current", "state": "OPEN", "url": "u",
+                        ]
+                    ]
+                ]
+            ]
+        ]
+
+        XCTAssertEqual(coordinator.deliverPRResults(from: found, paneIDs: [paneID]), 1)
+        XCTAssertEqual(coordinator.subscribers[paneID]?.lastData?.number, 17)
+        XCTAssertEqual(latestStatus, .current)
+
+        XCTAssertEqual(
+            coordinator.deliverPRResults(from: [alias: ["pullRequests": ["nodes": []]]], paneIDs: [paneID]), 0)
+        XCTAssertNil(coordinator.subscribers[paneID]?.lastData)
+        XCTAssertEqual(latestStatus, .absent)
+    }
+
     func testParsePRReviewDecisionApproved() {
         let node: [String: Any] = [
             "number": 1, "title": "T", "state": "OPEN", "url": "u",
@@ -496,6 +912,26 @@ final class PRTrackingCoordinatorTests: XCTestCase {
         XCTAssertTrue(query.contains("reviewDecision"), "Batch query must include reviewDecision field")
     }
 
+    private func createGitRepository() throws -> URL {
+        let repository = FileManager.default.temporaryDirectory.appending(path: "pr-cycle-\(UUID().uuidString)")
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/git")
+        process.arguments = ["init", "-b", "feature", repository.path]
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        let commit = Process()
+        commit.executableURL = URL(filePath: "/usr/bin/git")
+        commit.arguments = [
+            "-C", repository.path, "-c", "user.name=Agent Session Manager",
+            "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "test",
+        ]
+        try commit.run()
+        commit.waitUntilExit()
+        XCTAssertEqual(commit.terminationStatus, 0)
+        return repository
+    }
+
     private func makeRecord(owner: String?, repo: String?, branch: String?) -> PRTrackingCoordinator.SubscriberRecord {
         PRTrackingCoordinator.SubscriberRecord(
             workingDirectory: "/tmp",
@@ -509,6 +945,7 @@ final class PRTrackingCoordinatorTests: XCTestCase {
     }
 
     private func makeQueryResult(
+        paneIDs: Set<UUID>,
         outData: Data = Data(),
         failure: GitHubCLIFailure? = nil
     ) -> PRTrackingCoordinator.QueryResult {
@@ -518,7 +955,8 @@ final class PRTrackingCoordinatorTests: XCTestCase {
             result: failure?.rawValue ?? "ok",
             failure: failure,
             inputFailure: nil,
-            count: 1,
+            count: paneIDs.count,
+            paneIDs: paneIDs,
             startTime: Date(),
             endTime: Date()
         )
@@ -560,5 +998,30 @@ final class PRTrackingCoordinatorTests: XCTestCase {
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.removeItem(at: appSupport.appending(path: subdirName))
+    }
+}
+
+private final class PRTrackingTestRunner: GitHubCLIRunning, @unchecked Sendable {
+    private let response: Data
+    private let onRun: @Sendable () -> Void
+    private let lock = NSLock()
+    private var inputs: [Data] = []
+
+    var lastInput: Data? {
+        lock.withLock { inputs.last }
+    }
+
+    init(response: Data, onRun: @escaping @Sendable () -> Void) {
+        self.response = response
+        self.onRun = onRun
+    }
+
+    func run(arguments: [String], stdin: Data?, timeout: TimeInterval) async -> GitHubCLIResult {
+        if let stdin {
+            lock.withLock { inputs.append(stdin) }
+        }
+        onRun()
+        return GitHubCLIResult(
+            stdout: response, stderrPrefix: "", exitCode: 0, failure: nil, inputFailure: nil)
     }
 }

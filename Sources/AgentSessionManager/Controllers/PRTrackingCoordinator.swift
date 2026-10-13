@@ -14,6 +14,7 @@ final class PRTrackingCoordinator {
         var failure: GitHubCLIFailure?
         var inputFailure: ChildProcessInputWriteFailure?
         var count: Int
+        var paneIDs: Set<UUID>
         var startTime: Date
         var endTime: Date
     }
@@ -27,9 +28,10 @@ final class PRTrackingCoordinator {
         var tabID: UUID
         var tabName: String
         var lastData: PullRequest?
-        var status: PRTrackingStatus
+        var identityToken = UUID()
+        var status: StatusLineData.PRTrackingState?
         var callback: (PullRequest?) -> Void
-        var statusCallback: (PRTrackingStatus) -> Void
+        var statusCallback: ((StatusLineData.PRTrackingState?) -> Void)?
         var isActive: Bool
 
         init(
@@ -41,9 +43,9 @@ final class PRTrackingCoordinator {
             tabID: UUID = UUID(),
             tabName: String = "",
             lastData: PullRequest? = nil,
-            status: PRTrackingStatus = .loading,
+            status: StatusLineData.PRTrackingState? = nil,
             callback: @escaping (PullRequest?) -> Void,
-            statusCallback: @escaping (PRTrackingStatus) -> Void = { _ in },
+            statusCallback: ((StatusLineData.PRTrackingState?) -> Void)? = nil,
             isActive: Bool
         ) {
             self.workingDirectory = workingDirectory
@@ -65,13 +67,23 @@ final class PRTrackingCoordinator {
     private(set) var cycleTimer: Timer?
     var effectiveInterval: TimeInterval = 30
     private var activeBatchTask: Task<Void, Never>?
+    private let cliRunner: GitHubCLIRunning
+    private let branchFetcher: @Sendable (String) async -> String?
     private var cycleToken: UInt64 = 0
     private var currentCycleHandle: SpanHandle?
     private(set) var isPaused = false
     private(set) var isBackgrounded = false
     @ObservationIgnored nonisolated(unsafe) private var appStateObservers: [Any] = []
 
-    init() {
+    init(
+        cliRunner: GitHubCLIRunning = GitHubCLIRunner.shared,
+        branchFetcher: (@Sendable (String) async -> String?)? = nil
+    ) {
+        self.cliRunner = cliRunner
+        self.branchFetcher =
+            branchFetcher ?? {
+                await Self.fetchBranch(workingDirectory: $0)
+            }
         let center = NotificationCenter.default
         appStateObservers.append(
             center.addObserver(
@@ -104,24 +116,31 @@ final class PRTrackingCoordinator {
         paneName: String = "",
         tabID: UUID = UUID(),
         tabName: String = "",
-        onPRStatus: @escaping (PRTrackingStatus) -> Void = { _ in },
-        onPRData: @escaping (PullRequest?) -> Void
+        onPRData: @escaping (PullRequest?) -> Void,
+        onPRStatus: ((StatusLineData.PRTrackingState?) -> Void)? = nil
     ) {
-        let previous = subscribers[paneID].flatMap { $0.workingDirectory == workingDirectory ? $0 : nil }
-        let record = SubscriberRecord(
+        var record = SubscriberRecord(
             workingDirectory: workingDirectory,
             paneName: paneName,
             tabID: tabID,
             tabName: tabName,
-            lastData: previous?.lastData,
-            status: previous?.status ?? .loading,
             callback: onPRData,
             statusCallback: onPRStatus,
             isActive: isActive
         )
-        if previous?.lastData != nil { onPRData(previous?.lastData) }
-        onPRStatus(record.status)
+        if let cached = subscribers[paneID]?.lastData {
+            record.lastData = cached
+            onPRData(cached)
+        }
+        if subscribers[paneID] != nil {
+            cycleToken += 1
+            TracingService.shared.end(handle: currentCycleHandle, attributes: ["result": "pane_replaced"])
+            currentCycleHandle = nil
+            activeBatchTask?.cancel()
+            activeBatchTask = nil
+        }
         subscribers[paneID] = record
+        let identityToken = record.identityToken
         let task = Process()
         let outPipe = Pipe()
         task.executableURL = URL(filePath: "/usr/bin/git")
@@ -130,34 +149,66 @@ final class PRTrackingCoordinator {
         task.standardError = FileHandle.nullDevice
         task.terminationHandler = { [weak self] _ in
             let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-            guard
-                let raw = String(data: outData, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty,
-                let (owner, repo) = Self.parseOwnerRepo(from: raw)
-            else {
-                Task { @MainActor [weak self] in self?.setStatus(.unavailable, for: paneID) }
-                return
-            }
+            let raw =
+                String(data: outData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let identity = raw.isEmpty ? nil : Self.parseOwnerRepo(from: raw)
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.subscribers[paneID]?.owner = owner
-                self.subscribers[paneID]?.repo = repo
-                self.runCycle()
+                self?.setRepositoryIdentity(
+                    paneID: paneID,
+                    identityToken: identityToken,
+                    workingDirectory: workingDirectory,
+                    owner: identity?.owner,
+                    repo: identity?.repo)
             }
         }
-        do {
-            try task.run()
-        } catch {
-            setStatus(.unavailable, for: paneID)
-        }
+        try? task.run()
         guard !isPaused, cycleTimer == nil else { return }
         runCycle()
         scheduleCycleTimer()
     }
 
+    func retry(paneID: UUID) {
+        guard subscribers[paneID] != nil else { return }
+        runCycle()
+    }
+
+    func setRepositoryIdentity(
+        paneID: UUID,
+        identityToken: UUID,
+        workingDirectory: String,
+        owner: String?,
+        repo: String?
+    ) {
+        guard var record = subscribers[paneID],
+            record.identityToken == identityToken,
+            record.workingDirectory == workingDirectory
+        else { return }
+        if let owner, let repo {
+            guard record.owner != owner || record.repo != repo else { return }
+            record.owner = owner
+            record.repo = repo
+            subscribers[paneID] = record
+            if !isPaused { runCycle() }
+            return
+        }
+        let hadPR = record.lastData != nil
+        record.owner = nil
+        record.repo = nil
+        record.branchName = nil
+        record.lastData = nil
+        record.status = nil
+        subscribers[paneID] = record
+        if hadPR { record.callback(nil) }
+        record.statusCallback?(nil)
+    }
+
     func unsubscribe(paneID: UUID) {
         subscribers.removeValue(forKey: paneID)
         if subscribers.isEmpty {
+            cycleToken += 1
+            TracingService.shared.end(handle: currentCycleHandle, attributes: ["result": "no_subscribers"])
+            currentCycleHandle = nil
             cycleTimer?.invalidate()
             cycleTimer = nil
             activeBatchTask?.cancel()
@@ -167,12 +218,6 @@ final class PRTrackingCoordinator {
 
     func setActive(paneID: UUID, isActive: Bool) {
         subscribers[paneID]?.isActive = isActive
-    }
-
-    func retry(paneID: UUID) {
-        guard subscribers[paneID] != nil else { return }
-        setStatus(.loading, for: paneID)
-        runCycle()
     }
 
     func pause() {
@@ -218,30 +263,24 @@ final class PRTrackingCoordinator {
         }
     }
 
-    private func runCycle() {
-        guard SettingsPersistence.isPRTrackingEnabled() else {
-            for paneID in subscribers.keys { setStatus(.disabled, for: paneID) }
-            return
-        }
-
-        TracingService.shared.end(handle: currentCycleHandle, attributes: ["result": "superseded"])
-        currentCycleHandle = nil
-
-        activeBatchTask?.cancel()
-        activeBatchTask = nil
-        cycleToken += 1
-        let token = cycleToken
-
+    func runCycle() {
+        guard SettingsPersistence.isPRTrackingEnabled() else { return }
         let paneIDs = subscribers.keys.filter {
             subscribers[$0]?.owner != nil && subscribers[$0]?.repo != nil
         }
         guard !paneIDs.isEmpty else { return }
 
+        TracingService.shared.end(handle: currentCycleHandle, attributes: ["result": "superseded"])
+        currentCycleHandle = nil
+        activeBatchTask?.cancel()
+        activeBatchTask = nil
+        cycleToken += 1
+        let token = cycleToken
+
         let cycleHandle = TracingService.shared.startSpan(
             "pr.poll.cycle",
             attributes: ["pane_count": String(paneIDs.count)])
         currentCycleHandle = cycleHandle
-        guard let cycleHandle else { return }
 
         Task { @MainActor [weak self] in
             guard let self, self.cycleToken == token else {
@@ -249,20 +288,32 @@ final class PRTrackingCoordinator {
                 return
             }
 
-            await withTaskGroup(of: (UUID, String?).self) { group in
+            let branchFetcher = self.branchFetcher
+            await withTaskGroup(of: (UUID, UUID, String?).self) { group in
                 for paneID in paneIDs {
-                    guard let cwd = self.subscribers[paneID]?.workingDirectory else { continue }
+                    guard let record = self.subscribers[paneID] else { continue }
+                    let cwd = record.workingDirectory
+                    let identityToken = record.identityToken
                     group.addTask {
-                        let branch = await Self.fetchBranch(workingDirectory: cwd)
-                        return (paneID, branch)
+                        let branch = await branchFetcher(cwd)
+                        return (paneID, identityToken, branch)
                     }
                 }
-                for await (paneID, branch) in group {
-                    self.subscribers[paneID]?.branchName = branch
-                    if branch == nil || branch?.isEmpty == true || branch == "HEAD" {
-                        self.setStatus(.unavailable, for: paneID)
+                for await (paneID, identityToken, branch) in group {
+                    guard self.cycleToken == token,
+                        var record = self.subscribers[paneID],
+                        record.identityToken == identityToken
+                    else { continue }
+                    record.branchName = branch
+                    if !Self.isQueryableBranch(branch) {
+                        let hadPR = record.lastData != nil
+                        record.lastData = nil
+                        record.status = nil
+                        self.subscribers[paneID] = record
+                        if hadPR { record.callback(nil) }
+                        record.statusCallback?(nil)
                     } else {
-                        self.setStatus(.loading, for: paneID)
+                        self.subscribers[paneID] = record
                     }
                 }
             }
@@ -275,26 +326,50 @@ final class PRTrackingCoordinator {
         }
     }
 
-    private func dispatchBatchQuery(token: UInt64, cycleHandle: SpanHandle) {
-        guard SettingsPersistence.isPRTrackingEnabled() else { return }
-        let query = buildBatchQuery()
-        guard !query.isEmpty else { return }
+    private func dispatchBatchQuery(token: UInt64, cycleHandle: SpanHandle?) {
+        guard SettingsPersistence.isPRTrackingEnabled() else {
+            TracingService.shared.end(handle: cycleHandle, attributes: ["result": "tracking_disabled"])
+            currentCycleHandle = nil
+            return
+        }
+        let paneIDs: Set<UUID> = Set(
+            subscribers.compactMap { paneID, record -> UUID? in
+                guard record.owner != nil, record.repo != nil,
+                    Self.isQueryableBranch(record.branchName)
+                else { return nil }
+                return paneID
+            })
+        guard !paneIDs.isEmpty else {
+            TracingService.shared.end(handle: cycleHandle, attributes: ["result": "no_queryable_branches"])
+            currentCycleHandle = nil
+            return
+        }
+        for paneID in paneIDs {
+            subscribers[paneID]?.status = .loading
+            subscribers[paneID]?.statusCallback?(.loading)
+        }
+        let query = buildBatchQuery(paneIDs: paneIDs)
         let settings = SettingsPersistence.prPollingSettings()
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: ["query": query]) else { return }
-        let count = subscribers.values.filter(Self.isQueryEligible).count
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: ["query": query]) else {
+            applyQueryFailure(.api, paneIDs: paneIDs)
+            TracingService.shared.end(handle: cycleHandle, attributes: ["result": "query_encode_failed"])
+            currentCycleHandle = nil
+            return
+        }
         let queryStartTime = Date()
         activeBatchTask = Task { [weak self] in
-            let result = await GitHubCLIRunner.shared.run(
+            guard let self else { return }
+            let result = await self.cliRunner.run(
                 arguments: ["api", "graphql", "--include", "--input", "-"],
                 stdin: jsonData,
                 timeout: Double(settings.timeoutSeconds))
-            guard let self else { return }
             self.handleBatchResponse(
                 QueryResult(
                     outData: result.stdout, exitStatus: result.exitCode ?? -1,
                     result: result.failure?.rawValue ?? "ok", failure: result.failure,
                     inputFailure: result.inputFailure,
-                    count: count, startTime: queryStartTime, endTime: Date()), token: token, cycleHandle: cycleHandle)
+                    count: paneIDs.count, paneIDs: paneIDs,
+                    startTime: queryStartTime, endTime: Date()), token: token, cycleHandle: cycleHandle)
         }
     }
 
@@ -326,22 +401,16 @@ final class PRTrackingCoordinator {
             InvariantReporter.shared.violated(.githubCLIAvailable)
         }
         if let failure = queryResult.failure {
-            for (paneID, record) in subscribers where Self.isQueryEligible(record) {
-                setStatus(.failed(failure), for: paneID)
-                TracingService.shared.record(
-                    "pr.result.delivered",
-                    attributes: [
-                        "pane.id": paneID.uuidString, "pane.name": record.paneName,
-                        "tab.id": record.tabID.uuidString, "tab.name": record.tabName,
-                        "outcome": "failure", "failure": failure.rawValue,
-                    ])
-            }
+            applyQueryFailure(failure, paneIDs: queryResult.paneIDs)
             TracingService.shared.end(handle: cycleHandle, attributes: ["result": failure.rawValue])
             currentCycleHandle = nil
             return
         }
         guard !queryResult.outData.isEmpty, let text = String(data: queryResult.outData, encoding: .utf8) else {
-            failSubscribers(with: .parse)
+            for paneID in queryResult.paneIDs {
+                subscribers[paneID]?.status = .failed(.parse)
+                subscribers[paneID]?.statusCallback?(.failed(.parse))
+            }
             TracingService.shared.end(handle: cycleHandle, attributes: ["result": "empty_response"])
             currentCycleHandle = nil
             return
@@ -352,16 +421,32 @@ final class PRTrackingCoordinator {
             adjustInterval(remainingPoints: points)
         }
         guard let responseData = jsonText.data(using: .utf8),
-            let json = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
-            let dataDict = json["data"] as? [String: Any],
-            (json["errors"] as? [Any])?.isEmpty != false
+            let json = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any]
         else {
-            failSubscribers(with: .parse)
+            for paneID in queryResult.paneIDs {
+                subscribers[paneID]?.status = .failed(.parse)
+                subscribers[paneID]?.statusCallback?(.failed(.parse))
+            }
             TracingService.shared.end(handle: cycleHandle, attributes: ["result": "parse_failed"])
             currentCycleHandle = nil
             return
         }
-        let parsedCount = deliverPRResults(from: dataDict)
+        if let errors = json["errors"] as? [Any], !errors.isEmpty {
+            applyQueryFailure(.api, paneIDs: queryResult.paneIDs)
+            TracingService.shared.end(handle: cycleHandle, attributes: ["result": "api_error"])
+            currentCycleHandle = nil
+            return
+        }
+        guard let dataDict = json["data"] as? [String: Any] else {
+            for paneID in queryResult.paneIDs {
+                subscribers[paneID]?.status = .failed(.parse)
+                subscribers[paneID]?.statusCallback?(.failed(.parse))
+            }
+            TracingService.shared.end(handle: cycleHandle, attributes: ["result": "parse_failed"])
+            currentCycleHandle = nil
+            return
+        }
+        let parsedCount = deliverPRResults(from: dataDict, paneIDs: queryResult.paneIDs)
         var parsedAttrs: [String: String] = ["pr_count": String(parsedCount)]
         if let points = remainingPoints { parsedAttrs["rate_limit_remaining"] = String(points) }
         TracingService.shared.record("pr.response.parsed", parent: cycleHandle, attributes: parsedAttrs)
@@ -390,60 +475,48 @@ final class PRTrackingCoordinator {
         return nil
     }
 
-    private func setStatus(_ status: PRTrackingStatus, for paneID: UUID) {
-        guard let record = subscribers[paneID] else { return }
-        subscribers[paneID]?.status = status
-        record.statusCallback(status)
-    }
-
-    private func failSubscribers(with failure: GitHubCLIFailure) {
-        for paneID in subscribers.keys.filter({
-            subscribers[$0].map(Self.isQueryEligible) ?? false
-        }) {
-            setStatus(.failed(failure), for: paneID)
+    func applyQueryFailure(_ failure: GitHubCLIFailure, paneIDs: Set<UUID>) {
+        for paneID in paneIDs {
+            guard let record = subscribers[paneID] else { continue }
+            subscribers[paneID]?.status = .failed(failure)
+            record.statusCallback?(.failed(failure))
+            TracingService.shared.record(
+                "pr.result.delivered",
+                attributes: [
+                    "pane.id": paneID.uuidString, "pane.name": record.paneName,
+                    "tab.id": record.tabID.uuidString, "tab.name": record.tabName,
+                    "outcome": "failure", "failure": failure.rawValue,
+                ])
         }
     }
 
-    nonisolated private static func isQueryEligible(_ record: SubscriberRecord) -> Bool {
-        guard let branch = record.branchName else { return false }
-        return record.owner != nil && record.repo != nil && !branch.isEmpty && branch != "HEAD"
-    }
-
-    private func deliverPRResults(from dataDict: [String: Any]) -> Int {
+    func deliverPRResults(from dataDict: [String: Any], paneIDs: Set<UUID>) -> Int {
         var parsedCount = 0
-        for (paneID, record) in subscribers where Self.isQueryEligible(record) {
+        for paneID in paneIDs where subscribers[paneID] != nil {
             let alias = "pane_" + paneID.uuidString.replacingOccurrences(of: "-", with: "")
             guard let repoData = dataDict[alias] as? [String: Any],
                 let pullRequests = repoData["pullRequests"] as? [String: Any],
                 let nodes = pullRequests["nodes"] as? [[String: Any]]
             else {
-                setStatus(.failed(.parse), for: paneID)
-                continue
-            }
-
-            if let node = nodes.first {
-                guard let pr = Self.parsePRFromGraphQLNode(node) else {
-                    setStatus(.failed(.parse), for: paneID)
-                    continue
-                }
-                parsedCount += 1
-                subscribers[paneID]?.lastData = pr
-                subscribers[paneID]?.callback(pr)
-                setStatus(.current, for: paneID)
                 if let record = subscribers[paneID] {
+                    subscribers[paneID]?.status = .failed(.parse)
+                    record.statusCallback?(.failed(.parse))
                     TracingService.shared.record(
                         "pr.result.delivered",
                         attributes: [
                             "pane.id": paneID.uuidString, "pane.name": record.paneName,
                             "tab.id": record.tabID.uuidString, "tab.name": record.tabName,
-                            "outcome": "found",
+                            "outcome": "failure", "failure": GitHubCLIFailure.parse.rawValue,
                         ])
                 }
-            } else {
+                continue
+            }
+            guard let node = nodes.first else {
                 subscribers[paneID]?.lastData = nil
                 subscribers[paneID]?.callback(nil)
-                setStatus(.noPullRequest, for: paneID)
                 if let record = subscribers[paneID] {
+                    subscribers[paneID]?.status = .absent
+                    record.statusCallback?(.absent)
                     TracingService.shared.record(
                         "pr.result.delivered",
                         attributes: [
@@ -452,6 +525,35 @@ final class PRTrackingCoordinator {
                             "outcome": "not_found",
                         ])
                 }
+                continue
+            }
+            guard let pr = Self.parsePRFromGraphQLNode(node) else {
+                if let record = subscribers[paneID] {
+                    subscribers[paneID]?.status = .failed(.parse)
+                    record.statusCallback?(.failed(.parse))
+                    TracingService.shared.record(
+                        "pr.result.delivered",
+                        attributes: [
+                            "pane.id": paneID.uuidString, "pane.name": record.paneName,
+                            "tab.id": record.tabID.uuidString, "tab.name": record.tabName,
+                            "outcome": "failure", "failure": GitHubCLIFailure.parse.rawValue,
+                        ])
+                }
+                continue
+            }
+            parsedCount += 1
+            subscribers[paneID]?.lastData = pr
+            subscribers[paneID]?.callback(pr)
+            if let record = subscribers[paneID] {
+                subscribers[paneID]?.status = .current
+                record.statusCallback?(.current)
+                TracingService.shared.record(
+                    "pr.result.delivered",
+                    attributes: [
+                        "pane.id": paneID.uuidString, "pane.name": record.paneName,
+                        "tab.id": record.tabID.uuidString, "tab.name": record.tabName,
+                        "outcome": "found",
+                    ])
             }
         }
         return parsedCount
@@ -459,13 +561,18 @@ final class PRTrackingCoordinator {
 
     private static var hasReportedMissingExecutable = false
 
-    func buildBatchQuery() -> String {
+    static func isQueryableBranch(_ branch: String?) -> Bool {
+        guard let branch else { return false }
+        return !branch.isEmpty && branch != "HEAD"
+    }
+
+    func buildBatchQuery(paneIDs: Set<UUID>? = nil) -> String {
         var fragments: [String] = []
-        for (paneID, record) in subscribers {
+        for (paneID, record) in subscribers where paneIDs == nil || paneIDs?.contains(paneID) == true {
             guard let owner = record.owner,
                 let repo = record.repo,
                 let branch = record.branchName,
-                !branch.isEmpty, branch != "HEAD"
+                Self.isQueryableBranch(branch)
             else { continue }
             let alias = "pane_" + paneID.uuidString.replacingOccurrences(of: "-", with: "")
             fragments.append(

@@ -19,7 +19,7 @@ final class GitHubCLIRunnerTests: XCTestCase {
         #!/bin/sh
         export GH_PATH='/shell/override/gh'
             export PATH='/shell/path:/bin:/usr/bin'
-        exec /bin/sh -c "$3"
+        exec /bin/sh -c "$4"
         """.write(to: shell, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shell.path)
 
@@ -57,7 +57,7 @@ final class GitHubCLIRunnerTests: XCTestCase {
             export GH_CONFIG_DIR='/configured/gh'
             export GH_TOKEN='session-token'
             printf startup-noise
-            exec /bin/sh -c "$3"
+            exec /bin/sh -c "$4"
             """
         try shellScript.write(to: shell, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shell.path)

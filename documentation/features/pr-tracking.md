@@ -10,7 +10,7 @@ This works for all CLI tools because it runs independently of session data. It u
 
 ## How to use
 
-1. Ensure the [GitHub CLI](https://cli.github.com) (`gh`) is installed and authenticated in the shell selected in **Settings → Panes → Terminal**. PR tracking uses that shell's GitHub CLI configuration.
+1. Ensure the [GitHub CLI](https://cli.github.com) (`gh`) is installed and authenticated (`gh auth login`).
 2. Open **Settings** (⌘,) and go to the **Status Line** tab.
 3. Enable the **Track pull requests** toggle in the **GitHub PR Tracking** section.
 4. Add the **PR** item to a status line row (it appears in the "Add Item" menu as "PR").
@@ -57,11 +57,13 @@ Click outside the popover to dismiss it.
 
 ## How it works
 
-Each polling cycle determines the current branch for eligible panes and sends one batched, aliased GraphQL request. Each alias contains the PR metadata, status rollup, and review-thread count for one pane, so all eligible panes are updated from that single request. The owner and repository are extracted from `git remote get-url origin`. Polling repeats every 60 seconds to catch status changes.
+Each polling cycle determines the current branch for eligible panes and sends one batched, aliased GraphQL request. Each alias contains the PR metadata, status rollup, and review-thread count for one pane, so all eligible panes are updated from that single request. The owner and repository are extracted from `git remote get-url origin`. Polling repeats on the configured interval to catch status changes.
 
-PR polling starts the configured interactive shell to resolve its current `PATH` and exported GitHub CLI configuration, then runs `gh` with that in-memory environment. An explicit `GH_PATH` override takes precedence over shell lookup, including when the override is invalid. If shell startup fails or times out, polling falls back to the app's inherited environment. Shell output and environment values are bounded and excluded from diagnostics. `gh` remains the authentication boundary and must be installed and authenticated for PR tracking.
+Repository identity is fetched by the shared status monitor for every pane, independently of the selected harness's rich status provider and GitHub authentication. This keeps the Repository fact available when GitHub PR queries fail.
 
-A successful query with an empty `nodes` list clears the item and displays **No PR**. Missing or malformed response aliases are failures, not evidence that the branch has no PR. Failed queries retain the last known PR, mark it stale in the status line and popover, and cannot trigger merge or close notifications. The popover offers **Retry**; authentication failures direct the user to authenticate the configured GitHub CLI before retrying. GitHub CLI exit status 4 and stderr containing `Bad credentials` or `HTTP 401` are classified as authentication failures; other API errors remain API failures. The `pr.shell.environment` diagnostic records only whether shell environment resolution succeeded or inherited-environment fallback was used. The `pr.graphql.query` and `pr.result.delivered` diagnostics distinguish classified query failures from successful `found` and `not_found` results using bounded categories, without environment values, credentials, or response content.
+The PR item distinguishes an in-progress check, a current pull request, a successful query with no pull request, and a failed query. A failure after a successful result keeps the previous pull request visible with a warning; failed queries cannot trigger merge or close notifications. Authentication failures show **GitHub authentication required** and **Retry**. Retry rebuilds the command context from the configured interactive shell so repaired authentication or shell settings can recover without restarting the pane.
+
+The GitHub CLI executable is selected from the configured interactive login shell's PATH, unless the app inherited an explicit `GH_PATH`, which takes precedence. Explicitly inherited GitHub configuration and token variables take precedence over values exported by that shell; missing values are filled from the shell context. The app disables interactive prompts and runs the resolved executable directly. It does not sign in, switch accounts, change credentials, or write shell environment values to diagnostics.
 
 The batched GraphQL request is passed to `gh` through standard input. If `gh` exits or closes standard input before consuming the request, Agent Session Manager records bounded pipe failure details and treats the poll as failed. A classified authentication, network, or API failure remains the primary outcome; otherwise the result is `stdin_write`. The closed pipe cannot terminate the app.
 

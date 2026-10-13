@@ -42,6 +42,12 @@ final class NotificationFlowTests: BaseTestCase {
         app.launch()
         app.activate()
 
+        let prStatus = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "#\(number) (merged)")
+        ).firstMatch
+        waitFor(prStatus, timeout: 30)
+        XCTAssertTrue(prStatus.exists, "Expected real authenticated GitHub status for PR #\(number)")
+
         let row = app.descendants(matching: .any).matching(identifier: "notification-row-merged-pr").firstMatch
         waitFor(row, timeout: 30)
         XCTAssertTrue(row.label.contains("MergedPR / merged-pr"))

@@ -31,7 +31,6 @@ final class StatusLineMonitor {
     enum CodexLifecycle { case unknown, working, stopped }
 
     private(set) var currentData: StatusLineData?
-    private(set) var prTrackingStatus: PRTrackingStatus = .loading
     private(set) var claudeLifecycle: ClaudeLifecycle = .unknown
     private(set) var cursorLifecycle: CursorLifecycle = .unknown
     private(set) var codexLifecycle: CodexLifecycle = .unknown
@@ -470,9 +469,6 @@ final class StatusLineMonitor {
                 paneName: paneName,
                 tabID: tabID,
                 tabName: tabName,
-                onPRStatus: { [weak self] status in
-                    self?.prTrackingStatus = status
-                },
                 onPRData: { [weak self] pr in
                     guard let self else { return }
                     if self.currentData == nil {
@@ -481,6 +477,11 @@ final class StatusLineMonitor {
                         self.currentData?.pr = pr
                     }
                     self.checkForPRResolutionTransition(pr)
+                },
+                onPRStatus: { [weak self] status in
+                    guard let self else { return }
+                    if self.currentData == nil { self.currentData = .empty() }
+                    self.currentData?.prTrackingState = status
                 })
         }
     }
