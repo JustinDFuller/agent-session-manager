@@ -40,4 +40,4 @@
 
 - [x] 7.1 Update the worktree-cleanup feature guide and its skill to describe the pipeline, settings, tab close, unsaved-work dialog, failure alert, launch cleanup, and Leftovers list; verify the guide's paths and behavior statements match the implementation and tests.
 - [x] 7.2 Update the public documentation following the Diataxis skill, with a how-to for cleaning up worktrees and reviewing leftovers and reference entries for the new settings and dialog buttons, using exact visible labels and real screenshots; verify `make docs-check` and `scripts/test-release-publishing.sh` pass.
-- [ ] 7.3 Run the complete applicable checks and correct any regressions; verify `swift test`, `make lint`, `make no-code-comments`, `make no-fixed-width-prose`, and the focused `make test-ui-dev` flows all pass.
+- [x] 7.3 Run the complete applicable checks and correct any regressions; verify `swift test`, `make lint`, `make no-code-comments`, `make no-fixed-width-prose`, and the focused `make test-ui-dev` flows all pass.

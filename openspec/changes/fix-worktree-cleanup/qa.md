@@ -81,6 +81,12 @@ Settings → Panes → Cleanup shows the Worktree Cleanup, Delete Branch With Wo
 | 5.1, 5.2 | `WorktreeCleanupFlowTests`: leftovers list, delete clean entry, Delete Anyway for a dirty entry, unregistered folder confirmation, empty state. |
 | 6.1, 6.2 | Ten repro scenarios above, run on the base build and on this branch. |
 
+## Final checks
+
+- `swift test` passed in the commit hook, and `make lint`, `make no-code-comments`, `make no-fixed-width-prose`, `make docs-check`, and `openspec validate fix-worktree-cleanup --strict` exited 0.
+- `scripts/test-release-publishing.sh` passed with Homebrew Ruby first on `PATH`. It fails under the macOS system Ruby 2.6 on a key-parsing line unrelated to this change.
+- A focused Dev UI run of `WorktreeCleanupFlowTests`, `WorktreeCleanupVariantsFlowTests`, and `LaunchCleanupFlowTests` executed 17 tests with 0 failures.
+
 ## Open item
 
 Task 2.4 is unchecked. Its unit tests pass, but no sanctioned credential exists for a real agent-control call against the Dev app: per-pane bearer tokens are issued only to agent panes, and the configured MCP server returns HTTP 401. The call was not forced.
