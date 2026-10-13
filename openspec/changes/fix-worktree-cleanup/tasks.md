@@ -10,31 +10,31 @@
 
 ## 2. Pane close, failure reporting, and agent control
 
-- [ ] 2.1 Route the close-pane flow and both buttons of the pull request alert through the pipeline, with the unsaved-work dialog (Keep Worktree default, Delete Anyway) for Ask and Always Delete; verify real Dev UI flows show the dialog for modified files, untracked files, unpushed commits, and detached HEAD, and that Keep Worktree leaves the worktree and Delete Anyway removes it.
-- [ ] 2.2 Add the combined failure and kept-worktree alert naming each worktree and reason, and keep a worktree that another pane uses; verify a real Dev UI flow with a shell pane on the same checkout shows the in-use message and a forced git refusal shows the failure alert.
-- [ ] 2.3 Terminate the closed pane's processes and wait for exit, bounded, before removal; verify a real Dev UI flow with a process still writing in the worktree either removes it or reports the failure, and record which behavior was observed.
+- [x] 2.1 Route the close-pane flow and both buttons of the pull request alert through the pipeline, with the unsaved-work dialog (Keep Worktree default, Delete Anyway) for Ask and Always Delete; verify real Dev UI flows show the dialog for modified files, untracked files, unpushed commits, and detached HEAD, and that Keep Worktree leaves the worktree and Delete Anyway removes it.
+- [x] 2.2 Add the combined failure and kept-worktree alert naming each worktree and reason, and keep a worktree that another pane uses; verify a real Dev UI flow with a shell pane on the same checkout shows the in-use message and a forced git refusal shows the failure alert.
+- [x] 2.3 Terminate the closed pane's processes and wait for exit, bounded, before removal; verify a real Dev UI flow with a process still writing in the worktree either removes it or reports the failure, and record which behavior was observed (observed: the worktree was removed after the writer process was terminated, with no failure alert).
 - [ ] 2.4 Apply the pipeline in agent-control `panes_delete` and `tabs_delete`, reporting keep, delete, or failure per worktree and never deleting unsaved work; verify unit tests on the mutation results and a real agent-control call against the Dev app that returns kept with a reason for a dirty worktree.
 
 ## 3. Tab close
 
-- [ ] 3.1 Add one close-tab request used by the tab close button, ⌘K, and Delete This Tab that assesses every managed worktree in the tab and shows one dialog (Delete Worktrees, Keep Worktrees, Cancel); verify real Dev UI flows for each entry point, Cancel leaving the tab unchanged, a tab without managed worktrees closing without a dialog, and Always Keep and Always Delete behavior.
-- [ ] 3.2 Report partial success on tab close so that the successes are removed and only the failed worktree is named; verify a real Dev UI flow with three worktrees where one has unsaved work shows the unsaved-work dialog for that worktree only.
+- [x] 3.1 Add one close-tab request used by the tab close button, ⌘K, and Delete This Tab that assesses every managed worktree in the tab and shows one dialog (Delete Worktrees, Keep Worktrees, Cancel); verify real Dev UI flows for each entry point, Cancel leaving the tab unchanged, a tab without managed worktrees closing without a dialog, and Always Keep and Always Delete behavior.
+- [x] 3.2 Report partial success on tab close so that the successes are removed and only the failed worktree is named; verify a real Dev UI flow with three worktrees where one has unsaved work shows the unsaved-work dialog for that worktree only.
 
 ## 4. Known repositories and launch cleanup
 
 - [x] 4.1 Add `known-repositories.json` that records a root when a tab is created or restored, drops missing folders, and seeds from restored tabs on first launch; verify unit tests for add, restore, missing-folder removal, seeding, and corrupt-file isolation.
 - [x] 4.2 Add the launch sweep with prune, the managed-folder filter, the eligibility rules (no open pane, clean, fully pushed, unlocked, unchanged for 24 hours), the branch setting, and per-removal and per-skip trace events; verify unit tests with real repositories and modified timestamps cover every eligibility rule, the 24-hour boundary, repositories with no tab, and the setting off.
-- [ ] 4.3 Run the sweep once after session restore in the background without dialogs; verify a real Dev app launch against seeded real repositories removes a clean old leftover, keeps a dirty one, and the traces list each decision.
+- [x] 4.3 Run the sweep once after session restore in the background without dialogs; verify a real Dev app launch against seeded real repositories removes a clean old leftover, keeps a dirty one, and the traces list each decision.
 
 ## 5. Leftovers list in Settings
 
-- [ ] 5.1 Add the Leftovers list to Settings → Panes → Cleanup showing repository, name, size loaded after the row appears, and the reason kept, including unregistered folders marked as not a worktree and an empty state; verify real Dev UI flows show each case with the list scanning off the main thread.
-- [ ] 5.2 Add deleting selected entries through the pipeline and the unregistered-folder confirmation limited to folders directly inside a managed worktrees folder; verify real Dev UI flows delete a clean entry, require Delete Anyway for a dirty one, and remove a selected unregistered folder only after confirmation.
+- [x] 5.1 Add the Leftovers list to Settings → Panes → Cleanup showing repository, name, size loaded after the row appears, and the reason kept, including unregistered folders marked as not a worktree and an empty state; verify real Dev UI flows show each case with the list scanning off the main thread.
+- [x] 5.2 Add deleting selected entries through the pipeline and the unregistered-folder confirmation limited to folders directly inside a managed worktrees folder; verify real Dev UI flows delete a clean entry, require Delete Anyway for a dirty one, and remove a selected unregistered folder only after confirmation.
 
 ## 6. Reproduction and proof in the running app
 
-- [ ] 6.1 Reproduce the original problems in a running Dev app built from the base commit with a scratch repository and local remote, covering the control case, modified files, the three tab-close entry points, ignored build folders, a running process, a shell pane on the same checkout, and a detached HEAD with local commits; record `git worktree list`, `du`, branch lists, and real screenshots, and confirm or correct the hypotheses in the proposal.
-- [ ] 6.2 Rerun every scenario with the implementation in the Dev app and capture before and after screenshots or a recording of the unsaved-work dialog, failure alert, tab-close dialog, leftovers list, and a launch cleanup that removes a clean leftover and keeps a dirty one; verify the captures come from the running app with no injected state and can be embedded in the pull request.
+- [x] 6.1 Reproduce the original problems in a running Dev app built from the base commit with a scratch repository and local remote, covering the control case, modified files, the three tab-close entry points, ignored build folders, a running process, a shell pane on the same checkout, and a detached HEAD with local commits; record `git worktree list`, `du`, branch lists, and real screenshots, and confirm or correct the hypotheses in the proposal.
+- [x] 6.2 Rerun every scenario with the implementation in the Dev app and capture before and after screenshots or a recording of the unsaved-work dialog, failure alert, tab-close dialog, leftovers list, and a launch cleanup that removes a clean leftover and keeps a dirty one; verify the captures come from the running app with no injected state and can be embedded in the pull request.
 
 ## 7. Documentation and checks
 
