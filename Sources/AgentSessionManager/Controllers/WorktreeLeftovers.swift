@@ -38,7 +38,8 @@ enum WorktreeLeftovers {
     }
 
     static func sweep(
-        repositories: [URL], openCheckouts: Set<String>, deleteBranch: Bool, now: Date = Date()
+        repositories: [URL], openCheckouts: Set<String>, deleteBranch: Bool, now: Date = Date(),
+        currentOpenCheckouts: (@Sendable () async -> Set<String>)? = nil
     ) async -> [WorktreeSweepOutcome] {
         var outcomes: [WorktreeSweepOutcome] = []
         for repository in repositories {
@@ -52,8 +53,9 @@ enum WorktreeLeftovers {
                     outcomes.append(WorktreeSweepOutcome(leftover: leftover, result: nil))
                     continue
                 }
-                let result = await WorktreeCleanup.remove(
-                    repository: repository, checkout: leftover.checkout, deleteBranch: deleteBranch)
+                let result = await sweepRemoval(
+                    of: leftover, repository: repository, deleteBranch: deleteBranch,
+                    currentOpenCheckouts: currentOpenCheckouts)
                 switch result.outcome {
                 case .deleted:
                     TracingService.shared.record(
@@ -71,6 +73,20 @@ enum WorktreeLeftovers {
             }
         }
         return outcomes
+    }
+
+    private static func sweepRemoval(
+        of leftover: WorktreeLeftover, repository: URL, deleteBranch: Bool,
+        currentOpenCheckouts: (@Sendable () async -> Set<String>)?
+    ) async -> WorktreeCleanupResult {
+        if let currentOpenCheckouts,
+            await currentOpenCheckouts().contains(leftover.checkout.resolvingSymlinksInPath().path)
+        {
+            return WorktreeCleanupResult(
+                checkout: leftover.checkout, outcome: .kept(reason: WorktreeCloseFlow.inUseReason))
+        }
+        return await WorktreeCleanup.remove(
+            repository: repository, checkout: leftover.checkout, deleteBranch: deleteBranch)
     }
 
     static func size(of folder: URL) -> Int64 {
@@ -205,7 +221,8 @@ enum LaunchCleanup {
         let deleteBranch = appSettings.deleteBranchWithWorktree
         return Task.detached(priority: .utility) {
             await WorktreeLeftovers.sweep(
-                repositories: repositories, openCheckouts: openCheckouts, deleteBranch: deleteBranch)
+                repositories: repositories, openCheckouts: openCheckouts, deleteBranch: deleteBranch,
+                currentOpenCheckouts: { await MainActor.run { LaunchCleanup.openCheckoutPaths(in: appState) } })
         }
     }
 }

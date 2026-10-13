@@ -172,4 +172,21 @@ final class WorktreeCleanupRemoveTests: XCTestCase {
         XCTAssertTrue(result.isDeleted)
         XCTAssertFalse(try repository.isRegistered(checkout))
     }
+
+    func testMissingFolderStillDeletesTheBranch() async throws {
+        let checkout = try repository.addManagedWorktree(name: "gone-with-branch")
+        try FileManager.default.removeItem(at: checkout)
+        let result = await WorktreeCleanup.remove(repository: repository.root, checkout: checkout, deleteBranch: true)
+        XCTAssertTrue(result.isDeleted)
+        XCTAssertFalse(try repository.isRegistered(checkout))
+        XCTAssertFalse(try repository.branches().contains("gone-with-branch"))
+    }
+
+    func testMissingFolderKeepsTheBranchWhenTheSettingIsOff() async throws {
+        let checkout = try repository.addManagedWorktree(name: "gone-keep-branch")
+        try FileManager.default.removeItem(at: checkout)
+        let result = await WorktreeCleanup.remove(repository: repository.root, checkout: checkout, deleteBranch: false)
+        XCTAssertTrue(result.isDeleted)
+        XCTAssertTrue(try repository.branches().contains("gone-keep-branch"))
+    }
 }

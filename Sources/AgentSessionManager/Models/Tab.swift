@@ -20,7 +20,6 @@ struct GitWorktreeListEntry: Equatable {
     var path: String
     var branch: String?
     var isLocked = false
-    var isPrunable = false
 }
 
 enum WorktreeResolutionError: Error, LocalizedError, Equatable {
@@ -116,18 +115,14 @@ final class Tab: Identifiable {
         var currentPath: String?
         var currentBranch: String?
         var currentLocked = false
-        var currentPrunable = false
 
         func flush() {
             if let path = currentPath {
-                entries.append(
-                    GitWorktreeListEntry(
-                        path: path, branch: currentBranch, isLocked: currentLocked, isPrunable: currentPrunable))
+                entries.append(GitWorktreeListEntry(path: path, branch: currentBranch, isLocked: currentLocked))
             }
             currentPath = nil
             currentBranch = nil
             currentLocked = false
-            currentPrunable = false
         }
 
         for line in output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
@@ -142,8 +137,6 @@ final class Tab: Identifiable {
                 currentBranch = String(line.dropFirst("branch ".count))
             } else if line == "locked" || line.hasPrefix("locked ") {
                 currentLocked = true
-            } else if line == "prunable" || line.hasPrefix("prunable ") {
-                currentPrunable = true
             }
         }
         flush()

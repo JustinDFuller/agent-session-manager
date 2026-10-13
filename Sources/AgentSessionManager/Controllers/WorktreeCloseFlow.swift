@@ -38,8 +38,19 @@ struct WorktreeUnsavedPrompt: Equatable {
 }
 
 struct WorktreeCleanupNotice: Equatable {
+    static let failedTitle = "Worktree Cleanup Failed"
+    static let keptTitle = "Worktree Kept"
+
     let title: String
     let message: String
+
+    static func posting(lines: [String], failed: Bool, over existing: WorktreeCleanupNotice?) -> WorktreeCleanupNotice?
+    {
+        guard !lines.isEmpty else { return existing }
+        let message = ((existing.map { [$0.message] } ?? []) + lines).joined(separator: "\n")
+        let anyFailed = failed || existing?.title == failedTitle
+        return WorktreeCleanupNotice(title: anyFailed ? failedTitle : keptTitle, message: message)
+    }
 }
 
 @MainActor
@@ -205,10 +216,7 @@ final class WorktreeCloseFlow {
             for item in skippedNow {
                 lines.append("Kept \(item.name): \(item.reason)")
             }
-            guard !lines.isEmpty else { return }
-            notice = WorktreeCleanupNotice(
-                title: failed ? "Worktree Cleanup Failed" : "Worktree Kept",
-                message: lines.joined(separator: "\n"))
+            notice = WorktreeCleanupNotice.posting(lines: lines, failed: failed, over: notice)
         }
     }
 

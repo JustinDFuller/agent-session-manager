@@ -201,6 +201,33 @@ final class WorktreeCloseFlowTests: XCTestCase {
         XCTAssertNil(flow.notice)
     }
 
+    func testALaterNoticeIsAddedToTheOneStillShowing() async throws {
+        settings.worktreeCleanupBehavior = .delete
+        let (first, firstCheckout) = try managedPane("locked-first")
+        let (second, secondCheckout) = try managedPane("locked-second")
+        _ = try repository.git(["worktree", "lock", firstCheckout.path])
+        _ = try repository.git(["worktree", "lock", secondCheckout.path])
+        state.requestClose(.pane(first), appSettings: settings)
+        await waitUntil { flow.notice != nil }
+        await flow.waitForCompletion()
+        state.requestClose(.pane(second), appSettings: settings)
+        await waitUntil { flow.notice?.message.contains("locked-second") == true }
+        XCTAssertEqual(flow.notice?.title, "Worktree Cleanup Failed")
+        XCTAssertTrue(flow.notice?.message.contains("locked-first") == true)
+    }
+
+    func testNoticePostingKeepsFailureTitleAndIgnoresEmptyLines() {
+        let failure = WorktreeCleanupNotice(title: WorktreeCleanupNotice.failedTitle, message: "Could not delete a: x")
+        let combined = WorktreeCleanupNotice.posting(lines: ["Kept b: y"], failed: false, over: failure)
+        XCTAssertEqual(combined?.title, WorktreeCleanupNotice.failedTitle)
+        XCTAssertEqual(combined?.message, "Could not delete a: x\nKept b: y")
+        XCTAssertEqual(WorktreeCleanupNotice.posting(lines: [], failed: false, over: failure), failure)
+        XCTAssertNil(WorktreeCleanupNotice.posting(lines: [], failed: true, over: nil))
+        XCTAssertEqual(
+            WorktreeCleanupNotice.posting(lines: ["Kept c: z"], failed: false, over: nil)?.title,
+            WorktreeCleanupNotice.keptTitle)
+    }
+
     func testMissingFolderClosesWithoutNotice() async throws {
         settings.worktreeCleanupBehavior = .delete
         let (pane, checkout) = try managedPane("gone")

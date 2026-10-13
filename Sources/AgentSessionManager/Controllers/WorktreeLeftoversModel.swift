@@ -26,6 +26,8 @@ final class WorktreeLeftoversModel {
     var selection: Set<String> = []
 
     private var pending: Pending?
+    private var isAssessingDeletion = false
+    private var rescanRequested = false
     private var lastDeletion: Task<Void, Never>?
 
     private struct Pending {
@@ -38,20 +40,26 @@ final class WorktreeLeftoversModel {
     }
 
     func scan(appState: AppState, appSettings: AppSettings) async {
-        guard !isScanning else { return }
+        guard !isScanning else {
+            rescanRequested = true
+            return
+        }
         isScanning = true
         defer {
             isScanning = false
             hasScanned = true
         }
-        let repositories = Self.repositories(appState: appState)
-        let openCheckouts = LaunchCleanup.openCheckoutPaths(in: appState)
-        let found = await Task.detached(priority: .utility) {
-            await WorktreeLeftovers.scan(repositories: repositories, openCheckouts: openCheckouts)
-        }.value
-        leftovers = found
-        selection.formIntersection(Set(found.map(\.id)))
-        sizes = sizes.filter { entry in found.contains { $0.id == entry.key } }
+        repeat {
+            rescanRequested = false
+            let repositories = Self.repositories(appState: appState)
+            let openCheckouts = LaunchCleanup.openCheckoutPaths(in: appState)
+            let found = await Task.detached(priority: .utility) {
+                await WorktreeLeftovers.scan(repositories: repositories, openCheckouts: openCheckouts)
+            }.value
+            leftovers = found
+            selection.formIntersection(Set(found.map(\.id)))
+            sizes = sizes.filter { entry in found.contains { $0.id == entry.key } }
+        } while rescanRequested
     }
 
     func loadSize(of leftover: WorktreeLeftover) async {
@@ -69,11 +77,13 @@ final class WorktreeLeftoversModel {
     }
 
     func requestDelete(appState: AppState, appSettings: AppSettings) {
-        guard pending == nil, unsavedPrompt == nil, folderPrompt == nil else { return }
+        guard !isAssessingDeletion, pending == nil, unsavedPrompt == nil, folderPrompt == nil else { return }
         let chosen = leftovers.filter { selection.contains($0.id) }
         guard !chosen.isEmpty else { return }
+        isAssessingDeletion = true
         let openCheckouts = LaunchCleanup.openCheckoutPaths(in: appState)
         lastDeletion = Task {
+            defer { isAssessingDeletion = false }
             var registered: [WorktreeLeftover] = []
             var unregistered: [WorktreeLeftover] = []
             var kept: [String] = []
@@ -174,10 +184,7 @@ final class WorktreeLeftoversModel {
                 let result = await WorktreeLeftovers.removeUnregistered(leftover)
                 Self.collect(result, into: &lines, failed: &failed)
             }
-            if !lines.isEmpty {
-                notice = WorktreeCleanupNotice(
-                    title: failed ? "Worktree Cleanup Failed" : "Worktree Kept", message: lines.joined(separator: "\n"))
-            }
+            notice = WorktreeCleanupNotice.posting(lines: lines, failed: failed, over: notice)
             await scan(appState: current.appState, appSettings: current.appSettings)
         }
     }

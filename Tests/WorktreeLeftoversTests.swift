@@ -130,6 +130,33 @@ final class WorktreeLeftoversTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: checkout.path))
     }
 
+    func testPushedBranchWithItsOwnCommitsIsRemovedWithItsBranch() async throws {
+        let checkout = try repository.addManagedWorktree(name: "pushed-work")
+        try repository.commit("pushed work", in: checkout)
+        try repository.git(["push", "origin", "pushed-work"], in: checkout)
+        try age(checkout, by: 3 * 24 * 3600)
+        let outcomes = await sweep()
+        XCTAssertEqual(outcomes.first?.result?.isDeleted, true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: checkout.path))
+        XCTAssertFalse(try repository.branches().contains("pushed-work"))
+    }
+
+    func testWorktreeAPaneOpensDuringTheSweepIsKept() async throws {
+        let checkout = try oldWorktree("opened-late")
+        let path = checkout.resolvingSymlinksInPath().path
+        let outcomes = await WorktreeLeftovers.sweep(
+            repositories: [repository.root], openCheckouts: [], deleteBranch: true, now: now,
+            currentOpenCheckouts: { [path] })
+        XCTAssertEqual(outcomes.count, 1)
+        guard case .kept(let reason) = outcomes.first?.result?.outcome else {
+            XCTFail("expected kept, got \(String(describing: outcomes.first?.result?.outcome))")
+            return
+        }
+        XCTAssertEqual(reason, WorktreeCloseFlow.inUseReason)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: checkout.path))
+        XCTAssertTrue(try repository.branches().contains("opened-late"))
+    }
+
     func testRepositoryWithoutAnyTabIsSwept() async throws {
         let checkout = try oldWorktree("no-tab")
         let outcomes = await WorktreeLeftovers.sweep(

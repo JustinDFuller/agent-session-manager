@@ -80,31 +80,34 @@ enum WorktreeCleanup {
     static func remove(
         repository: URL, checkout: URL, force: Bool = false, deleteBranch: Bool
     ) async -> WorktreeCleanupResult {
-        let resolvedCheckout = checkout.resolvingSymlinksInPath()
-        guard resolvedCheckout.path != repository.resolvingSymlinksInPath().path else {
+        let folderExists = FileManager.default.fileExists(atPath: checkout.path)
+        let resolvedCheckout = normalizedPath(checkout)
+        guard resolvedCheckout != repository.resolvingSymlinksInPath().path else {
             return WorktreeCleanupResult(
                 checkout: checkout, outcome: .kept(reason: "It is the repository's main checkout."))
         }
         do {
             let entries = try await listEntries(repository: repository)
             let target = entries.first {
-                URL(filePath: $0.path).resolvingSymlinksInPath().path == resolvedCheckout.path
-            }
-            guard FileManager.default.fileExists(atPath: checkout.path) else {
-                try await prune(repository: repository)
-                return WorktreeCleanupResult(checkout: checkout, outcome: .deleted(branch: .notRequested))
+                normalizedPath(URL(filePath: $0.path)) == resolvedCheckout
             }
             guard let target else {
-                return WorktreeCleanupResult(
-                    checkout: checkout, outcome: .kept(reason: "Git does not list it as a worktree of this repository.")
-                )
+                guard !folderExists else {
+                    return WorktreeCleanupResult(
+                        checkout: checkout,
+                        outcome: .kept(reason: "Git does not list it as a worktree of this repository."))
+                }
+                try await prune(repository: repository)
+                return WorktreeCleanupResult(checkout: checkout, outcome: .deleted(branch: .notRequested))
             }
             let branch = target.branch.map(branchName(fromRef:))
             let checkedOutElsewhere = Set(
                 entries.filter { $0.path != target.path }.compactMap { $0.branch.map(branchName(fromRef:)) })
-            try await GitRunner.output(
-                ["worktree", "remove"] + (force ? ["--force"] : []) + [checkout.path], in: repository)
-            try await prune(repository: repository)
+            if folderExists {
+                try await GitRunner.output(
+                    ["worktree", "remove"] + (force ? ["--force"] : []) + [checkout.path], in: repository)
+            }
+            try? await prune(repository: repository)
             guard deleteBranch, let branch else {
                 return WorktreeCleanupResult(checkout: checkout, outcome: .deleted(branch: .notRequested))
             }
@@ -137,6 +140,11 @@ enum WorktreeCleanup {
         return (modified, untracked)
     }
 
+    private static func normalizedPath(_ url: URL) -> String {
+        if FileManager.default.fileExists(atPath: url.path) { return url.resolvingSymlinksInPath().path }
+        return url.deletingLastPathComponent().resolvingSymlinksInPath().appending(path: url.lastPathComponent).path
+    }
+
     private static func listEntries(repository: URL) async throws -> [GitWorktreeListEntry] {
         Tab.parseWorktreeListPorcelain(
             try await GitRunner.output(["worktree", "list", "--porcelain"], in: repository))
@@ -164,7 +172,7 @@ enum WorktreeCleanup {
                 ["rev-list", "--count", "refs/heads/\(branch)", "--not", "--remotes"], in: repository)
             let hasUnpushed = (Int(unpushed.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) > 0
             let flag = (force || !hasUnpushed) ? "-D" : "-d"
-            try await GitRunner.output(["branch", flag, branch], in: repository)
+            try await GitRunner.output(["branch", flag, "--", branch], in: repository)
             return .deleted(branch)
         } catch {
             return .kept(branch, reason: error.localizedDescription)
