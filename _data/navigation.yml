@@ -85,6 +85,9 @@
     - title: Supported Tools
       url: /documentation/reference/supported-tools/
       type: reference
+    - title: Worktree Cleanup Reference
+      url: /documentation/reference/worktree-cleanup/
+      type: reference
 - title: Explanation
   type: explanation
   items:
