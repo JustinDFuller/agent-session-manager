@@ -36,7 +36,7 @@ make screenshots                                                  # capture UI s
 make pr-screenshots                                               # upload screenshots and embed under ## Example in PR body
 ```
 
-Screenshots must depict real app state produced through real flows; screenshots captured via injected or forced state are being migrated away (see issue #221). UI test regressions are easy to miss and costly to fix later. **Never skip this step.** The git pre-commit hook runs unit tests, format, and lint; the pre-push hook runs UI smoke tests (`AppLaunchTests`, `NewTabTests`, `NewPaneTests`), so most regressions will be caught before they reach a PR. Run `make setup-hooks` once to install them.
+Screenshots must depict real app state produced through real flows; screenshots captured via injected or forced state are being migrated away (see issue #221). UI test regressions are easy to miss and costly to fix later. **Never skip this step.** The git pre-commit hook runs format, lint, and the comment and prose checks; the pre-push hook runs unit tests and UI smoke tests (`AppLaunchTests`, `NewTabTests`, `NewPaneTests`) when the pushed commits include native changes, so most regressions will be caught before they reach a PR. Run `make setup-hooks` once to install them.
 
 Use `make test-ui-dev` (not `make test-ui`) so tests run against the dev build and write to `agent-session-manager.dev` instead of the production app support directory. If a test run is interrupted before tearDown completes, the settings will be left dirty — run `make reset-app-state-dev` to clean them up (`make reset-app-state` for the prod directory).
 
