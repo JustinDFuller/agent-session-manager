@@ -27,6 +27,7 @@ Existing Makefile targets already cover most cheap checks: `no-code-comments`, `
 `scripts/git-hook-checks.sh` takes a mode (`pre-commit` or `pre-push`) and owns change detection, classification, ordering, and reporting. `.githooks/pre-commit` and `.githooks/pre-push` keep the existing `cd` to the top level and `unset` of inherited Git variables, then run the runner. Keeping the `unset` line in the wrappers preserves the fixture isolation requirement in native-test-validation.
 
 Alternative: duplicate logic in each hook. Rejected because classification and ordering would diverge.
+
 Alternative: adopt lefthook or the pre-commit framework. Rejected because it adds a tool every contributor and agent must install, for a ruleset this small.
 
 ### Changed files per mode
