@@ -21,8 +21,13 @@ Native UI validation and screenshot commands MUST target the Dev app identity an
 
 #### Scenario: Pre-push native validation
 
-- **WHEN** the installed pre-push hook runs native launch validation
+- **WHEN** the installed pre-push hook evaluates pushed commits that include native changes
 - **THEN** it runs the current launch and settings cases against Dev state
+
+#### Scenario: Pre-push without native changes
+
+- **WHEN** the installed pre-push hook evaluates pushed commits that contain no native changes
+- **THEN** it does not start native launch validation
 
 #### Scenario: Git fixtures run inside local validation hooks
 
