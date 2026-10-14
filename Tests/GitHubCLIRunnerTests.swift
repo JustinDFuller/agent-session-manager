@@ -211,13 +211,28 @@ final class GitHubCLIRunnerTests: XCTestCase {
                 environment: ["GH_PATH": executableDirectory.path, "PATH": fallbackDirectory.path]))
     }
 
-    func testTimeoutWaitsForReplacementProcessToExit() async throws {
+    func testTimeoutTerminatesReplacementProcess() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: "agent-session-manager-gh-runner-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
+        let replacement = directory.appending(path: "replacement")
+        let terminationMarker = directory.appending(path: "terminated")
+        let replacementScript = """
+            #!/bin/bash
+            trap '
+                /usr/bin/touch "\(terminationMarker.path)"
+                kill "$child" 2>/dev/null
+                exit 0
+            ' TERM
+            /bin/sleep 2 >/dev/null 2>&1 &
+            child=$!
+            wait "$child"
+            """
+        try replacementScript.write(to: replacement, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: replacement.path)
         let executable = directory.appending(path: "gh")
-        try "#!/bin/sh\nrm \"$0\"\nexec /bin/sleep 2\n".write(
+        try "#!/bin/sh\nrm \"$0\"\nexec \"\(replacement.path)\"\n".write(
             to: executable, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
 
@@ -226,7 +241,7 @@ final class GitHubCLIRunnerTests: XCTestCase {
         let result = await runner.run(arguments: [], timeout: 0.1)
 
         XCTAssertEqual(result.failure, .timeout)
-        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: terminationMarker.path))
     }
 
     func testClosedStdinReportsFailureWithoutTerminatingApp() async throws {
