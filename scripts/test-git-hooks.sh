@@ -129,7 +129,7 @@ ran_before() {
 }
 
 said() {
-    printf '%s\n' "$last_output" | grep -qF -- "$1" || fail "expected output: $1"
+    grep -qF -- "$1" <<<"$last_output" || fail "expected output: $1"
 }
 
 write_files() {
@@ -231,6 +231,16 @@ expect_success "CI script push"
 ran "node --test"
 not_ran "swift test"
 not_ran "swift-format"
+
+for allowlisted in README.md Gemfile Gemfile.lock _config.yml _data/example.yml _layouts/example.html assets/example.css favicon.ico CNAME scripts/check-docs.sh scripts/check-docs-taxonomy.rb .agents/skills/example/SKILL.md; do
+    plain_commit_files "$allowlisted"
+    hooked push --quiet origin HEAD:main
+    expect_success "push of allowlisted path $allowlisted"
+    not_ran "swift-format"
+    not_ran "swift test"
+    not_ran "make test-ui-dev-launch"
+    said "Skipping unit tests (no native changes)"
+done
 
 commit_files .githooks/example
 expect_success "hook file commit"

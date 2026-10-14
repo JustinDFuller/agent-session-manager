@@ -26,7 +26,7 @@ Existing Makefile targets already cover most cheap checks: `no-code-comments`, `
 
 `scripts/git-hook-checks.sh` takes a mode (`pre-commit` or `pre-push`) and owns change detection, classification, ordering, and reporting. `.githooks/pre-commit` and `.githooks/pre-push` keep the existing `cd` to the top level, then run the runner. The runner reads the changed files first and only then unsets the inherited Git variables (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_COMMON_DIR`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`), because `GIT_INDEX_FILE` selects the temporary index when `git commit <paths>` runs the hook. Unsetting before every check preserves the fixture isolation requirement in native-test-validation.
 
-The wrapper resolves the runner relative to the hooks' own checkout rather than the current worktree, so the hooks and the runner always version together and a branch that predates the runner does not break.
+The wrapper resolves the runner relative to the hooks' own checkout rather than the current worktree, so the hooks and the runner always version together and a branch that predates the runner still finds it. The checks themselves still run against the current worktree's files and Makefile.
 
 Alternative: duplicate logic in each hook. Rejected because classification and ordering would diverge.
 
@@ -92,6 +92,9 @@ Each tier prints a `==> Running <check>` or `==> Skipping <check> (<reason>)` li
 - A merge of already-pushed commits into a branch re-runs native checks, because merge commits are compared with their first parent → this over-checks, never under-checks.
 - Checks run against the checked-out working tree, as the previous hooks did, not against the pushed commits → unchanged behavior.
 - Hooks only take effect after the main checkout updates → recorded in the proposal follow-ups.
+- A worktree whose branch predates the Makefile targets and scripts the runner calls (for example `make no-code-comments`) cannot commit until it rebases onto the merged change → accepted, because skipping a missing check would fail open; rebasing is the fix.
+- Documentation-only pushes now depend on Ruby, Bundler, Jekyll, and Node being on `PATH`, and the runner reports a missing tool only as the failed check → accepted, and AGENTS.md notes the Homebrew Ruby requirement.
+- Files under `.agents/skills/` count as evidence even when they are shell scripts, because no hook check runs them today → add a group for them if one is ever wired in.
 
 ## Open Questions
 

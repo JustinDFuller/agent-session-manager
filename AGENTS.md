@@ -108,7 +108,7 @@ If you must run a focused `xcodebuild test` command, keep the same isolation gua
 
 **IMPORTANT**: Update the test suite with every change. Unit tests live in `Tests/` (e.g. `CLIOptionConfigTests.swift`, `WorktreeListParserTests.swift`). UI tests live in `UITests/`. The app passes `--uitesting-skip-restore` during UI test runs to bypass session restoration.
 
-Run `make setup-hooks` after cloning to install git hooks. Commits run only fast checks on the staged files (comment and prose checks, OpenSpec validation, format and lint). Pushes run the remaining checks for the commits not yet on the remote, cheapest first and stopping at the first failure: CI script tests, hook tests, the documentation build, `swift test`, and UI smoke tests. Native checks run only when native files changed, and any unrecognized file runs them. `scripts/git-hook-checks.sh` holds the classification.
+Run `make setup-hooks` after cloning to install git hooks. Commits run only fast checks selected by the staged files (comment and prose checks, OpenSpec validation, and Swift format and lint over the whole source tree). Pushes run every check that applies to the commits not yet on the remote, cheapest first and stopping at the first failure: the fast checks, then CI script tests, hook tests, the documentation build, `swift test`, and UI smoke tests. Native checks run only when native files changed, and any unrecognized file runs them. The documentation build needs Homebrew Ruby ahead of the macOS system Ruby on `PATH`. `scripts/git-hook-checks.sh` holds the classification.
 
 **No fake UI tests or screenshots**: see the `## No Fake UI Tests / Screenshots` rule above and the migration backlog in issue #221.
 
