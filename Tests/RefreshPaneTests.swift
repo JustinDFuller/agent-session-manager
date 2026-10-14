@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 
 @testable import AgentSessionManager
@@ -417,5 +418,49 @@ final class RefreshPaneTests: XCTestCase {
         XCTAssertTrue(args.contains("--settings"))
         XCTAssertTrue(args.contains("--model"))
         XCTAssertTrue(args.contains("sonnet"))
+    }
+
+    @MainActor
+    func testRefreshWithNewCodexSettingsStartsFreshWithUpdatedOptions() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "codex-refresh-settings-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let bin = directory.appending(path: "bin", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let codex = bin.appending(path: "codex")
+        try "#!/bin/sh\nprintf 'codex-cli 0.162.1\\n'\n".write(to: codex, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: codex.path)
+        let shell = directory.appending(path: "shell")
+        try "#!/bin/sh\nPATH='\(bin.path)'\nexport PATH\nexec /bin/sh -c \"$3\"\n"
+            .write(to: shell, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shell.path)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let settings = AppSettings()
+        settings.preferredShell = shell.path
+        settings.agentControlInjectionPolicy = .never
+        let tab = Tab(name: "repo", directory: directory)
+        let pane = Pane(name: "codex-pane", tab: tab, harness: .codex, agentControlInjectionEnabled: false)
+        pane.extraArgs = ["--model", "old-model"]
+        pane.codexSessionID = "previous-conversation"
+        pane.codexTranscriptPath = "/tmp/previous-rollout.jsonl"
+        let oldController = TerminalController()
+        oldController.pendingDirectory = directory.path
+        oldController.pendingCommandArgs = ["codex", "resume", "previous-conversation"]
+        pane.installTerminalController(oldController)
+        tab.panes.append(pane)
+
+        tab.refreshPane(
+            pane,
+            extraArgs: ["--model", "gpt-5.2"],
+            harness: .codex,
+            appSettings: settings)
+
+        XCTAssertFalse(pane.terminalController === oldController)
+        XCTAssertNil(pane.codexSessionID)
+        XCTAssertNil(pane.codexTranscriptPath)
+        XCTAssertEqual(pane.extraArgs, ["--model", "gpt-5.2"])
+        XCTAssertEqual(
+            pane.terminalController?.pendingCommandArgs?.suffix(2), ["--model", "gpt-5.2"])
+        XCTAssertFalse(pane.terminalController?.pendingCommandArgs?.contains("resume") ?? true)
     }
 }

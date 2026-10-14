@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import XCTest
 
 @testable import AgentSessionManager
@@ -429,6 +430,109 @@ final class SessionPersistenceNotificationTests: XCTestCase {
         XCTAssertTrue(restoredPane.codexFreshStartNotice)
     }
 
+    func testRestoreCodexUsesExactConversationWhenEnabledAndStartsFreshWhenDisabled() throws {
+        let subdirectory = "session-restore-exact-codex-\(UUID().uuidString)"
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: subdirectory)
+        let worktree = FileManager.default.temporaryDirectory
+            .appending(path: "codex-exact-restore-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let codexHome = worktree.appending(path: "codex-home", directoryHint: .isDirectory)
+        let fakeBin = worktree.appending(path: "bin", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: fakeBin, withIntermediateDirectories: true)
+        let databaseURL = codexHome.appending(path: "state_5.sqlite")
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &database), SQLITE_OK)
+        defer { sqlite3_close(database) }
+        var sqlError: UnsafeMutablePointer<CChar>?
+        let sql = """
+            CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT);
+            INSERT INTO threads VALUES ('saved-conversation', '\(worktree.path)', '\(worktree.path)/saved.jsonl');
+            INSERT INTO threads VALUES ('newer-conversation', '\(worktree.path)', '\(worktree.path)/newer.jsonl');
+            """
+        guard sqlite3_exec(database, sql, nil, nil, &sqlError) == SQLITE_OK else {
+            let message = sqlError.map { String(cString: $0) } ?? "unknown SQLite error"
+            sqlite3_free(sqlError)
+            throw NSError(domain: "SQLiteTest", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        let fakeCodex = fakeBin.appending(path: "codex")
+        try "#!/bin/sh\nprintf 'codex-cli 0.162.1\\n'\n"
+            .write(to: fakeCodex, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeCodex.path)
+        let fakeShell = worktree.appending(path: "shell")
+        try "#!/bin/sh\nPATH='\(fakeBin.path)'\nexport PATH\nexec /bin/sh -c \"$3\"\n"
+            .write(to: fakeShell, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeShell.path)
+        let profileID = UUID()
+        let session = PersistedSession(
+            tabs: [
+                PersistedTab(
+                    id: UUID(),
+                    name: "exact-codex-tab",
+                    directory: worktree.path,
+                    panes: [
+                        PersistedPane(
+                            id: UUID(),
+                            name: "exact-codex-pane",
+                            harness: .codex,
+                            worktreeDirectory: worktree.path,
+                            profileID: profileID,
+                            extraArgs: ["--model", "gpt-5.1"],
+                            codexSessionID: "saved-conversation",
+                            codexTranscriptPath: "\(worktree.path)/saved.jsonl",
+                            agentControlInjectionEnabled: false)
+                    ])
+            ],
+            activeTabIndex: 0)
+        try JSONEncoder().encode(session).write(to: appSupport.appending(path: "sessions.json"))
+        PersistenceHelpers.overrideAppSupportSubdirectory = subdirectory
+        let settings = AppSettings()
+        settings.agentControlInjectionPolicy = .never
+        settings.preferredShell = fakeShell.path
+        settings.profiles = [
+            Profile(
+                id: profileID,
+                name: "Codex test",
+                harness: .codex,
+                envVars: [ProfileEnvVar(id: "CODEX_HOME", isEnabled: true, value: codexHome.path)])
+        ]
+        let enabledState = AppState()
+        let disabledState = AppState()
+        defer {
+            for state in [enabledState, disabledState] {
+                for tab in state.tabs {
+                    for pane in tab.panes {
+                        pane.terminalController?.terminate()
+                        pane.removeStatusLineMonitor()
+                    }
+                }
+            }
+            PersistenceHelpers.overrideAppSupportSubdirectory = nil
+            try? FileManager.default.removeItem(at: appSupport)
+            try? FileManager.default.removeItem(at: worktree)
+        }
+        settings.continueOnRestart = true
+        SessionPersistence.restore(into: enabledState, appSettings: settings)
+        let enabledPane = try XCTUnwrap(enabledState.tabs.first?.panes.first)
+        XCTAssertEqual(enabledPane.codexSessionID, "saved-conversation")
+        XCTAssertEqual(
+            Array(enabledPane.terminalController?.pendingCommandArgs?.suffix(4) ?? []),
+            ["--model", "gpt-5.1", "resume", "saved-conversation"])
+        let enabledGeneration = try XCTUnwrap(enabledPane.statusLineMonitor?.codexLaunchGeneration)
+        XCTAssertTrue(
+            enabledPane.terminalController?.pendingEnvironment?.contains(
+                "AGENT_SESSION_MANAGER_CODEX_LAUNCH_GENERATION=\(enabledGeneration)") ?? false)
+
+        settings.continueOnRestart = false
+        SessionPersistence.restore(into: disabledState, appSettings: settings)
+        let disabledPane = try XCTUnwrap(disabledState.tabs.first?.panes.first)
+        XCTAssertNil(disabledPane.codexSessionID)
+        XCTAssertFalse(disabledPane.terminalController?.pendingCommandArgs?.contains("resume") ?? true)
+        XCTAssertTrue(disabledPane.terminalController?.pendingCommandArgs?.contains("--model") ?? false)
+        XCTAssertNotEqual(enabledGeneration, disabledPane.statusLineMonitor?.codexLaunchGeneration)
+    }
+
     func testOpenCodeSessionIDRoundTripInPersistedPane() throws {
         let persisted = PersistedPane(
             id: UUID(), name: "p", harness: .opencode,
@@ -582,10 +686,30 @@ final class SessionPersistenceNotificationTests: XCTestCase {
         let appState = AppState()
         let tab = Tab(id: UUID(), name: "T", directory: URL(filePath: "/tmp"))
         let pane = Pane(name: "P", tab: tab, harness: .codex)
+        let profileID = UUID()
+        let notificationID = UUID()
         tab.panes.append(pane)
         appState.tabs.append(tab)
-        pane.codexExpectedResumeSessionID = "requested-session"
+        pane.worktreeDirectory = URL(filePath: "/tmp/codex-worktree")
+        pane.worktreeIsManaged = true
+        pane.profileID = profileID
+        pane.extraArgs = ["--model", "gpt-5.1"]
+        pane.agentControlInjectionEnabled = true
         pane.installTerminalController(TerminalController())
+        pane.terminalController?.pendingEnvironment = ["AGENT_SESSION_MANAGER_MCP_TOKEN=runtime-only-secret"]
+        appState.notifications = [
+            PaneNotification(
+                id: notificationID,
+                paneID: pane.id,
+                paneName: pane.name,
+                tabID: tab.id,
+                tabName: tab.name,
+                isPriority: true,
+                timestamp: Date(timeIntervalSinceReferenceDate: 123_456),
+                kind: .terminalBell,
+                reason: "Existing notification")
+        ]
+        pane.codexExpectedResumeSessionID = "requested-session"
         let monitor = StatusLineMonitor(
             paneID: pane.id,
             paneName: pane.name,
@@ -604,6 +728,20 @@ final class SessionPersistenceNotificationTests: XCTestCase {
         XCTAssertEqual(pane.codexSessionID, "bound-session")
         XCTAssertEqual(pane.codexTranscriptPath, "/tmp/rollout.jsonl")
         XCTAssertNil(pane.codexExpectedResumeSessionID)
+        let sessionData = try XCTUnwrap(
+            try? Data(contentsOf: support.appending(path: "sessions.json")))
+        let savedSession = try JSONDecoder().decode(PersistedSession.self, from: sessionData)
+        let savedPane = try XCTUnwrap(savedSession.tabs.first?.panes.first)
+        XCTAssertEqual(savedPane.codexSessionID, "bound-session")
+        XCTAssertEqual(savedPane.codexTranscriptPath, "/tmp/rollout.jsonl")
+        XCTAssertEqual(savedPane.worktreeDirectory, "/tmp/codex-worktree")
+        XCTAssertTrue(savedPane.worktreeIsManaged)
+        XCTAssertEqual(savedPane.profileID, profileID)
+        XCTAssertEqual(savedPane.extraArgs, ["--model", "gpt-5.1"])
+        XCTAssertEqual(savedPane.agentControlInjectionEnabled, true)
+        XCTAssertEqual(savedSession.pendingNotifications.first?.notificationID, notificationID)
+        XCTAssertEqual(savedSession.pendingNotifications.first?.reason, "Existing notification")
+        XCTAssertFalse(String(decoding: sessionData, as: UTF8.self).contains("runtime-only-secret"))
         XCTAssertTrue(
             InvariantReporter.shared.violationsForTesting.contains {
                 $0.invariantID == "codex.continuation.identity"
