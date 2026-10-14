@@ -24,7 +24,9 @@ Existing Makefile targets already cover most cheap checks: `no-code-comments`, `
 
 ### One runner script, thin hook wrappers
 
-`scripts/git-hook-checks.sh` takes a mode (`pre-commit` or `pre-push`) and owns change detection, classification, ordering, and reporting. `.githooks/pre-commit` and `.githooks/pre-push` keep the existing `cd` to the top level and `unset` of inherited Git variables, then run the runner. Keeping the `unset` line in the wrappers preserves the fixture isolation requirement in native-test-validation.
+`scripts/git-hook-checks.sh` takes a mode (`pre-commit` or `pre-push`) and owns change detection, classification, ordering, and reporting. `.githooks/pre-commit` and `.githooks/pre-push` keep the existing `cd` to the top level, then run the runner. The runner reads the changed files first and only then unsets the inherited Git variables (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_COMMON_DIR`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`), because `GIT_INDEX_FILE` selects the temporary index when `git commit <paths>` runs the hook. Unsetting before every check preserves the fixture isolation requirement in native-test-validation.
+
+The wrapper resolves the runner relative to the hooks' own checkout rather than the current worktree, so the hooks and the runner always version together and a branch that predates the runner does not break.
 
 Alternative: duplicate logic in each hook. Rejected because classification and ordering would diverge.
 
@@ -46,7 +48,7 @@ Each path maps to the first matching group; no match means native.
 |---|---|
 | openspec | `openspec/**` |
 | docs | `documentation/**`, root `*.md`, `_config.yml`, `_data/**`, `_layouts/**`, `assets/**`, `Gemfile*`, `favicon.ico`, `CNAME`, `scripts/check-docs*`, `scripts/test-release-publishing.sh` |
-| evidence | `screenshots/**`, image and video files, `.claude/skills/**`, `.agents/skills/**` |
+| evidence | `screenshots/**`, `.claude/skills/**`, `.agents/skills/**`, and image or video files under `documentation/`, `assets/`, or `screenshots/` |
 | ci-scripts | `.github/scripts/**` |
 | hooks | `.githooks/**`, `scripts/git-hook-checks.sh`, `scripts/test-git-hooks.sh` |
 | native | everything else, including `Sources/`, `Tests/`, `UITests/`, `Package.*`, `project.yml`, `Makefile`, other `scripts/`, plists, entitlements, lint configuration, and `.github/workflows/**` |
@@ -60,13 +62,15 @@ Alternative: denylist native paths. Rejected because a new source directory woul
 | Order | Check | Runs when | Commit | Push |
 |---|---|---|---|---|
 | 1 | `make no-code-comments`, `make no-fixed-width-prose` | any change | yes | yes |
-| 2 | `openspec validate --all --strict` | openspec | yes | yes |
+| 2 | `openspec validate --archived`, `--changes --strict`, `--specs` | openspec | yes | yes |
 | 3 | `swift-format lint`, `swiftlint lint --strict` | native | yes | yes |
 | 4 | `node --test .github/scripts/*.test.mjs` | ci-scripts | no | yes |
 | 5 | `bash scripts/test-git-hooks.sh` | hooks | no | yes |
 | 6 | `make docs-check`, `scripts/test-release-publishing.sh` | docs | no | yes |
 | 7 | `swift test` | native | no | yes |
 | 8 | `make test-ui-dev-launch` | native | no | yes |
+
+The OpenSpec step validates archived changes, active changes (strict), and main specs (non-strict) separately instead of `--all --strict`, because newer local CLI versions flag long requirements in existing main specs that the CI-pinned version accepts. An image or video elsewhere, for example under `Sources/`, is classified native because it can change the app.
 
 The commit column holds only checks that finish in seconds on typical changes. Everything slower waits for push, where the full ladder for the pushed commits runs once instead of once per commit. A failing step exits immediately, so cheaper steps always surface first.
 
@@ -76,7 +80,7 @@ Each tier prints a `==> Running <check>` or `==> Skipping <check> (<reason>)` li
 
 ### Testing the runner
 
-`scripts/test-git-hooks.sh` already puts recording stubs for `swift`, `make`, `swift-format`, and `swiftlint` first on `PATH`. The runner is tested the same way, adding stubs for `node` and `openspec` and a throwaway bare remote. Cases cover: documentation-only commit and push skip heavy stubs; a Swift commit runs the fast stubs and not `swift`; an unknown path runs everything; a failing lint stub prevents `swift` from starting; and a follow-up documentation push on an already-pushed native commit runs no heavy stub. The existing recursion cases are updated so their fixture commit stages a native file.
+`scripts/test-git-hooks.sh` already puts recording stubs for `swift`, `make`, `swift-format`, and `swiftlint` first on `PATH`. The runner is tested the same way, adding stubs for `node` and `openspec` and a throwaway bare remote. An empty change set (an empty commit, or a push with nothing new) runs no checks and says so. The fixture repository has a configured remote named `origin`, and one case pushes to a bare path to prove the undetermined fallback. Cases cover: documentation-only commit and push skip heavy stubs; a Swift commit runs the fast stubs and not `swift`; an unknown path runs everything; a failing lint stub prevents `swift` from starting; and a follow-up documentation push on an already-pushed native commit runs no heavy stub. The existing recursion cases are updated so their fixture commit stages a native file.
 
 ## Risks / Trade-offs
 

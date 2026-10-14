@@ -64,9 +64,9 @@ The project includes three build configurations. Their products use `.xcode-*` b
 
 Use the `Dev` configuration in Xcode to build the dev variant.
 
-Local validation hooks clear inherited Git repository and command-configuration variables before running checks, so disposable Git fixtures do not inherit the invoking hook path. Run `bash scripts/test-git-hooks.sh` to exercise real nested fixture commits and local pushes under both Git configuration mechanisms; lightweight command shims isolate this shell regression from native test execution. The full unit and Dev UI suites remain separate required evidence.
+Local validation hooks run through `scripts/git-hook-checks.sh`, which reads the changed files first and then clears inherited Git repository and command-configuration variables before running checks, so disposable Git fixtures do not inherit the invoking hook path. Run `bash scripts/test-git-hooks.sh` to exercise real nested fixture commits and local pushes under both Git configuration mechanisms; lightweight command shims isolate this shell regression from native test execution. The full unit and Dev UI suites remain separate required evidence.
 
-The pre-push hook delegates to `make test-ui-dev-launch`, which runs the current launch and settings test classes with the Dev configuration and isolated state directory.
+The pre-push hook runs `make test-ui-dev-launch` when the pushed commits include native changes. That target runs the current launch and settings test classes with the Dev configuration and isolated state directory. Pushes of commits that change only documentation, evidence, or OpenSpec files skip it and report the skip.
 
 ## UI Test Safety
 

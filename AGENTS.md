@@ -80,7 +80,7 @@ make restart      # kill and reopen the running app without rebuilding
 make watch        # watch Sources/ and Tests/ for changes, auto rebuild+restart (no external tools needed)
 make xcodeproj    # regenerate Xcode project via xcodegen (required before UI tests)
 make lint         # swift-format lint --recursive --strict (matches CI format check)
-make setup-hooks  # configure git hooks for pre-commit (unit tests) and pre-push (UI smoke tests)
+make setup-hooks  # configure git hooks: fast checks on commit, full checks for the pushed changes on push
 make clean        # remove .build/, .app/, .xcodeproj/
 make docs-check   # render the GitHub Pages site and check generated local links
 ```
@@ -108,7 +108,7 @@ If you must run a focused `xcodebuild test` command, keep the same isolation gua
 
 **IMPORTANT**: Update the test suite with every change. Unit tests live in `Tests/` (e.g. `CLIOptionConfigTests.swift`, `WorktreeListParserTests.swift`). UI tests live in `UITests/`. The app passes `--uitesting-skip-restore` during UI test runs to bypass session restoration.
 
-Run `make setup-hooks` after cloning to install git hooks: `swift test` on commit, UI smoke tests on push.
+Run `make setup-hooks` after cloning to install git hooks. Commits run only fast checks on the staged files (comment and prose checks, OpenSpec validation, format and lint). Pushes run the remaining checks for the commits not yet on the remote, cheapest first and stopping at the first failure: CI script tests, hook tests, the documentation build, `swift test`, and UI smoke tests. Native checks run only when native files changed, and any unrecognized file runs them. `scripts/git-hook-checks.sh` holds the classification.
 
 **No fake UI tests or screenshots**: see the `## No Fake UI Tests / Screenshots` rule above and the migration backlog in issue #221.
 

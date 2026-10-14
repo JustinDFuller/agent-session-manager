@@ -5,12 +5,14 @@ on:
     paths:
       - ".githooks/**"
       - "scripts/test-git-hooks.sh"
+      - "scripts/git-hook-checks.sh"
       - ".github/workflows/git-hooks.yml"
   push:
     branches: [main]
     paths:
       - ".githooks/**"
       - "scripts/test-git-hooks.sh"
+      - "scripts/git-hook-checks.sh"
       - ".github/workflows/git-hooks.yml"
 
 permissions:
