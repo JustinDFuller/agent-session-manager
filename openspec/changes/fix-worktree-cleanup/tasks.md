@@ -13,7 +13,7 @@
 - [x] 2.1 Route the close-pane flow and both buttons of the pull request alert through the pipeline, with the unsaved-work dialog (Keep Worktree default, Delete Anyway) for Ask and Always Delete; verify real Dev UI flows show the dialog for modified files, untracked files, unpushed commits, and detached HEAD, and that Keep Worktree leaves the worktree and Delete Anyway removes it.
 - [x] 2.2 Add the combined failure and kept-worktree alert naming each worktree and reason, and keep a worktree that another pane uses; verify a real Dev UI flow with a shell pane on the same checkout shows the in-use message and a forced git refusal shows the failure alert.
 - [x] 2.3 Terminate the closed pane's processes and wait for exit, bounded, before removal; verify a real Dev UI flow with a process still writing in the worktree either removes it or reports the failure, and record which behavior was observed (observed: the worktree was removed after the writer process was terminated, with no failure alert).
-- [ ] 2.4 Apply the pipeline in agent-control `panes_delete` and `tabs_delete`, reporting keep, delete, or failure per worktree and never deleting unsaved work; verify unit tests on the mutation results and a real agent-control call against the Dev app that returns kept with a reason for a dirty worktree.
+- [x] 2.4 Apply the pipeline in agent-control `panes_delete` and `tabs_delete`, reporting keep, delete, or failure per worktree and never deleting unsaved work; verify unit tests on the mutation results and a real agent-control call against the Dev app that returns kept with a reason for a dirty worktree.
 
 ## 3. Tab close
 

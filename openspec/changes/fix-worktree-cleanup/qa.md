@@ -87,6 +87,8 @@ Settings → Panes → Cleanup shows the Worktree Cleanup, Delete Branch With Wo
 - `scripts/test-release-publishing.sh` passed with Homebrew Ruby first on `PATH`. It fails under the macOS system Ruby 2.6 on a key-parsing line unrelated to this change.
 - A focused Dev UI run of `WorktreeCleanupFlowTests`, `WorktreeCleanupVariantsFlowTests`, and `LaunchCleanupFlowTests` executed 17 tests with 0 failures.
 
-## Open item
+## Task 2.4: real agent-control call
 
-Task 2.4 is unchecked. Its unit tests pass, but no sanctioned credential exists for a real agent-control call against the Dev app: per-pane bearer tokens are issued only to agent panes, and the configured MCP server returns HTTP 401. The call was not forced.
+Run in the Dev app built from commit 4c0f112. Claude Code in the `qa-2-4-target` pane, using the MCP server the Dev app injected into that pane, called `panes_delete` with `cleanup: "delete"` on the `qa-2-4-dirty` pane, whose worktree held one untracked file.
+
+The result reported the pane deleted and the worktree `kept` with the reason "It has unsaved work: 1 untracked file." Afterwards the worktree folder, `unsaved.txt`, and the `qa-2-4-dirty` branch were all still present. The raw result and the on-disk listing are in `qa-evidence/agent-control-panes-delete-kept.txt`.
