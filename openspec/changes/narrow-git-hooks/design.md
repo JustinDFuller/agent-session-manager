@@ -94,6 +94,7 @@ Each tier prints a `==> Running <check>` or `==> Skipping <check> (<reason>)` li
 - Hooks only take effect after the main checkout updates → recorded in the proposal follow-ups.
 - A worktree whose branch predates the Makefile targets and scripts the runner calls (for example `make no-code-comments`) cannot commit until it rebases onto the merged change → accepted, because skipping a missing check would fail open; rebasing is the fix.
 - Documentation-only pushes now depend on Ruby, Bundler, Jekyll, and Node being on `PATH`, and the runner reports a missing tool only as the failed check → accepted, and AGENTS.md notes the Homebrew Ruby requirement.
+- CI-only checks that read files classified as native, such as the workflow tests that read `.github/workflows/`, and the release contract test when only release scripts change, do not run locally for those edits → unchanged from before this change and outside the specified check set; CI still enforces them.
 - Files under `.agents/skills/` count as evidence even when they are shell scripts, because no hook check runs them today → add a group for them if one is ever wired in.
 
 ## Open Questions

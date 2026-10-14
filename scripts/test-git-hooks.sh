@@ -136,7 +136,7 @@ write_files() {
     local path
     for path in "$@"; do
         mkdir -p "$outer/$(dirname "$path")"
-        printf '%s\n' "$path" >> "$outer/$path"
+        printf ': %s\n' "$path" >> "$outer/$path"
     done
 }
 
@@ -232,14 +232,23 @@ ran "node --test"
 not_ran "swift test"
 not_ran "swift-format"
 
-for allowlisted in README.md Gemfile Gemfile.lock _config.yml _data/example.yml _layouts/example.html assets/example.css favicon.ico CNAME scripts/check-docs.sh scripts/check-docs-taxonomy.rb .agents/skills/example/SKILL.md; do
+for allowlisted in README.md Gemfile Gemfile.lock _config.yml _data/example.yml _layouts/example.html assets/example.css favicon.ico CNAME scripts/check-docs.sh scripts/check-docs-taxonomy.rb scripts/test-release-publishing.sh .agents/skills/example/SKILL.md; do
     plain_commit_files "$allowlisted"
     hooked push --quiet origin HEAD:main
     expect_success "push of allowlisted path $allowlisted"
     not_ran "swift-format"
     not_ran "swift test"
     not_ran "make test-ui-dev-launch"
+    not_ran "node --test"
+    not_ran "fixture-test-git-hooks"
     said "Skipping unit tests (no native changes)"
+done
+
+for hook_path in scripts/git-hook-checks.sh scripts/test-git-hooks.sh; do
+    plain_commit_files "$hook_path"
+    hooked push --quiet origin HEAD:main
+    expect_success "push of hook path $hook_path"
+    ran "fixture-test-git-hooks"
 done
 
 commit_files .githooks/example
