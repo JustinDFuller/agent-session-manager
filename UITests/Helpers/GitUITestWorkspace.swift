@@ -22,6 +22,46 @@ enum GitUITestWorkspace {
             cwd: url
         )
         runGitOrFail(["branch", "-M", "ui-root"], cwd: url)
+        addOrigin(to: url)
+    }
+
+    static var originURL: URL {
+        URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "UITestOrigin.git", directoryHint: .isDirectory)
+    }
+
+    private static func addOrigin(to url: URL) {
+        try? FileManager.default.removeItem(at: originURL)
+        runGitOrFail(["init", "--bare", originURL.path], cwd: url)
+        runGitOrFail(["remote", "add", "origin", originURL.path], cwd: url)
+        runGitOrFail(["push", "origin", "ui-root"], cwd: url)
+    }
+
+    static func worktreeURL(folder: String) -> URL {
+        directoryURL.appending(path: ".agent-session-manager/worktrees/\(folder)", directoryHint: .isDirectory)
+    }
+
+    static func ageWorktree(folder: String, days: Int) {
+        let admin = directoryURL.appending(path: ".git/worktrees/\(folder)", directoryHint: .isDirectory)
+        let date = Date().addingTimeInterval(-Double(days) * 24 * 3600)
+        for name in ["HEAD", "index"] {
+            try? FileManager.default.setAttributes(
+                [.modificationDate: date], ofItemAtPath: admin.appending(path: name).path)
+        }
+    }
+
+    static func localBranches() -> [String] {
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/git")
+        process.arguments = ["branch", "--format=%(refname:short)"]
+        process.currentDirectoryURL = directoryURL
+        let out = Pipe()
+        process.standardOutput = out
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(data: data, encoding: .utf8)?.split(separator: "\n").map(String.init) ?? []
     }
 
     static func addManagedSecondaryWorktree(

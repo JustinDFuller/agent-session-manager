@@ -492,6 +492,7 @@ final class AgentControlMutationRouter {
         let tab = Tab(
             name: name, directory: directory, baseBranchOverride: baseBranch?.isEmpty == true ? nil : baseBranch)
         appState.tabs.append(tab)
+        KnownRepositories.record([directory])
         appState.activeTabID = tab.id
         appState.activePaneID = nil
         SessionPersistence.save(appState: appState)
@@ -564,18 +565,19 @@ final class AgentControlMutationRouter {
             try Task.checkCancellation()
         } catch is CancellationError {
             if resolved.wasCreated {
-                try? await tab.cleanupManagedWorktree(at: resolved.checkoutURL)
+                _ = await tab.removeCreatedWorktree(
+                    at: resolved.checkoutURL, deleteBranch: appSettings.deleteBranchWithWorktree)
             }
             throw CancellationError()
         }
-        let inUse = appState.isCheckoutInUse(
-            directory: tab.directory, checkout: resolved.checkoutURL)
+        let inUse = appState.isCheckoutInUse(checkout: resolved.checkoutURL)
         guard !inUse else { throw MCPError.invalidRequest("A pane with this worktree is already open") }
         do {
             try Task.checkCancellation()
         } catch is CancellationError {
             if resolved.wasCreated {
-                try? await tab.cleanupManagedWorktree(at: resolved.checkoutURL)
+                _ = await tab.removeCreatedWorktree(
+                    at: resolved.checkoutURL, deleteBranch: appSettings.deleteBranchWithWorktree)
             }
             throw CancellationError()
         }
@@ -699,10 +701,11 @@ final class AgentControlMutationRouter {
         guard let tab = pane.tab else { throw MCPError.internalError("Pane has no parent tab") }
         let cleanup = try cleanupDecision(args.cleanup, panes: [pane])
         let paneID = pane.id
+        let processIDs = WorktreeCloseFlow.processIDs(in: [pane])
         try Task.checkCancellation()
         tab.closePane(pane)
         SessionPersistence.save(appState: appState)
-        let cleanupResults = await cleanupWorktrees(cleanup, panes: [pane], tab: tab)
+        let cleanupResults = await cleanupWorktrees(cleanup, panes: [pane], tab: tab, processIDs: processIDs)
         let status = cleanupResults.contains(where: { $0.status == "failed" }) ? "partial_failure" : "succeeded"
         let result = mutationResult(
             operation: "panes_delete", status: status, tabID: tab.id, paneID: paneID,
@@ -718,8 +721,9 @@ final class AgentControlMutationRouter {
         let panes = tab.panes
         let cleanup = try cleanupDecision(args.cleanup, panes: panes)
         let tabID = tab.id
+        let processIDs = WorktreeCloseFlow.processIDs(in: panes)
         appState.closeTab(tab)
-        let cleanupResults = await cleanupWorktrees(cleanup, panes: panes, tab: tab)
+        let cleanupResults = await cleanupWorktrees(cleanup, panes: panes, tab: tab, processIDs: processIDs)
         let status = cleanupResults.contains(where: { $0.status == "failed" }) ? "partial_failure" : "succeeded"
         let result = mutationResult(
             operation: "tabs_delete", status: status, tabID: tabID,
@@ -746,25 +750,57 @@ final class AgentControlMutationRouter {
     }
 
     private func cleanupWorktrees(
-        _ decision: String, panes: [Pane], tab: Tab
+        _ decision: String, panes: [Pane], tab: Tab, processIDs: [Int32]
     ) async -> [AgentControlCleanupResult] {
+        let managed = panes.filter { $0.worktreeIsManaged && $0.worktreeDirectory != nil }
         guard decision == "delete" else {
-            return panes.filter(\.worktreeIsManaged).map {
-                AgentControlCleanupResult(paneID: $0.id, status: "kept", error: nil)
-            }
+            return managed.map { AgentControlCleanupResult(paneID: $0.id, status: "kept", error: nil) }
         }
+        await WorktreeCloseFlow.waitForExit(of: processIDs)
         var results: [AgentControlCleanupResult] = []
-        for pane in panes where pane.worktreeIsManaged {
-            do {
-                try await tab.cleanupWorktree(for: pane)
-                results.append(AgentControlCleanupResult(paneID: pane.id, status: "deleted", error: nil))
-            } catch {
-                results.append(
-                    AgentControlCleanupResult(
-                        paneID: pane.id, status: "failed", error: String(error.localizedDescription.prefix(200))))
+        var handled: [String: AgentControlCleanupResult] = [:]
+        for pane in managed {
+            guard let checkout = pane.worktreeDirectory else { continue }
+            let key = checkout.resolvingSymlinksInPath().path
+            if let earlier = handled[key] {
+                results.append(AgentControlCleanupResult(paneID: pane.id, status: earlier.status, error: earlier.error))
+                continue
             }
+            let result = await cleanupWorktree(of: pane, checkout: checkout, tab: tab)
+            handled[key] = result
+            results.append(result)
         }
         return results
+    }
+
+    private func cleanupWorktree(of pane: Pane, checkout: URL, tab: Tab) async -> AgentControlCleanupResult {
+        if appState.isCheckoutInUse(checkout: checkout) {
+            return AgentControlCleanupResult(paneID: pane.id, status: "kept", error: WorktreeCloseFlow.inUseReason)
+        }
+        if FileManager.default.fileExists(atPath: checkout.path) {
+            do {
+                let assessment = try await WorktreeCleanup.assess(repository: tab.directory, checkout: checkout)
+                if assessment.hasUnsavedWork {
+                    return AgentControlCleanupResult(
+                        paneID: pane.id, status: "kept",
+                        error: "It has unsaved work: \(assessment.unsavedWorkLines.joined(separator: ", ")).")
+                }
+            } catch {
+                return AgentControlCleanupResult(
+                    paneID: pane.id, status: "failed",
+                    error: String("It could not be checked for unsaved work: \(error.localizedDescription)".prefix(200))
+                )
+            }
+        }
+        let result = await tab.removeWorktree(of: pane, deleteBranch: appSettings.deleteBranchWithWorktree)
+        switch result?.outcome {
+        case .kept(let reason):
+            return AgentControlCleanupResult(paneID: pane.id, status: "kept", error: reason)
+        case .failed(let reason):
+            return AgentControlCleanupResult(paneID: pane.id, status: "failed", error: String(reason.prefix(200)))
+        default:
+            return AgentControlCleanupResult(paneID: pane.id, status: "deleted", error: nil)
+        }
     }
 
     private func resolveProfile(_ rawID: String?, harness: Harness) throws -> Profile? {

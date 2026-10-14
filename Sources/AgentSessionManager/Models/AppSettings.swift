@@ -129,6 +129,8 @@ final class AppSettings {
     var isOpencodeStopNotificationEnabled: Bool = true
     var continueOnRestart: Bool = true
     var worktreeCleanupBehavior: WorktreeCleanupBehavior = .ask
+    var deleteBranchWithWorktree: Bool = true
+    var cleanUpLeftoversAtLaunch: Bool = true
     var existingWorktreeManagement: ExistingWorktreeManagement = .ask
     var worktreeBaseRef: WorktreeBaseRef = .fresh
     var debugModeEnabled: Bool = false
