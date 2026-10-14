@@ -290,9 +290,14 @@ ran "make test-ui-dev-launch"
 git -C "$outer" fetch --quiet origin
 
 hooked push --quiet origin HEAD:refs/heads/scratch
-expect_success "push of a new branch"
+expect_success "push of a new branch whose commits the remote has"
+ran_nothing
 hooked push --quiet origin :scratch
 expect_success "deletion of a remote branch"
+ran_nothing
+hooked push --quiet origin HEAD:refs/heads/scratch
+hooked push --quiet "$remote" :scratch
+expect_success "deletion of a remote branch through a URL"
 ran_nothing
 
 plain_commit_files Sources/Rewritten.swift
@@ -301,6 +306,64 @@ expect_success "push before rewrite"
 git -C "$outer" commit --quiet --amend -m rewritten
 hooked push --quiet --force origin HEAD:main
 expect_success "force push of a rewritten commit"
+ran "swift test"
+
+for native_path in Package.resolved Makefile project.yml Resources/Info.plist App.entitlements .github/workflows/example.yml Sources/notes.md "Sources/With Space.swift"; do
+    plain_commit_files "$native_path"
+    hooked push --quiet origin HEAD:main
+    expect_success "push of $native_path"
+    ran "swift test"
+    ran "make test-ui-dev-launch"
+done
+
+write_files Sources/PathCommit.swift
+git -C "$outer" add .
+git -C "$outer" commit --quiet -m "track path commit"
+git -C "$outer" push --quiet --no-verify origin HEAD:main
+printf 'more\n' >> "$outer/Sources/PathCommit.swift"
+hooked commit --quiet -m "commit by path" Sources/PathCommit.swift
+expect_success "commit by path"
+ran "swift-format lint"
+ran "swiftlint lint"
+git -C "$outer" push --quiet --no-verify origin HEAD:main
+
+git -C "$outer" mv Sources/PathCommit.swift documentation/moved-from-sources.md
+git -C "$outer" add .
+hooked commit --quiet -m "move native file into documentation"
+expect_success "commit that moves a native file"
+ran "swift-format lint"
+hooked push --quiet origin HEAD:main
+expect_success "push that moves a native file"
+ran "swift test"
+
+git -C "$outer" mv documentation/guide.md Sources/guide-moved.md
+git -C "$outer" add .
+hooked commit --quiet -m "move documentation into native tree"
+expect_success "commit that moves documentation into a native directory"
+ran "swift-format lint"
+
+git init --quiet --bare "$test_root/other.git"
+git -C "$outer" remote add other "$test_root/other.git"
+hooked push --quiet origin HEAD:main
+expect_success "push of earlier commits before the second remote case"
+plain_commit_files documentation/second-remote.md
+hooked push --quiet other HEAD:main
+expect_success "push to a second remote that has none of the commits"
+ran "swift test"
+ran "make test-ui-dev-launch"
+
+git -C "$outer" checkout --quiet -b side
+plain_commit_files documentation/side-only.md
+hooked push --quiet origin side
+git -C "$outer" checkout --quiet main
+plain_commit_files documentation/main-only.md
+hooked push --quiet origin HEAD:main
+git -C "$outer" merge --quiet --no-ff --no-commit side >/dev/null 2>&1
+write_files Sources/MergeOnly.swift
+git -C "$outer" add .
+git -C "$outer" commit --quiet --no-verify -m "merge with native change"
+hooked push --quiet origin HEAD:main
+expect_success "push of a merge commit that adds native code"
 ran "swift test"
 
 echo 'Git hook scoping, ordering, fail-fast, push scoping, fixture isolation, and Dev command routing checks passed.'

@@ -47,8 +47,8 @@ Each path maps to the first matching group; no match means native.
 | Group | Paths |
 |---|---|
 | openspec | `openspec/**` |
-| docs | `documentation/**`, root `*.md`, `_config.yml`, `_data/**`, `_layouts/**`, `assets/**`, `Gemfile*`, `favicon.ico`, `CNAME`, `scripts/check-docs*`, `scripts/test-release-publishing.sh` |
-| evidence | `screenshots/**`, `.claude/skills/**`, `.agents/skills/**`, and image or video files under `documentation/`, `assets/`, or `screenshots/` |
+| docs | `documentation/**`, root `*.md`, `_config.yml`, `_data/**`, `_layouts/**`, `assets/**`, `Gemfile*`, `favicon.ico`, `CNAME`, `scripts/check-docs.sh`, `scripts/check-docs-taxonomy.rb`, `scripts/test-release-publishing.sh` |
+| evidence | `screenshots/**`, `.claude/skills/**`, `.agents/skills/**` |
 | ci-scripts | `.github/scripts/**` |
 | hooks | `.githooks/**`, `scripts/git-hook-checks.sh`, `scripts/test-git-hooks.sh` |
 | native | everything else, including `Sources/`, `Tests/`, `UITests/`, `Package.*`, `project.yml`, `Makefile`, other `scripts/`, plists, entitlements, lint configuration, and `.github/workflows/**` |
@@ -70,13 +70,13 @@ Alternative: denylist native paths. Rejected because a new source directory woul
 | 7 | `swift test` | native | no | yes |
 | 8 | `make test-ui-dev-launch` | native | no | yes |
 
-The OpenSpec step validates archived changes, active changes (strict), and main specs (non-strict) separately instead of `--all --strict`, because newer local CLI versions flag long requirements in existing main specs that the CI-pinned version accepts. An image or video elsewhere, for example under `Sources/`, is classified native because it can change the app.
+The OpenSpec step validates archived changes, active changes (strict), and main specs (non-strict) separately instead of `--all --strict`, because newer local CLI versions flag long requirements in existing main specs that the CI-pinned version accepts. An image or video outside `screenshots/` is not treated as evidence: under `documentation/` or `assets/` it counts as documentation, and elsewhere, for example under `Sources/`, it is native because it can change the app.
 
 The commit column holds only checks that finish in seconds on typical changes. Everything slower waits for push, where the full ladder for the pushed commits runs once instead of once per commit. A failing step exits immediately, so cheaper steps always surface first.
 
 ### Reporting
 
-Each tier prints a `==> Running <check>` or `==> Skipping <check> (<reason>)` line, and the runner ends with a one-line summary of the groups it found. The `swift test` step keeps today's behavior of filtering output to errors on failure.
+Each tier prints a `==> Running <check>` or `==> Skipping <check> (<reason>)` line, the runner prints the file groups it found before running anything, and it ends with a line saying every applicable check passed. The `swift test` step keeps today's behavior of filtering output to errors on failure.
 
 ### Testing the runner
 
@@ -88,6 +88,9 @@ Each tier prints a `==> Running <check>` or `==> Skipping <check> (<reason>)` li
 - A stale remote-tracking ref can make the runner see commits as unpushed → it runs extra checks, never fewer.
 - A native commit made with `--no-verify` and not yet pushed still counts at the next push → the unpushed range includes it, so it is checked.
 - The classification list can go stale as directories are added → unknown paths default to native, and the hook tests assert that default.
+- A commit that exists only on the remote (made by automation, the GitHub web interface, or another machine) counts as already checked once it is fetched, so a later documentation-only push on top of it skips native checks → accepted, because the confirmed scope is commits not yet on the remote; CI does not run unit tests, so such commits were never checked locally either way.
+- A merge of already-pushed commits into a branch re-runs native checks, because merge commits are compared with their first parent → this over-checks, never under-checks.
+- Checks run against the checked-out working tree, as the previous hooks did, not against the pushed commits → unchanged behavior.
 - Hooks only take effect after the main checkout updates → recorded in the proposal follow-ups.
 
 ## Open Questions

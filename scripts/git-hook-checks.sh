@@ -25,16 +25,19 @@ collect_staged() {
 }
 
 collect_pushed() {
-    if ! git remote get-url "$remote_name" >/dev/null 2>&1; then
-        undetermined=1
-        return
-    fi
-    local local_ref local_sha remote_ref remote_sha
+    local local_ref local_sha remote_ref remote_sha remote_checked=0
     while read -r local_ref local_sha remote_ref remote_sha; do
         case "$local_sha" in
             *[!0]*) ;;
             *) continue ;;
         esac
+        if [[ "$remote_checked" == 0 ]]; then
+            if ! git remote get-url "$remote_name" >/dev/null 2>&1; then
+                undetermined=1
+                return
+            fi
+            remote_checked=1
+        fi
         git log -m --no-renames --name-only --format= -z "$local_sha" --not "--remotes=$remote_name" >>"$paths_file" || undetermined=1
     done
 }

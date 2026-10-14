@@ -19,4 +19,4 @@
 ## 4. Integration
 
 - [ ] 4.1 Install the new hooks in this worktree against a local bare remote and run a markdown-only commit and push, a Swift change with a deliberate formatting violation, a clean Swift push, and a follow-up markdown-only push; verify with recorded timings and terminal output that the markdown pushes finish in seconds, the formatting violation stops before `swift test`, and the clean Swift push runs the full ladder in order
-- [ ] 4.2 Run `openspec validate --all --strict` and `make no-code-comments no-fixed-width-prose`; verify both pass
+- [ ] 4.2 Run the OpenSpec validation commands the hook uses (`--archived`, `--changes --strict`, `--specs`) and `make no-code-comments no-fixed-width-prose`; verify both pass
