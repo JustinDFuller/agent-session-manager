@@ -168,6 +168,15 @@ final class GitHubCLIRunnerTests: XCTestCase {
         XCTAssertEqual(
             GitHubCLIRunner.classify(exitCode: 1, stderr: "gh: Resource not accessible (HTTP 403)"), .api)
         XCTAssertEqual(GitHubCLIRunner.classify(exitCode: 1, stderr: "HTTP/2.0 500"), .api)
+        XCTAssertEqual(
+            GitHubCLIRunner.classify(exitCode: 1, stderr: "gh: Bad credentials (HTTP 401)"),
+            .authentication)
+        XCTAssertEqual(
+            GitHubCLIRunner.classify(
+                exitCode: 1, stderr: "", stdout: "HTTP/2.0 401 Unauthorized"),
+            .authentication)
+        XCTAssertEqual(
+            GitHubCLIRunner.classify(exitCode: 1, stderr: "HTTP/2.0 403 Forbidden"), .api)
     }
 
     func testHTTP401BadCredentialsCLIResponseIsAuthenticationFailure() async throws {
@@ -217,6 +226,7 @@ final class GitHubCLIRunnerTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let replacement = directory.appending(path: "replacement")
+        let readyMarker = directory.appending(path: "ready")
         let terminationMarker = directory.appending(path: "terminated")
         let replacementScript = """
             #!/bin/bash
@@ -225,7 +235,8 @@ final class GitHubCLIRunnerTests: XCTestCase {
                 kill "$child" 2>/dev/null
                 exit 0
             ' TERM
-            /bin/sleep 2 >/dev/null 2>&1 &
+            /usr/bin/touch "\(readyMarker.path)"
+            /bin/sleep 30 >/dev/null 2>&1 &
             child=$!
             wait "$child"
             """
@@ -237,8 +248,13 @@ final class GitHubCLIRunnerTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
 
         let runner = GitHubCLIRunner(environment: ["GH_PATH": executable.path], shell: "/bin/sh")
-        let start = Date()
-        let result = await runner.run(arguments: [], timeout: 0.1)
+        let resultTask = Task { await runner.run(arguments: [], timeout: 3) }
+        let readyDeadline = Date().addingTimeInterval(2)
+        while !FileManager.default.fileExists(atPath: readyMarker.path), Date() < readyDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: readyMarker.path))
+        let result = await resultTask.value
 
         XCTAssertEqual(result.failure, .timeout)
         XCTAssertTrue(FileManager.default.fileExists(atPath: terminationMarker.path))

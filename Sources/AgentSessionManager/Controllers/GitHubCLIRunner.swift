@@ -159,7 +159,10 @@ final class GitHubCLIRunner: GitHubCLIRunning, @unchecked Sendable {
                 inputFailure: inputFailure)
         }
         let status = process.terminationStatus
-        let classifiedFailure = Self.classify(exitCode: status, stderr: stderrText)
+        let classifiedFailure = Self.classify(
+            exitCode: status,
+            stderr: stderrText,
+            stdout: String(data: outData.prefix(Self.stderrPrefixLimit), encoding: .utf8) ?? "")
         if let classifiedFailure {
             return GitHubCLIResult(
                 stdout: outData, stderrPrefix: stderrText, exitCode: status,
@@ -196,12 +199,16 @@ final class GitHubCLIRunner: GitHubCLIRunning, @unchecked Sendable {
             && !isDirectory.boolValue
     }
 
-    static func classify(exitCode: Int32, stderr: String) -> GitHubCLIFailure? {
+    static func classify(exitCode: Int32, stderr: String, stdout: String = "") -> GitHubCLIFailure? {
         guard exitCode != 0 else { return nil }
         if exitCode == 4 { return .authentication }
         if exitCode == 2 { return .cancelled }
-        let lower = stderr.lowercased()
-        if lower.contains("bad credentials") || lower.contains("401") { return .authentication }
+        let lower = "\(stderr)\n\(stdout)".lowercased()
+        if lower.contains("bad credentials") || lower.contains("http 401") || lower.contains("http/2.0 401 unauthorized")
+            || lower.contains("http/1.1 401 unauthorized")
+        {
+            return .authentication
+        }
         if [
             "no such host", "network is unreachable", "connection refused", "connection reset", "tls", "x509",
             "timeout",
