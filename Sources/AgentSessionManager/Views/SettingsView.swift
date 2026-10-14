@@ -492,6 +492,41 @@ private struct PanesContent: View {
                     }
                 }
                 SettingRow(
+                    title: "Delete Branch With Worktree",
+                    description:
+                        "Also delete the local branch when a worktree is deleted. A branch with commits that are on "
+                        + "no remote is only deleted after you confirm, and the default branch is never deleted.",
+                    defaultValue: "On"
+                ) {
+                    Toggle("Delete Branch With Worktree", isOn: $appSettings.deleteBranchWithWorktree)
+                        .toggleStyle(.checkbox)
+                        .labelsHidden()
+                        .accessibilityIdentifier("settings-delete-branch-with-worktree-toggle")
+                        .onChange(of: appSettings.deleteBranchWithWorktree) {
+                            SettingsPersistence.save(
+                                appSettings.deleteBranchWithWorktree,
+                                to: SettingsPersistence.deleteBranchWithWorktreeFile)
+                        }
+                }
+                SettingRow(
+                    title: "Clean Up Leftovers at Launch",
+                    description:
+                        "When the app starts, delete leftover worktrees it created that no pane uses, that have no "
+                        + "unsaved work, and that have not changed in 24 hours. Anything else stays in the list below.",
+                    defaultValue: "On"
+                ) {
+                    Toggle("Clean Up Leftovers at Launch", isOn: $appSettings.cleanUpLeftoversAtLaunch)
+                        .toggleStyle(.checkbox)
+                        .labelsHidden()
+                        .accessibilityIdentifier("settings-clean-up-leftovers-toggle")
+                        .onChange(of: appSettings.cleanUpLeftoversAtLaunch) {
+                            SettingsPersistence.save(
+                                appSettings.cleanUpLeftoversAtLaunch,
+                                to: SettingsPersistence.cleanUpLeftoversAtLaunchFile)
+                        }
+                }
+                WorktreeLeftoversList()
+                SettingRow(
                     title: "Continue on Restart",
                     description:
                         "Resume the last conversation when Claude, Cursor, or OpenCode panes "

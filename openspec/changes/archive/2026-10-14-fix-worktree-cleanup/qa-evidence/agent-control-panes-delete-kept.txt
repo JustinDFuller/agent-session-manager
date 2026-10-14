@@ -1,0 +1,18 @@
+Dev app build: 4c0f112 (scripts/recursive-development.sh start), run 2026-10-14 06:41
+Caller: Claude Code in pane qa-2-4-target, using the agent-session-manager MCP server injected by the Dev app
+Target: pane qa-2-4-dirty, worktree with one untracked file (unsaved.txt)
+
+panes_delete {paneID: C6EDA31B-3B42-49D9-8CA5-E06B393236AC, cleanup: "delete"} returned:
+{"cleanup":[{"error":"It has unsaved work: 1 untracked file.","paneID":"C6EDA31B-3B42-49D9-8CA5-E06B393236AC","status":"kept"}],"operation":"panes_delete","paneID":"C6EDA31B-3B42-49D9-8CA5-E06B393236AC","status":"succeeded","tabID":"D1EA1089-38DE-45E0-BF61-BF82EE770680"}
+
+On disk afterwards (scratch repo /private/tmp/claude-501/qa-2-4/scratch-repo):
+$ ls -la .agent-session-manager/worktrees/qa-2-4-dirty
+.git  README.md  unsaved.txt
+$ git worktree list
+.../scratch-repo                                                af8f109 [main]
+.../worktrees/qa-2-4-dirty                                      af8f109 [qa-2-4-dirty]
+.../worktrees/qa-2-4-target                                     af8f109 [qa-2-4-target]
+$ git branch --list
+* main
++ qa-2-4-dirty
++ qa-2-4-target

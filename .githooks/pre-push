@@ -1,6 +1,5 @@
 #!/bin/sh
 set -e
-echo "==> Running UI smoke tests..."
+runner="$(cd "$(dirname "$0")/.." && pwd)/scripts/git-hook-checks.sh"
 cd "$(git rev-parse --show-toplevel)"
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
-make test-ui-dev-launch
+exec bash "$runner" pre-push "$@"

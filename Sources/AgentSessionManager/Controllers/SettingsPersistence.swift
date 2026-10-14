@@ -138,6 +138,18 @@ struct SettingsPersistence {
     private static var updateCheckSettingsURL: URL { appSupportDir.appending(path: "update-check-settings.json") }
     private static var agentControlSettingsURL: URL { appSupportDir.appending(path: "agent-control-settings.json") }
 
+    static let deleteBranchWithWorktreeFile = "delete-branch-with-worktree.json"
+    static let cleanUpLeftoversAtLaunchFile = "clean-up-leftovers-at-launch.json"
+
+    static func loadWorktreeCleanupFlags(into appSettings: AppSettings) {
+        if let value = load(Bool.self, from: deleteBranchWithWorktreeFile) {
+            appSettings.deleteBranchWithWorktree = value
+        }
+        if let value = load(Bool.self, from: cleanUpLeftoversAtLaunchFile) {
+            appSettings.cleanUpLeftoversAtLaunch = value
+        }
+    }
+
     static func save<Value: Encodable>(_ value: Value, to filename: String) {
         guard let data = try? JSONEncoder().encode(value) else { return }
         try? data.write(to: appSupportDir.appending(path: filename))

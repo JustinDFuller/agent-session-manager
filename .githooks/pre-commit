@@ -1,21 +1,5 @@
 #!/bin/sh
 set -e
+runner="$(cd "$(dirname "$0")/.." && pwd)/scripts/git-hook-checks.sh"
 cd "$(git rev-parse --show-toplevel)"
-
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
-
-echo "==> Running unit tests..."
-_tmpfile=$(mktemp)
-if ! swift test >"$_tmpfile" 2>&1; then
-  grep -E "(error:|FAILED|Test.*failed|\.swift:[0-9])" "$_tmpfile" || cat "$_tmpfile"
-  rm -f "$_tmpfile"
-  exit 1
-fi
-grep -E "Test Suite 'All tests'" "$_tmpfile" | tail -1 || echo "Tests passed."
-rm -f "$_tmpfile"
-
-echo "==> Checking format..."
-swift-format lint --recursive --strict Sources/ Tests/ UITests/
-
-echo "==> Running lint..."
-swiftlint lint --strict --config .swiftlint.yml
+exec bash "$runner" pre-commit "$@"

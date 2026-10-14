@@ -7,9 +7,6 @@ struct ContentView: View {
     @Environment(AppSettings.self) private var appSettings
     @State private var traceCleanupService: TraceCleanupService?
     @State private var showingNewTab = false
-    @State private var showCleanupAlert = false
-    @State private var pendingCleanupPane: Pane?
-    @State private var pendingCleanupTab: Tab?
     @State private var showPRResolutionAlert = false
     @State private var pendingPRResolutionPane: Pane?
     @State private var pendingPRResolutionTab: Tab?
@@ -373,6 +370,7 @@ struct ContentView: View {
                 if let value = SettingsPersistence.load(WorktreeCleanupBehavior.self, from: "worktree-cleanup.json") {
                     appSettings.worktreeCleanupBehavior = value
                 }
+                SettingsPersistence.loadWorktreeCleanupFlags(into: appSettings)
                 if let value = SettingsPersistence.load(
                     ExistingWorktreeManagement.self, from: "existing-worktree-management.json")
                 {
@@ -480,6 +478,7 @@ struct ContentView: View {
                 let cleanup = TraceCleanupService(tracesDirectory: appSettings.resolvedTracingDirectoryURL)
                 traceCleanupService = cleanup
                 SessionPersistence.restore(into: appState, appSettings: appSettings)
+                LaunchCleanup.start(appState: appState, appSettings: appSettings)
                 await SessionPersistence.checkForResolvedPRsAfterRestore(appState: appState)
             }
             await MacNotificationCoordinator.shared.requestAuthorizationIfNeeded()
@@ -569,51 +568,24 @@ struct ContentView: View {
         .sheet(item: $paneForSettings) { pane in
             PaneSettingsView(snapshot: pane.settingsSnapshot(profiles: appSettings.profiles))
         }
-        .alert("Close Worktree Pane", isPresented: $showCleanupAlert) {
-            Button("Keep Worktree") {
-                guard let pane = pendingCleanupPane, let tab = pendingCleanupTab else { return }
-                pendingCleanupPane = nil
-                pendingCleanupTab = nil
-                tab.closePane(pane)
-                SessionPersistence.save(appState: appState)
-            }
-            Button("Delete Worktree", role: .destructive) {
-                guard let pane = pendingCleanupPane, let tab = pendingCleanupTab else { return }
-                pendingCleanupPane = nil
-                pendingCleanupTab = nil
-                tab.closePane(pane)
-                SessionPersistence.save(appState: appState)
-                Task { try? await tab.cleanupWorktree(for: pane) }
-            }
-            Button("Cancel", role: .cancel) {
-                pendingCleanupPane = nil
-                pendingCleanupTab = nil
-            }
-        } message: {
-            if let pane = pendingCleanupPane {
-                Text("The worktree \"\(pane.name)\" was created by Agent Session Manager. Would you like to delete it?")
-            }
-        }
+        .worktreeCloseAlerts(appState.worktreeCloseFlow)
         .alert(
             pendingPRResolutionKind == .prMerged ? "PR Merged" : "PR Closed",
             isPresented: $showPRResolutionAlert
         ) {
             Button("Close Pane") {
-                guard let pane = pendingPRResolutionPane, let tab = pendingPRResolutionTab else { return }
+                guard let pane = pendingPRResolutionPane else { return }
                 pendingPRResolutionPane = nil
                 pendingPRResolutionTab = nil
                 appState.clearNotification(paneID: pane.id)
-                tab.closePane(pane)
-                SessionPersistence.save(appState: appState)
+                appState.requestClose(.pane(pane), decision: .keep, appSettings: appSettings)
             }
             Button("Close Pane and Clean Up Worktree", role: .destructive) {
-                guard let pane = pendingPRResolutionPane, let tab = pendingPRResolutionTab else { return }
+                guard let pane = pendingPRResolutionPane else { return }
                 pendingPRResolutionPane = nil
                 pendingPRResolutionTab = nil
                 appState.clearNotification(paneID: pane.id)
-                tab.closePane(pane)
-                SessionPersistence.save(appState: appState)
-                Task { try? await tab.cleanupWorktree(for: pane) }
+                appState.requestClose(.pane(pane), decision: .delete, appSettings: appSettings)
             }
             Button("Cancel", role: .cancel) {
                 if let pane = pendingPRResolutionPane, let tab = pendingPRResolutionTab {
@@ -664,20 +636,7 @@ struct ContentView: View {
     }
 
     private func handleClosePane(_ pane: Pane) {
-        guard let tab = pane.tab else { return }
-        switch appSettings.worktreeCleanupBehavior {
-        case .ask where pane.worktreeIsManaged:
-            pendingCleanupPane = pane
-            pendingCleanupTab = tab
-            showCleanupAlert = true
-        case .delete where pane.worktreeIsManaged:
-            tab.closePane(pane)
-            SessionPersistence.save(appState: appState)
-            Task { try? await tab.cleanupWorktree(for: pane) }
-        default:
-            tab.closePane(pane)
-            SessionPersistence.save(appState: appState)
-        }
+        appState.requestClose(.pane(pane), appSettings: appSettings)
     }
 
     private func switchTab(index: Int) {
@@ -690,8 +649,7 @@ struct ContentView: View {
 
     private func closeActiveTab() {
         guard let tab = appState.activeTab else { return }
-        appState.closeTab(tab)
-        SessionPersistence.save(appState: appState)
+        appState.requestClose(.tab(tab), appSettings: appSettings)
     }
 }
 

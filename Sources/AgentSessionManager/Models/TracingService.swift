@@ -170,6 +170,7 @@ final class TracingService: @unchecked Sendable {
             span.end()
             return result
         } catch {
+            span.status = .error(description: error.localizedDescription)
             span.end()
             throw error
         }

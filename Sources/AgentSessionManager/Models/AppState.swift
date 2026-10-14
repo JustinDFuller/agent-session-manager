@@ -8,6 +8,7 @@ final class AppState {
     var activeTabID: UUID?
     var activePaneID: UUID?
     var notifications: [PaneNotification] = []
+    let worktreeCloseFlow = WorktreeCloseFlow()
 
     var activeTab: Tab? {
         tabs.first { $0.id == activeTabID }
@@ -40,15 +41,20 @@ final class AppState {
         }
     }
 
-    func isCheckoutInUse(directory: URL, checkout: URL, excludingPaneID: UUID? = nil) -> Bool {
-        let normalized = checkout.standardizedFileURL
+    func isCheckoutInUse(checkout: URL, excludingPaneIDs: Set<UUID> = []) -> Bool {
+        let resolved = checkout.resolvingSymlinksInPath().path
         return tabs.contains { tab in
-            guard tab.directory == directory else { return false }
-            return tab.panes.contains { pane in
-                if let excludingPaneID, pane.id == excludingPaneID { return false }
-                return pane.worktreePath?.standardizedFileURL == normalized
+            tab.panes.contains { pane in
+                if excludingPaneIDs.contains(pane.id) { return false }
+                return pane.worktreePath?.resolvingSymlinksInPath().path == resolved
             }
         }
+    }
+
+    func requestClose(
+        _ target: WorktreeCloseTarget, decision: WorktreeCleanupDecision = .followSetting, appSettings: AppSettings
+    ) {
+        worktreeCloseFlow.begin(target, decision: decision, appState: self, appSettings: appSettings)
     }
 
     func closeTab(_ tab: Tab) {
