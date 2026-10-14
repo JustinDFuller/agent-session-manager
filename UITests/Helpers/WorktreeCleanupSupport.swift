@@ -50,7 +50,7 @@ extension BaseTestCase {
 
     func scrollToVisible(_ element: XCUIElement) {
         let window = app.windows["AgentSessionManager Settings"]
-        let content = window.scrollViews.containing(.button, identifier: "settings-leftovers-refresh").firstMatch
+        let content = window.scrollViews.containing(.button, identifier: "settings-leftovers-delete").firstMatch
         var attempts = 0
         while !element.exists || !window.frame.contains(element.frame), attempts < 20 {
             content.scroll(byDeltaX: 0, deltaY: -400)

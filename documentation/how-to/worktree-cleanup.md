@@ -65,8 +65,6 @@ _One dialog covers every managed worktree in the tab._
 4. Choose **Delete Selected**.
 5. Answer the unsaved-work dialog, or the **Delete Folder** confirmation for an entry marked **Not a git worktree**.
 
-Choose **Refresh** to scan again.
-
 ![Leftover Worktrees list in Settings with the reason each one was kept]({{ '/assets/img/docs/worktree-leftovers-list.png' | relative_url }})
 
 _Each leftover shows its repository, size, and why it was not removed automatically._

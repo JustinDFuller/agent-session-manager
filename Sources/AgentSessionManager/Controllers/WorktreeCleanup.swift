@@ -80,6 +80,14 @@ enum WorktreeCleanup {
     static func remove(
         repository: URL, checkout: URL, force: Bool = false, deleteBranch: Bool
     ) async -> WorktreeCleanupResult {
+        await Task {
+            await performRemoval(repository: repository, checkout: checkout, force: force, deleteBranch: deleteBranch)
+        }.value
+    }
+
+    private static func performRemoval(
+        repository: URL, checkout: URL, force: Bool, deleteBranch: Bool
+    ) async -> WorktreeCleanupResult {
         let folderExists = FileManager.default.fileExists(atPath: checkout.path)
         let resolvedCheckout = normalizedPath(checkout)
         guard resolvedCheckout != repository.resolvingSymlinksInPath().path else {

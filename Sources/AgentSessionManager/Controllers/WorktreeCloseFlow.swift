@@ -155,8 +155,7 @@ final class WorktreeCloseFlow {
             var skippedNow: [Skipped] = []
             let closingIDs = Set(Self.panes(of: pending.target).map(\.id))
             for candidate in pending.candidates {
-                let inUse = pending.appState.isCheckoutInUse(
-                    directory: pending.tab.directory, checkout: candidate.checkout, excludingPaneIDs: closingIDs)
+                let inUse = pending.appState.isCheckoutInUse(checkout: candidate.checkout, excludingPaneIDs: closingIDs)
                 if inUse {
                     skippedNow.append(Skipped(name: candidate.checkout.lastPathComponent, reason: Self.inUseReason))
                     continue

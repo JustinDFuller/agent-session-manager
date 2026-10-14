@@ -570,8 +570,7 @@ final class AgentControlMutationRouter {
             }
             throw CancellationError()
         }
-        let inUse = appState.isCheckoutInUse(
-            directory: tab.directory, checkout: resolved.checkoutURL)
+        let inUse = appState.isCheckoutInUse(checkout: resolved.checkoutURL)
         guard !inUse else { throw MCPError.invalidRequest("A pane with this worktree is already open") }
         do {
             try Task.checkCancellation()
@@ -775,7 +774,7 @@ final class AgentControlMutationRouter {
     }
 
     private func cleanupWorktree(of pane: Pane, checkout: URL, tab: Tab) async -> AgentControlCleanupResult {
-        if appState.isCheckoutInUse(directory: tab.directory, checkout: checkout) {
+        if appState.isCheckoutInUse(checkout: checkout) {
             return AgentControlCleanupResult(paneID: pane.id, status: "kept", error: WorktreeCloseFlow.inUseReason)
         }
         if FileManager.default.fileExists(atPath: checkout.path) {

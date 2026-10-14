@@ -57,7 +57,6 @@ The list is in **Settings → Panes → Cleanup**.
 | Size | The disk space it uses, shown after the row appears. |
 | Reason | Why it was not removed automatically, such as "It has unsaved work", "It is locked in git.", or "It changed within the last 24 hours." |
 | **Not a git worktree** | A folder in a worktrees folder that Git does not know about. It is never deleted automatically. |
-| **Refresh** | Scans again. |
 | **Delete Selected** | Deletes the selected entries with the same unsaved-work checks. |
 
 The list shows "No leftover worktrees." when there is nothing to review.

@@ -28,11 +28,6 @@ struct WorktreeLeftoversList: View {
     private var header: some View {
         LabeledContent {
             HStack {
-                Button("Refresh") {
-                    Task { await model.scan(appState: appState, appSettings: appSettings) }
-                }
-                .disabled(model.isScanning)
-                .accessibilityIdentifier("settings-leftovers-refresh")
                 Button("Delete Selected", role: .destructive) {
                     model.requestDelete(appState: appState, appSettings: appSettings)
                 }

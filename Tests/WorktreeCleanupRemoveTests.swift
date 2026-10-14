@@ -189,4 +189,18 @@ final class WorktreeCleanupRemoveTests: XCTestCase {
         XCTAssertTrue(result.isDeleted)
         XCTAssertTrue(try repository.branches().contains("gone-keep-branch"))
     }
+
+    func testRemovalCompletesEvenWhenTheCallingTaskIsCancelled() async throws {
+        let checkout = try repository.addManagedWorktree(name: "cancelled")
+        let root = repository.root
+        let task = Task {
+            while !Task.isCancelled { await Task.yield() }
+            return await WorktreeCleanup.remove(repository: root, checkout: checkout, deleteBranch: true)
+        }
+        task.cancel()
+        let result = await task.value
+        XCTAssertTrue(result.isDeleted)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: checkout.path))
+        XCTAssertFalse(try repository.branches().contains("cancelled"))
+    }
 }

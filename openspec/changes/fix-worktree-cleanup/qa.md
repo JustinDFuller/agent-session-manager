@@ -92,3 +92,9 @@ Settings → Panes → Cleanup shows the Worktree Cleanup, Delete Branch With Wo
 Run in the Dev app built from commit 4c0f112. Claude Code in the `qa-2-4-target` pane, using the MCP server the Dev app injected into that pane, called `panes_delete` with `cleanup: "delete"` on the `qa-2-4-dirty` pane, whose worktree held one untracked file.
 
 The result reported the pane deleted and the worktree `kept` with the reason "It has unsaved work: 1 untracked file." Afterwards the worktree folder, `unsaved.txt`, and the `qa-2-4-dirty` branch were all still present. The raw result and the on-disk listing are in `qa-evidence/agent-control-panes-delete-kept.txt`.
+
+## Validation review fixes
+
+The adversarial review found that removal failed whenever the calling task was cancelled, which silently defeated the rollback after a cancelled pane creation. Removal now runs outside the caller's cancellation, and a unit test cancels the calling task and still sees the worktree and branch removed. The review also found that the in-use check only looked at tabs with an identical directory. It now compares resolved checkout paths across every open pane.
+
+The scope check found a **Refresh** button on the leftovers list that the spec does not describe. It was removed along with its documentation mentions, and the leftovers screenshots were recaptured from the Dev app without it. The three cleanup flow classes passed again afterwards, 17 tests with 0 failures.

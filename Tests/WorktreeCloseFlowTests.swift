@@ -388,9 +388,8 @@ final class WorktreeCloseFlowTests: XCTestCase {
             name: "shell:multi", harness: .shell, worktreeDirectory: checkout, worktreeIsManaged: false,
             appSettings: settings)
         XCTAssertTrue(
-            state.isCheckoutInUse(directory: tab.directory, checkout: checkout, excludingPaneIDs: [pane.id]))
+            state.isCheckoutInUse(checkout: checkout, excludingPaneIDs: [pane.id]))
         XCTAssertFalse(
-            state.isCheckoutInUse(
-                directory: tab.directory, checkout: checkout, excludingPaneIDs: [pane.id, shell.id]))
+            state.isCheckoutInUse(checkout: checkout, excludingPaneIDs: [pane.id, shell.id]))
     }
 }

@@ -113,8 +113,8 @@ final class AppStateTabFocusTests: XCTestCase {
         tab.panes = [Pane(name: "sibling-wt", tab: tab, worktreeDirectory: external)]
         state.tabs = [tab]
 
-        XCTAssertTrue(state.isCheckoutInUse(directory: repo, checkout: external))
-        XCTAssertFalse(state.isCheckoutInUse(directory: repo, checkout: URL(filePath: "/tmp/other")))
+        XCTAssertTrue(state.isCheckoutInUse(checkout: external))
+        XCTAssertFalse(state.isCheckoutInUse(checkout: URL(filePath: "/tmp/other")))
     }
 
     func testIsCheckoutInUseManagedWorktreePath() {
@@ -125,7 +125,7 @@ final class AppStateTabFocusTests: XCTestCase {
         state.tabs = [tab]
         let managed = Tab.worktreeDirectoryURL(repoRoot: repo, name: "feat")
 
-        XCTAssertTrue(state.isCheckoutInUse(directory: repo, checkout: managed))
+        XCTAssertTrue(state.isCheckoutInUse(checkout: managed))
     }
 
     func testCloseTabRemovesTabAndFallsBackActiveTabID() {

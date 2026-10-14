@@ -76,7 +76,7 @@ With **Delete Branch With Worktree** on, the branch goes with it. Each decision 
 
 ## Leftovers list
 
-**Settings → Panes → Cleanup → Leftover Worktrees** lists everything in the managed folders that no pane uses: the repository name, the folder name, its size (loaded after the row appears, off the main thread), and why it was kept, for example "It changed within the last 24 hours." Folders git does not know about, such as the leftovers Xcode recreates, are marked **Not a git worktree**. **Refresh** rescans.
+**Settings → Panes → Cleanup → Leftover Worktrees** lists everything in the managed folders that no pane uses: the repository name, the folder name, its size (loaded after the row appears, off the main thread), and why it was kept, for example "It changed within the last 24 hours." Folders git does not know about, such as the leftovers Xcode recreates, are marked **Not a git worktree**.
 
 **Delete Selected** sends selected worktrees through the pipeline, so the unsaved-work dialog applies. Selected unregistered folders need a separate **Delete Folder** confirmation, and only folders directly inside a managed worktrees folder can be deleted. The sweep never deletes unregistered folders.
 
