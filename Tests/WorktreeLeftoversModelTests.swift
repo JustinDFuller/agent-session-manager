@@ -237,6 +237,36 @@ final class WorktreeLeftoversModelTests: XCTestCase {
         XCTAssertNil(model.notice)
     }
 
+    func testEntryAPaneStartedUsingAfterTheUnsavedPromptIsKept() async throws {
+        let checkout = try repository.addManagedWorktree(name: "prompt-use")
+        try "change".write(to: checkout.appending(path: "dirty.txt"), atomically: true, encoding: .utf8)
+        await scan()
+        try select(checkout)
+        model.requestDelete(appState: state, appSettings: settings)
+        await waitForPrompt { self.model.unsavedPrompt != nil }
+        state.tabs[0].addPane(
+            name: "prompt-use", harness: .claude, worktreeDirectory: checkout, worktreeIsManaged: true,
+            appSettings: settings)
+        model.answer(.deleteAnyway)
+        await model.waitForDeletion()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: checkout.path))
+        XCTAssertEqual(model.notice?.message, "Kept prompt-use: Another pane is still using it.")
+    }
+
+    func testFolderAPaneStartedUsingAfterTheConfirmationIsKept() async throws {
+        let folder = try unregisteredFolder("stray-use")
+        await scan()
+        try select(folder)
+        model.requestDelete(appState: state, appSettings: settings)
+        await waitForPrompt { self.model.folderPrompt != nil }
+        state.tabs[0].addPane(
+            name: "stray-use", harness: .claude, worktreeDirectory: folder, worktreeIsManaged: true,
+            appSettings: settings)
+        model.confirmFolders(true)
+        await model.waitForDeletion()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.path))
+    }
+
     func testRequestWithoutSelectionDoesNothing() async throws {
         _ = try repository.addManagedWorktree(name: "unselected")
         await scan()

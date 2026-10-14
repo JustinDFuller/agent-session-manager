@@ -98,3 +98,5 @@ The result reported the pane deleted and the worktree `kept` with the reason "It
 The adversarial review found that removal failed whenever the calling task was cancelled, which silently defeated the rollback after a cancelled pane creation. Removal now runs outside the caller's cancellation, and a unit test cancels the calling task and still sees the worktree and branch removed. The review also found that the in-use check only looked at tabs with an identical directory. It now compares resolved checkout paths across every open pane.
 
 The scope check found a **Refresh** button on the leftovers list that the spec does not describe. It was removed along with its documentation mentions, and the leftovers screenshots were recaptured from the Dev app without it. The three cleanup flow classes passed again afterwards, 17 tests with 0 failures.
+
+A second review round led to two more hardening fixes. The leftovers delete now re-checks for an open pane right before each removal, so a pane opened while a confirmation dialog was up is respected. The wait for a closed pane's process to exit now stops when the calling request is cancelled. Both have unit tests.

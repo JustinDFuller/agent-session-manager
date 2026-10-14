@@ -175,12 +175,20 @@ final class WorktreeLeftoversModel {
             var lines = current.kept
             var failed = false
             for leftover in current.registered {
+                if current.appState.isCheckoutInUse(checkout: leftover.checkout) {
+                    lines.append("Kept \(leftover.name): \(WorktreeCloseFlow.inUseReason)")
+                    continue
+                }
                 let result = await WorktreeCleanup.remove(
                     repository: leftover.repository, checkout: leftover.checkout,
                     force: current.atRisk.contains(leftover.id), deleteBranch: deleteBranch)
                 Self.collect(result, into: &lines, failed: &failed)
             }
             for leftover in current.unregistered {
+                if current.appState.isCheckoutInUse(checkout: leftover.checkout) {
+                    lines.append("Kept \(leftover.name): \(WorktreeCloseFlow.inUseReason)")
+                    continue
+                }
                 let result = await WorktreeLeftovers.removeUnregistered(leftover)
                 Self.collect(result, into: &lines, failed: &failed)
             }

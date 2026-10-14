@@ -327,7 +327,7 @@ final class WorktreeCloseFlow {
     static func waitForExit(of processIDs: [Int32]) async {
         guard !processIDs.isEmpty else { return }
         let deadline = ContinuousClock.now + processExitTimeout
-        while ContinuousClock.now < deadline, processIDs.contains(where: { kill($0, 0) == 0 }) {
+        while !Task.isCancelled, ContinuousClock.now < deadline, processIDs.contains(where: { kill($0, 0) == 0 }) {
             try? await Task.sleep(for: .milliseconds(50))
         }
     }

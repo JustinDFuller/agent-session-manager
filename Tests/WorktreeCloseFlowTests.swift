@@ -392,4 +392,17 @@ final class WorktreeCloseFlowTests: XCTestCase {
         XCTAssertFalse(
             state.isCheckoutInUse(checkout: checkout, excludingPaneIDs: [pane.id, shell.id]))
     }
+
+    func testWaitingForProcessExitStopsWhenTheCallerIsCancelled() async throws {
+        let process = Process()
+        process.executableURL = URL(filePath: "/bin/sleep")
+        process.arguments = ["30"]
+        try process.run()
+        defer { process.terminate() }
+        let waiter = Task { await WorktreeCloseFlow.waitForExit(of: [process.processIdentifier]) }
+        waiter.cancel()
+        let started = ContinuousClock.now
+        await waiter.value
+        XCTAssertLessThan(ContinuousClock.now - started, .milliseconds(500))
+    }
 }
