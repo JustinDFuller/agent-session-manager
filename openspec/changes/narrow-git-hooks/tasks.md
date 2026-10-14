@@ -14,9 +14,9 @@
 ## 3. Documentation and CI
 
 - [x] 3.1 Add `scripts/git-hook-checks.sh` to the path filters in `.github/workflows/git-hooks.yml`; verify the filter list contains it
-- [ ] 3.2 Update the hook descriptions in `AGENTS.md` and any public documentation page that mentions the hooks, following the Diataxis skill; verify `make docs-check` and `scripts/test-release-publishing.sh` pass
+- [x] 3.2 Update the hook descriptions in `AGENTS.md` and any public documentation page that mentions the hooks, following the Diataxis skill; verify `make docs-check` and `scripts/test-release-publishing.sh` pass
 
 ## 4. Integration
 
-- [ ] 4.1 Install the new hooks in this worktree against a local bare remote and run a markdown-only commit and push, a Swift change with a deliberate formatting violation, a clean Swift push, and a follow-up markdown-only push; verify with recorded timings and terminal output that the markdown pushes finish in seconds, the formatting violation stops before `swift test`, and the clean Swift push runs the full ladder in order
-- [ ] 4.2 Run the OpenSpec validation commands the hook uses (`--archived`, `--changes --strict`, `--specs`) and `make no-code-comments no-fixed-width-prose`; verify both pass
+- [x] 4.1 Install the new hooks in this worktree against a local bare remote and run a markdown-only commit and push, a Swift change with a deliberate formatting violation, a clean Swift push, and a follow-up markdown-only push; verify with recorded timings and terminal output that the markdown pushes finish in seconds, the formatting violation stops before `swift test`, and the clean Swift push runs the full ladder in order
+- [x] 4.2 Run the OpenSpec validation commands the hook uses (`--archived`, `--changes --strict`, `--specs`) and `make no-code-comments no-fixed-width-prose`; verify both pass
