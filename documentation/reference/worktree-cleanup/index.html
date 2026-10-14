@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Settings, dialogs, buttons, and rules for worktree cleanup in Agent Session Manager.">
+    <title>Worktree Cleanup Reference · Agent Session Manager</title>
+    <link rel="stylesheet" href="/assets/css/style.css">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="/">
+          <img class="brand-logo" src="/assets/img/app-icon.png" alt="" width="30" height="30">
+          <span>Agent Session Manager</span>
+        </a>
+        <nav class="top-nav" aria-label="Primary navigation">
+          <a href="/docs/">Documentation</a>
+        </nav>
+        <details class="mobile-nav">
+          <summary>Menu</summary>
+          <nav aria-label="Mobile navigation">
+            <a href="/docs/">Documentation</a>
+          </nav>
+        </details>
+      </div>
+    </header>
+
+    <div class="release-notice" role="note" aria-label="Alpha release notice">
+      <div class="release-notice-inner">
+        <strong>Alpha release</strong>
+        <span>Agent Session Manager is a v0 release. It is known to work, but may still have bugs and compatibility issues.</span>
+      </div>
+    </div>
+
+    <div class="site-frame">
+      
+      <aside class="sidebar">
+        <a class="sidebar-home" href="/">Overview</a>
+        
+        <section class="nav-group">
+          <h2>Tutorials</h2>
+          <ul>
+            
+            <li><a href="/documentation/user-guide/quickstart/">Quickstart</a></li>
+            
+          </ul>
+        </section>
+        
+        <section class="nav-group">
+          <h2>How-to Guides</h2>
+          <ul>
+            
+            <li><a href="/download/">Download</a></li>
+            
+            <li><a href="/documentation/user-guide/install/">Install and First Launch</a></li>
+            
+            <li><a href="/documentation/user-guide/agent-tools/">Agent Tools</a></li>
+            
+            <li><a href="/documentation/user-guide/claude-code/">Claude Code</a></li>
+            
+            <li><a href="/documentation/user-guide/codex/">Codex</a></li>
+            
+            <li><a href="/documentation/user-guide/cursor/">Cursor</a></li>
+            
+            <li><a href="/documentation/user-guide/opencode/">OpenCode</a></li>
+            
+            <li><a href="/documentation/user-guide/agent-control/">Agent Control</a></li>
+            
+            <li><a href="/documentation/user-guide/tabs-and-panes/">Tabs and Panes</a></li>
+            
+            <li><a href="/documentation/user-guide/project-isolation/">Project Isolation</a></li>
+            
+            <li><a href="/documentation/user-guide/continue-after-restart/">Continue After Restart</a></li>
+            
+            <li><a href="/documentation/user-guide/reorder-tabs-and-panes/">Reorder Tabs and Panes</a></li>
+            
+            <li><a href="/documentation/user-guide/focus-pane/">Focus Pane</a></li>
+            
+            <li><a href="/documentation/user-guide/activity-indicators/">Activity Indicators</a></li>
+            
+            <li><a href="/documentation/user-guide/profiles/">Profiles</a></li>
+            
+            <li><a href="/documentation/user-guide/tool-options/">Tool Options</a></li>
+            
+            <li><a href="/documentation/user-guide/terminal-scrollback/">Terminal Scrollback</a></li>
+            
+            <li><a href="/documentation/user-guide/status-line/">Status Line</a></li>
+            
+            <li><a href="/documentation/user-guide/resize-sections-and-panes/">Resize Sections and Panes</a></li>
+            
+            <li><a href="/documentation/user-guide/notifications/">Notifications</a></li>
+            
+            <li><a href="/documentation/user-guide/worktree-cleanup/">Worktree Cleanup</a></li>
+            
+            <li><a href="/documentation/user-guide/github-pull-requests/">GitHub Pull Requests</a></li>
+            
+            <li><a href="/documentation/user-guide/troubleshooting/">Troubleshooting</a></li>
+            
+          </ul>
+        </section>
+        
+        <section class="nav-group">
+          <h2>Reference</h2>
+          <ul>
+            
+            <li><a href="/documentation/user-guide/shortcuts/">Keyboard Shortcuts</a></li>
+            
+            <li><a href="/documentation/reference/supported-tools/">Supported Tools</a></li>
+            
+            <li><a class="current" aria-current="page" href="/documentation/reference/worktree-cleanup/">Worktree Cleanup Reference</a></li>
+            
+          </ul>
+        </section>
+        
+        <section class="nav-group">
+          <h2>Explanation</h2>
+          <ul>
+            
+            <li><a href="/documentation/user-guide/overview/">Overview</a></li>
+            
+            <li><a href="/documentation/user-guide/core-concepts/">Core Concepts</a></li>
+            
+          </ul>
+        </section>
+        
+      </aside>
+      
+
+      <main id="main-content" class="content">
+        
+        <p class="eyebrow"><a href="/docs/">Documentation</a></p>
+        
+        <article class="doc-article">
+  <header class="doc-header">
+    <h1>Worktree Cleanup Reference</h1>
+    <p class="lede">Settings, dialogs, buttons, and rules for worktree cleanup in Agent Session Manager.</p>
+  </header>
+  <p>A worktree is a separate checkout of a Git repository. A managed worktree is one Agent Session Manager created in the repository’s <code class="language-plaintext highlighter-rouge">.agent-session-manager/worktrees</code> folder. Only managed worktrees are ever deleted.</p>
+
+<h2 id="settings">Settings</h2>
+
+<p>Find these in <strong>Settings → Panes → Cleanup</strong>.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Setting</th>
+      <th>Values</th>
+      <th>Default</th>
+      <th>Effect</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Worktree Cleanup</strong></td>
+      <td><strong>Ask</strong>, <strong>Always Keep</strong>, <strong>Always Delete</strong></td>
+      <td><strong>Ask</strong></td>
+      <td>What happens to a managed worktree when you close its pane or tab.</td>
+    </tr>
+    <tr>
+      <td><strong>Delete Branch With Worktree</strong></td>
+      <td>On, off</td>
+      <td>On</td>
+      <td>Also deletes the local branch when a worktree is deleted. A branch with commits that are on no remote is deleted only after you confirm, and the default branch is never deleted.</td>
+    </tr>
+    <tr>
+      <td><strong>Clean Up Leftovers at Launch</strong></td>
+      <td>On, off</td>
+      <td>On</td>
+      <td>When the app starts, deletes leftover worktrees that no pane uses, that have no unsaved work, and that have not changed in 24 hours.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="unsaved-work">Unsaved work</h2>
+
+<p>These count as unsaved work:</p>
+
+<ul>
+  <li>Modified files.</li>
+  <li>Untracked files.</li>
+  <li>Commits that are on no remote, including commits on a detached HEAD.</li>
+</ul>
+
+<p>Files that Git ignores, such as build folders, do not count.</p>
+
+<h2 id="dialogs-and-alerts">Dialogs and alerts</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Title</th>
+      <th>When it appears</th>
+      <th>Buttons</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Close Worktree Pane</strong></td>
+      <td>Closing a pane with a managed worktree while <strong>Ask</strong> is selected.</td>
+      <td><strong>Delete Worktree</strong>, <strong>Keep Worktree</strong>, <strong>Cancel</strong></td>
+    </tr>
+    <tr>
+      <td><strong>Close Tab With Worktrees</strong></td>
+      <td>Closing a tab that has managed worktrees while <strong>Ask</strong> is selected.</td>
+      <td><strong>Delete Worktrees</strong>, <strong>Keep Worktrees</strong>, <strong>Cancel</strong> (<strong>Delete Worktree</strong> and <strong>Keep Worktree</strong> for one worktree)</td>
+    </tr>
+    <tr>
+      <td><strong>Worktree Has Unsaved Work</strong></td>
+      <td>A worktree to delete has unsaved work.</td>
+      <td><strong>Keep Worktree</strong> (default), <strong>Delete Anyway</strong>, <strong>Cancel</strong></td>
+    </tr>
+    <tr>
+      <td><strong>Worktrees Have Unsaved Work</strong></td>
+      <td>Several worktrees to delete have unsaved work.</td>
+      <td><strong>Keep Worktrees</strong> (default), <strong>Delete Anyway</strong>, <strong>Cancel</strong></td>
+    </tr>
+    <tr>
+      <td><strong>Worktree Cleanup Failed</strong></td>
+      <td>Git could not delete a worktree.</td>
+      <td><strong>OK</strong></td>
+    </tr>
+    <tr>
+      <td><strong>Worktree Kept</strong></td>
+      <td>A worktree was kept, for example because another pane is using it.</td>
+      <td><strong>OK</strong></td>
+    </tr>
+    <tr>
+      <td><strong>PR Merged</strong> or <strong>PR Closed</strong></td>
+      <td>A tracked pull request finished.</td>
+      <td><strong>Close Pane</strong>, <strong>Close Pane and Clean Up Worktree</strong>, <strong>Cancel</strong></td>
+    </tr>
+    <tr>
+      <td><strong>Delete Folder?</strong> or <strong>Delete Folders?</strong></td>
+      <td>Deleting leftover entries marked <strong>Not a git worktree</strong>.</td>
+      <td><strong>Delete Folder</strong> or <strong>Delete Folders</strong>, <strong>Cancel</strong></td>
+    </tr>
+  </tbody>
+</table>
+
+<p><strong>Delete Anyway</strong> deletes the worktree even though it has unsaved work, and the unsaved work cannot be recovered. <strong>Close Pane and Clean Up Worktree</strong> shows the unsaved-work dialog the same way.</p>
+
+<h2 id="ways-to-close-a-tab">Ways to close a tab</h2>
+
+<p>The tab close button, ⌘K, and <strong>Delete This Tab</strong> behave the same. A tab without managed worktrees closes without a dialog.</p>
+
+<h2 id="leftover-worktrees-list">Leftover Worktrees list</h2>
+
+<p>The list is in <strong>Settings → Panes → Cleanup</strong>.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Item</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Name and repository</td>
+      <td>The worktree folder and the repository it belongs to.</td>
+    </tr>
+    <tr>
+      <td>Size</td>
+      <td>The disk space it uses, shown after the row appears.</td>
+    </tr>
+    <tr>
+      <td>Reason</td>
+      <td>Why it was not removed automatically, such as “It has unsaved work”, “It is locked in git.”, or “It changed within the last 24 hours.”</td>
+    </tr>
+    <tr>
+      <td><strong>Not a git worktree</strong></td>
+      <td>A folder in a worktrees folder that Git does not know about. It is never deleted automatically.</td>
+    </tr>
+    <tr>
+      <td><strong>Delete Selected</strong></td>
+      <td>Deletes the selected entries with the same unsaved-work checks.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>The list shows “No leftover worktrees.” when there is nothing to review.</p>
+
+<h2 id="launch-cleanup-conditions">Launch cleanup conditions</h2>
+
+<p>A leftover is deleted at launch only when all of these are true:</p>
+
+<ul>
+  <li>No open pane uses it.</li>
+  <li>It has no unsaved work.</li>
+  <li>It is not locked.</li>
+  <li>It has not changed in the last 24 hours.</li>
+</ul>
+
+<p>The sweep covers every repository you have opened a tab in. Anything that is not deleted stays in <strong>Leftover Worktrees</strong>.</p>
+
+<h2 id="related">Related</h2>
+
+<ul>
+  <li><a href="/documentation/user-guide/worktree-cleanup/">Clean up worktrees</a></li>
+</ul>
+
+</article>
+
+      </main>
+    </div>
+
+    <footer class="site-footer">
+      <div>
+        <strong>Agent Session Manager</strong>
+        <span>Native macOS session management for parallel AI agent work.</span>
+      </div>
+    </footer>
+  </body>
+</html>

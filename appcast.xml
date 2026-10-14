@@ -38,7 +38,7 @@
       <pubDate>Tue, 18 Aug 2026 01:49:43 +0000</pubDate>
       <sparkle:version>252</sparkle:version>
       <sparkle:shortVersionString>0.0.5</sparkle:shortVersionString>
-      <enclosure url="https://agent-session-manager.justindfuller.com/downloads/AgentSessionManager-0.0.5-252.dmg" length="13287175" type="application/octet-stream" sparkle:edSignature="Sparkle key validation passed. nYi3RF0c11+UsTvhXH40SQZ0kCN4JKaRljgtbh4MfYfjF4+tghq4EiHVyAmhssMkLG7Z9iRDwpRTHtg4mREYCw==" />
+      <enclosure url="https://agent-session-manager.justindfuller.com/downloads/AgentSessionManager-0.0.5-252.dmg" length="13287175" type="application/octet-stream" sparkle:edSignature="nYi3RF0c11+UsTvhXH40SQZ0kCN4JKaRljgtbh4MfYfjF4+tghq4EiHVyAmhssMkLG7Z9iRDwpRTHtg4mREYCw==" />
     </item>
     <item>
       <title>Agent Session Manager 0.0.6</title>
@@ -53,6 +53,13 @@
       <sparkle:version>284</sparkle:version>
       <sparkle:shortVersionString>0.0.8</sparkle:shortVersionString>
       <enclosure url="https://agent-session-manager.justindfuller.com/downloads/AgentSessionManager-0.0.8-284.dmg" length="13571012" type="application/octet-stream" sparkle:edSignature="rHOukdzDTW5rfpyCELaOWB4lUUFFcwYRiRtpvxYAWPs7QCSTWal2WbDgTFs9TeJNdc5F0JiJWQYG11hGkmcSDA==" />
+    </item>
+    <item>
+      <title>Agent Session Manager 0.0.9</title>
+      <pubDate>Wed, 14 Oct 2026 23:27:02 +0000</pubDate>
+      <sparkle:version>287</sparkle:version>
+      <sparkle:shortVersionString>0.0.9</sparkle:shortVersionString>
+      <enclosure url="https://agent-session-manager.justindfuller.com/downloads/AgentSessionManager-0.0.9-287.dmg" length="13745486" type="application/octet-stream" sparkle:edSignature="egaJzsMBVZxWKqmx5Pg4sAVRit2GZvgKAhH0Ur30MumCQUproGQ07ZkaLWOQZz7UTIf5E0v+/kQkxQuu5dYXBA==" />
     </item>
 </channel>
 </rss>

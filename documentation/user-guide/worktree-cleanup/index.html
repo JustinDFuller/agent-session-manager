@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Choose what happens to a managed Git worktree when you close a pane.">
+    <meta name="description" content="Delete finished worktrees safely when you close a pane or tab, and review the ones left behind.">
     <title>Worktree Cleanup · Agent Session Manager</title>
     <link rel="stylesheet" href="/assets/css/style.css">
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
@@ -110,6 +110,8 @@
             
             <li><a href="/documentation/reference/supported-tools/">Supported Tools</a></li>
             
+            <li><a href="/documentation/reference/worktree-cleanup/">Worktree Cleanup Reference</a></li>
+            
           </ul>
         </section>
         
@@ -134,61 +136,91 @@
         <article class="doc-article">
   <header class="doc-header">
     <h1>Worktree Cleanup</h1>
-    <p class="lede">Choose what happens to a managed Git worktree when you close a pane.</p>
+    <p class="lede">Delete finished worktrees safely when you close a pane or tab, and review the ones left behind.</p>
   </header>
   <h2 id="what-it-is">What it is</h2>
 
-<p>Worktree cleanup controls whether Agent Session Manager removes a task Git worktree when you close its pane. It applies to worktrees managed by the app, not to every Git directory on your Mac.</p>
-
-<h2 id="why-you-might-use-it">Why you might use it</h2>
-
-<p>Delete finished task worktrees to keep a repository tidy, or keep them when you may want to reopen the task later.</p>
+<p>Worktree cleanup removes the Git worktrees that Agent Session Manager created for your tasks, so they stop using disk space. It applies to worktrees managed by the app, not to every Git directory on your Mac. Before anything is deleted, the app checks for unsaved work and asks you first.</p>
 
 <h2 id="before-you-start">Before you start</h2>
 
-<p>Understand whether the pane uses a worktree created or managed by Agent Session Manager. An unmanaged existing worktree is not removed just because its pane is closed. An existing worktree can become managed when you choose <strong>Manage</strong> in the existing-worktree prompt.</p>
+<p>Check that the pane uses a worktree created or managed by Agent Session Manager. An unmanaged existing worktree is never removed. An existing worktree becomes managed when you choose <strong>Manage</strong> in the existing-worktree prompt.</p>
 
-<h2 id="how-to-use-it">How to use it</h2>
-
-<h3 id="choose-cleanup-behavior">Choose cleanup behavior</h3>
+<h2 id="choose-cleanup-behavior">Choose cleanup behavior</h2>
 
 <ol>
   <li>Open <strong>Settings</strong>.</li>
   <li>Select <strong>Panes</strong>.</li>
   <li>In the <strong>Cleanup</strong> section, find <strong>Worktree Cleanup</strong>.</li>
-  <li>Choose one of the available behaviors:
-    <ul>
-      <li><strong>Ask</strong> shows the choices each time.</li>
-      <li><strong>Always Keep</strong> closes the pane and keeps the worktree.</li>
-      <li><strong>Always Delete</strong> closes the pane and removes the managed worktree.</li>
-    </ul>
-  </li>
+  <li>Choose <strong>Ask</strong>, <strong>Always Keep</strong>, or <strong>Always Delete</strong>.</li>
+  <li>Leave <strong>Delete Branch With Worktree</strong> on to delete the local branch when its worktree is deleted, or turn it off to keep branches.</li>
+  <li>Leave <strong>Clean Up Leftovers at Launch</strong> on to let the app remove safe leftovers each time it starts, or turn it off to review them yourself.</li>
 </ol>
 
-<h3 id="decide-when-prompted">Decide when prompted</h3>
+<p>See the <a href="/documentation/reference/worktree-cleanup/">worktree cleanup reference</a> for what each setting does.</p>
 
-<p>When <strong>Ask</strong> is selected and you close a managed pane:</p>
+<h2 id="close-a-pane-and-decide-what-happens-to-its-worktree">Close a pane and decide what happens to its worktree</h2>
 
-<ul>
-  <li>Choose <strong>Delete Worktree</strong> to close the pane and remove the managed worktree.</li>
-  <li>Choose <strong>Keep Worktree</strong> to close the pane while leaving the worktree available to reopen.</li>
-  <li>Choose <strong>Cancel</strong> to leave the pane open.</li>
-</ul>
-
-<p>Deleting a worktree removes its working directory from Git’s list of worktrees. It does not delete the branch or commits made on that branch.</p>
+<ol>
+  <li>Close the pane with ⌘W or its close button.</li>
+  <li>When <strong>Ask</strong> is selected, choose <strong>Delete Worktree</strong>, <strong>Keep Worktree</strong>, or <strong>Cancel</strong>.</li>
+</ol>
 
 <p><img src="/assets/img/docs/worktree-cleanup-alert.png" alt="Managed worktree cleanup prompt in Agent Session Manager" /></p>
 
 <p><em>Closing a managed pane gives you an explicit choice to keep, delete, or cancel.</em></p>
 
+<h2 id="handle-unsaved-work">Handle unsaved work</h2>
+
+<p>If the worktree has modified files, untracked files, or commits that are on no remote, the <strong>Worktree Has Unsaved Work</strong> dialog lists them.</p>
+
+<ul>
+  <li>Choose <strong>Keep Worktree</strong> to close the pane and leave the worktree as it is.</li>
+  <li>Choose <strong>Delete Anyway</strong> to delete the worktree and its unsaved work. This cannot be undone.</li>
+  <li>Choose <strong>Cancel</strong> to leave the pane open.</li>
+</ul>
+
+<p><img src="/assets/img/docs/worktree-unsaved-work-dialog.png" alt="Worktree Has Unsaved Work dialog listing one modified file" /></p>
+
+<p><em>The dialog names the findings, and Keep Worktree is the default.</em></p>
+
+<h2 id="close-a-tab-that-has-worktrees">Close a tab that has worktrees</h2>
+
+<ol>
+  <li>Close the tab with its close button, ⌘K, or <strong>Delete This Tab</strong>.</li>
+  <li>In <strong>Close Tab With Worktrees</strong>, choose <strong>Delete Worktrees</strong>, <strong>Keep Worktrees</strong>, or <strong>Cancel</strong>.</li>
+</ol>
+
+<p>Worktrees without unsaved work are deleted. A worktree with unsaved work still shows the unsaved-work dialog.</p>
+
+<p><img src="/assets/img/docs/worktree-tab-close-dialog.png" alt="Close Tab With Worktrees dialog for a tab with two worktrees" /></p>
+
+<p><em>One dialog covers every managed worktree in the tab.</em></p>
+
+<h2 id="review-and-delete-leftover-worktrees">Review and delete leftover worktrees</h2>
+
+<ol>
+  <li>Open <strong>Settings</strong>, select <strong>Panes</strong>, and find <strong>Leftover Worktrees</strong> in the <strong>Cleanup</strong> section.</li>
+  <li>Read the reason shown under each entry, such as “It has unsaved work” or “It changed within the last 24 hours.”</li>
+  <li>Select the entries you want to remove.</li>
+  <li>Choose <strong>Delete Selected</strong>.</li>
+  <li>Answer the unsaved-work dialog, or the <strong>Delete Folder</strong> confirmation for an entry marked <strong>Not a git worktree</strong>.</li>
+</ol>
+
+<p><img src="/assets/img/docs/worktree-leftovers-list.png" alt="Leftover Worktrees list in Settings with the reason each one was kept" /></p>
+
+<p><em>Each leftover shows its repository, size, and why it was not removed automatically.</em></p>
+
 <h2 id="what-you-should-see">What you should see</h2>
 
-<p>Closing an unmanaged existing worktree simply closes the pane. Closing a managed worktree follows the selected cleanup behavior.</p>
+<p>The pane or tab closes. Deleted worktrees disappear from disk, and their local branches go with them when <strong>Delete Branch With Worktree</strong> is on. If anything was kept or could not be deleted, an alert names each worktree and the reason.</p>
 
 <h2 id="if-it-does-not-work">If it does not work</h2>
 
 <ul>
-  <li>If no cleanup dialog appears, the pane may use an unmanaged existing worktree or cleanup may be set to <strong>Always Keep</strong> or <strong>Always Delete</strong>.</li>
+  <li>If <strong>Worktree Cleanup Failed</strong> appears, the message includes Git’s reason. For example, a locked worktree must be unlocked first.</li>
+  <li>If <strong>Worktree Kept</strong> says “Another pane is still using it.”, close the other pane that uses the same worktree, then delete it from <strong>Leftover Worktrees</strong>.</li>
+  <li>If no dialog appears, the pane may use an unmanaged existing worktree, or cleanup may be set to <strong>Always Keep</strong>.</li>
   <li>If a deleted task does not return after relaunch, create a new pane from its branch or worktree name.</li>
   <li>If you need the files later, choose <strong>Keep Worktree</strong> before closing the pane.</li>
 </ul>
