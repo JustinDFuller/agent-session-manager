@@ -20,6 +20,10 @@ Keyboard shortcuts open, close, and move through tabs and panes without leaving 
 | ⌘R | Refresh Active Pane |
 | ⌘1 through ⌘9 | Switch to a tab by position |
 
+## Control-Return in a pane
+
+While a terminal pane has keyboard focus, ⌃Return is sent to the program running in the pane instead of opening the pane's context menu. A program that has enabled extended keyboard reporting, such as Claude Code, receives it as a distinct Control+Enter, which Claude Code uses to send a queued message immediately. Other programs receive an ordinary Return. Right-click or Control-click a pane to open its context menu.
+
 ## Shortcut configuration
 
 **Settings → Shortcuts** contains the configurable shortcut fields. Existing app shortcuts accept one key with their displayed modifiers, and the ⌘1 through ⌘9 tab-switching shortcuts are fixed.
