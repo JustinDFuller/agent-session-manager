@@ -181,6 +181,104 @@ extension Tab {
                 ])
             return false
         }
+        if let resumeSessionID {
+            guard adapter.supportsRichStatus else {
+                pane.codexContinuationRecovery = .exactSessionUnavailable
+                TracingService.shared.record(
+                    "statusline.codex.continuation.preflight",
+                    attributes: [
+                        "pane.id": pane.id.uuidString,
+                        "pane.name": pane.name,
+                        "tab.id": id.uuidString,
+                        "tab.name": name,
+                        "result": "unknown_adapter",
+                    ])
+                return false
+            }
+            let environment = ProcessEnvironment.dictionary(
+                from: ProcessEnvironment.sanitize(controller.pendingEnvironment ?? []))
+            let access = CodexContinuationVerifier.check(
+                sessionID: resumeSessionID,
+                transcriptPath: pane.codexTranscriptPath,
+                shell: controller.pendingShell ?? appSettings.map { ShellResolver.resolved($0) }
+                    ?? ShellResolver.detectedLoginShell(),
+                workingDirectory: controller.pendingDirectory ?? pane.worktreeDirectory?.path ?? directory.path,
+                environment: environment)
+            TracingService.shared.record(
+                "statusline.codex.continuation.preflight",
+                attributes: [
+                    "pane.id": pane.id.uuidString,
+                    "pane.name": pane.name,
+                    "tab.id": id.uuidString,
+                    "tab.name": name,
+                    "requested_session_id_prefix": String(resumeSessionID.prefix(12)),
+                    "result": access.traceValue,
+                ])
+            guard access == .available else {
+                pane.codexContinuationRecovery = .exactSessionUnavailable
+                return false
+            }
+            pane.codexContinuationRecovery = nil
+        }
+        if let resumeSessionID {
+            guard adapter.supportsRichStatus else {
+                pane.setupState = .codexResumeUnavailable(
+                    sessionID: resumeSessionID,
+                    reason: "Codex has not reported a conversation to continue.")
+                TracingService.shared.record(
+                    "session.pane.codex_continuation.preflight",
+                    attributes: [
+                        "pane.id": pane.id.uuidString,
+                        "pane.name": pane.name,
+                        "tab.id": id.uuidString,
+                        "tab.name": name,
+                        "result": "unknown_adapter",
+                    ])
+                return false
+            }
+            do {
+                guard
+                    let selectedThread = try CodexStateStore(
+                        codexHomeResolution: pane.codexHomeResolution
+                    )
+                    .selectThread(sessionID: resumeSessionID, rolloutPath: pane.codexTranscriptPath),
+                    selectedThread.id == resumeSessionID
+                else {
+                    pane.setupState = .codexResumeUnavailable(
+                        sessionID: resumeSessionID,
+                        reason: "The saved Codex conversation is unavailable. Retry or start a new conversation.")
+                    TracingService.shared.record(
+                        "session.pane.codex_continuation.preflight",
+                        attributes: [
+                            "pane.id": pane.id.uuidString,
+                            "pane.name": pane.name,
+                            "tab.id": id.uuidString,
+                            "tab.name": name,
+                            "session_id_prefix": String(resumeSessionID.prefix(12)),
+                            "result": "session_missing",
+                        ])
+                    return false
+                }
+            } catch {
+                pane.setupState = .codexResumeUnavailable(
+                    sessionID: resumeSessionID,
+                    reason:
+                        "Agent Session Manager could not verify the saved Codex conversation. Retry or start a new conversation."
+                )
+                TracingService.shared.record(
+                    "session.pane.codex_continuation.preflight",
+                    attributes: [
+                        "pane.id": pane.id.uuidString,
+                        "pane.name": pane.name,
+                        "tab.id": id.uuidString,
+                        "tab.name": name,
+                        "session_id_prefix": String(resumeSessionID.prefix(12)),
+                        "result": "verification_unavailable",
+                    ])
+                return false
+            }
+        }
+        pane.codexExpectedResumeSessionID = resumeSessionID
         controller.pendingEnvironment =
             (controller.pendingEnvironment ?? [])
             + [

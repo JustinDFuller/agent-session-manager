@@ -553,6 +553,7 @@ final class Tab: Identifiable {
                 persistedDecision: pane.agentControlInjectionEnabled)
         }
         let new = TerminalController()
+        var replacementCodexMonitor: StatusLineMonitor?
         new.pendingDirectory = old.pendingDirectory
         new.pendingEnvironment = old.pendingEnvironment.map {
             AgentControlHarnessInjection.removingControlEnvironment(from: $0)
@@ -588,7 +589,7 @@ final class Tab: Identifiable {
                 codexShell: launchSettings.map { ShellResolver.resolved($0) } ?? ShellResolver.detectedLoginShell(),
                 codexEnvironment: ProcessEnvironment.dictionary(from: new.pendingEnvironment ?? []),
                 customFieldEnvironment: pane.extraEnvVars)
-            pane.installStatusLineMonitor(monitor)
+            replacementCodexMonitor = monitor
             guard
                 configureCodexLaunch(
                     for: pane, monitor: monitor, controller: new,
@@ -603,6 +604,7 @@ final class Tab: Identifiable {
         guard prepareAgentControl(for: pane, controller: new, appSettings: launchSettings) else { return }
 
         old.terminate()
+        if let replacementCodexMonitor { pane.installStatusLineMonitor(replacementCodexMonitor) }
         pane.installTerminalController(new)
         pane.restartToken = UUID()
     }

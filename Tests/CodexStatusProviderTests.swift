@@ -2136,9 +2136,11 @@ extension CodexStatusProviderTests {
     }
 
     @MainActor
-    func testCodexLaunchResumesOnlyTheExactForegroundConversation() throws {
-        let codexHome = tempDir.appending(path: "codex-home", directoryHint: .isDirectory)
+    func testCodexLaunchPreflightUsesPaneResolvedExportedCodexHome() throws {
+        let codexHome = tempDir.appending(path: "codex-home-exported", directoryHint: .isDirectory)
+        let decoyHome = tempDir.appending(path: "codex-home-controller", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: decoyHome, withIntermediateDirectories: true)
         try executeSQL(
             """
             CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT, model TEXT);
@@ -2146,8 +2148,15 @@ extension CodexStatusProviderTests {
             INSERT INTO threads VALUES ('session-newest', '/repo', '/repo/newest.jsonl', 'gpt-5.2');
             """,
             at: codexHome.appending(path: "state_5.sqlite"))
+        try executeSQL(
+            """
+            CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT, model TEXT);
+            INSERT INTO threads VALUES ('session-decoy', '/repo', '/repo/exact.jsonl', 'gpt-decoy');
+            """,
+            at: decoyHome.appending(path: "state_5.sqlite"))
         let tab = Tab(name: "repo", directory: URL(filePath: "/repo"))
         let pane = Pane(name: "codex", tab: tab, harness: .codex)
+        pane.codexHomeResolution = .resolved(codexHome.path)
         pane.codexTranscriptPath = "/repo/exact.jsonl"
         let monitor = StatusLineMonitor(
             paneID: pane.id,
@@ -2157,9 +2166,10 @@ extension CodexStatusProviderTests {
             tabID: tab.id,
             tabName: tab.name,
             codexAdapter: .current(version: "0.162.1"),
-            codexLaunchEnvironment: ["CODEX_HOME": codexHome.path])
+            codexLaunchEnvironment: ["CODEX_HOME": codexHome.path],
+            codexHomeResolution: pane.codexHomeResolution)
         let controller = TerminalController()
-        controller.pendingEnvironment = ["CODEX_HOME=\(codexHome.path)"]
+        controller.pendingEnvironment = ["CODEX_HOME=\(decoyHome.path)"]
         let selected = tab.configureCodexLaunch(
             for: pane,
             monitor: monitor,
@@ -2175,6 +2185,112 @@ extension CodexStatusProviderTests {
     }
 
     @MainActor
+    func testCodexContinuationPreflightUsesExportedHomeWhenCodexHomeIsUnset() throws {
+        let shellHome = tempDir.appending(path: "codex-shell-home", directoryHint: .isDirectory)
+        let codexHome = shellHome.appending(path: ".codex", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        try executeSQL(
+            """
+            CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT);
+            INSERT INTO threads VALUES ('home-session', '/repo', '/repo/home.jsonl');
+            """,
+            at: codexHome.appending(path: "state_5.sqlite"))
+        let tab = Tab(name: "repo", directory: URL(filePath: "/repo"))
+        let pane = Pane(name: "codex", tab: tab, harness: .codex)
+        pane.codexHomeResolution = .unset(shellHome: shellHome.path)
+        pane.codexTranscriptPath = "/repo/home.jsonl"
+        let monitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: "/repo",
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"),
+            codexLaunchEnvironment: ["HOME": shellHome.path],
+            codexHomeResolution: pane.codexHomeResolution)
+        let controller = TerminalController()
+        controller.pendingEnvironment = ["HOME=\(shellHome.path)"]
+
+        let selected = tab.configureCodexLaunch(
+            for: pane,
+            monitor: monitor,
+            controller: controller,
+            extraArgs: [],
+            appSettings: nil,
+            resumeSessionID: "home-session")
+
+        XCTAssertTrue(selected)
+        XCTAssertTrue(controller.pendingEnvironment?.contains("HOME=\(shellHome.path)") == true)
+        XCTAssertEqual(
+            Array(controller.pendingCommandArgs?.suffix(2) ?? []), ["resume", "home-session"])
+    }
+
+    @MainActor
+    func testUnavailableCodexHomePreflightPreservesExistingIdentityAndController() throws {
+        let decoyHome = tempDir.appending(path: "codex-home-unavailable-decoy", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: decoyHome, withIntermediateDirectories: true)
+        try executeSQL(
+            """
+            CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT);
+            INSERT INTO threads VALUES ('requested-session', '/repo', '/repo/requested.jsonl');
+            """,
+            at: decoyHome.appending(path: "state_5.sqlite"))
+        let tab = Tab(name: "repo", directory: URL(filePath: "/repo"))
+        let pane = Pane(name: "codex", tab: tab, harness: .codex)
+        pane.codexSessionID = "requested-session"
+        pane.codexTranscriptPath = "/repo/requested.jsonl"
+        pane.codexExpectedResumeSessionID = "requested-session"
+        pane.codexHomeResolution = .unavailable
+        let oldController = TerminalController()
+        oldController.pendingCommandArgs = ["codex", "existing-conversation"]
+        pane.installTerminalController(oldController)
+        let oldMonitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: "/repo",
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"))
+        pane.installStatusLineMonitor(oldMonitor)
+        defer {
+            pane.removeStatusLineMonitor()
+            pane.terminalController?.terminate()
+        }
+        let monitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: "/repo",
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"))
+        let controller = TerminalController()
+        controller.pendingEnvironment = ["CODEX_HOME=\(decoyHome.path)"]
+
+        let selected = tab.configureCodexLaunch(
+            for: pane,
+            monitor: monitor,
+            controller: controller,
+            extraArgs: [],
+            appSettings: nil,
+            resumeSessionID: pane.codexSessionID)
+
+        XCTAssertFalse(selected)
+        XCTAssertTrue(pane.terminalController === oldController)
+        XCTAssertTrue(pane.statusLineMonitor === oldMonitor)
+        XCTAssertEqual(pane.codexSessionID, "requested-session")
+        XCTAssertEqual(pane.codexTranscriptPath, "/repo/requested.jsonl")
+        XCTAssertEqual(pane.codexExpectedResumeSessionID, "requested-session")
+        guard case .codexResumeUnavailable(let sessionID, _) = pane.setupState else {
+            XCTFail("Expected unavailable Codex continuation recovery")
+            return
+        }
+        XCTAssertEqual(sessionID, "requested-session")
+    }
+
+    @MainActor
     func testExactCodexRelaunchBuildsFreshHookGeneration() throws {
         let codexHome = tempDir.appending(path: "codex-home-generation", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
@@ -2186,6 +2302,7 @@ extension CodexStatusProviderTests {
             at: codexHome.appending(path: "state_5.sqlite"))
         let tab = Tab(name: "repo", directory: URL(filePath: "/repo"))
         let pane = Pane(name: "codex", tab: tab, harness: .codex)
+        pane.codexHomeResolution = .resolved(codexHome.path)
         pane.codexTranscriptPath = "/repo/exact.jsonl"
         let firstMonitor = StatusLineMonitor(
             paneID: pane.id,
@@ -2253,6 +2370,7 @@ extension CodexStatusProviderTests {
             at: codexHome.appending(path: "state_5.sqlite"))
         let tab = Tab(name: "repo", directory: URL(filePath: "/repo"))
         let pane = Pane(name: "codex", tab: tab, harness: .codex)
+        pane.codexHomeResolution = .resolved(codexHome.path)
         pane.codexSessionID = "requested-session"
         pane.codexTranscriptPath = "/repo/requested.jsonl"
         let oldController = TerminalController()
@@ -2437,6 +2555,7 @@ extension CodexStatusProviderTests {
             at: codexHome.appending(path: "state_5.sqlite"))
         let tab = Tab(name: "repo", directory: URL(filePath: "/repo"))
         let pane = Pane(name: "codex", tab: tab, harness: .codex)
+        pane.codexHomeResolution = .resolved(codexHome.path)
         pane.codexSessionID = "missing-foreground"
         pane.codexTranscriptPath = "/repo/missing.jsonl"
         let oldController = TerminalController()
