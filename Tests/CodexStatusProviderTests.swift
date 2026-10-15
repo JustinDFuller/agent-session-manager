@@ -389,6 +389,23 @@ final class CodexStatusProviderTests: XCTestCase {
         XCTAssertEqual(data?.rateLimits?.sevenDay?.resetsAt, 2_000_003_600)
     }
 
+    func testRolloutParserIgnoresOutOfRangeNumericValues() {
+        let line = Data(
+            CodexCompatibilityFixtures.currentTokenCount
+                .replacingOccurrences(of: "\"input_tokens\":900", with: "\"input_tokens\":1e100")
+                .replacingOccurrences(of: "\"model_context_window\":100000", with: "\"model_context_window\":1e100")
+                .utf8)
+
+        let data = CodexRolloutParser.parseLine(
+            line, expectedCWD: "/repo", adapter: .current(version: "0.162.1"))
+
+        XCTAssertNotNil(data)
+        XCTAssertNil(data?.contextWindow?.totalInputTokens)
+        XCTAssertEqual(data?.contextWindow?.totalOutputTokens, 100)
+        XCTAssertNil(data?.contextWindow?.usedPercentage)
+        XCTAssertNil(data?.contextWindow?.remainingPercentage)
+    }
+
     @MainActor
     func testProviderRetainsStandardQuotaAcrossPremiumAndPartialUpdatesThenClearsOnRebind() throws {
         let queueURL = tempDir.appending(path: "quota-hooks.jsonl")

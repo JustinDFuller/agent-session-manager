@@ -441,7 +441,7 @@ struct CodexRolloutParser {
 
     private static func int(_ value: Any?) -> Int? {
         if let int = value as? Int { return int }
-        if let double = value as? Double { return Int(double) }
+        if let double = value as? Double { return Int(exactly: double.rounded(.towardZero)) }
         if let string = value as? String { return Int(string) }
         return nil
     }
