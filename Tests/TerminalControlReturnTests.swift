@@ -73,6 +73,30 @@ final class TerminalControlReturnTests: XCTestCase {
         XCTAssertEqual(delegate.sent, [[0x0d]])
     }
 
+    func testControlReturnIgnoresCapsLockAndFunctionBits() throws {
+        guard #available(macOS 15.0, *) else { throw XCTSkip("Requires macOS 15") }
+        let (view, delegate) = makeView()
+        let event = try keyDownEvent(
+            keyCode: 36, characters: "\r", modifiers: [.control, .capsLock, .function])
+
+        view.contextMenuKeyDown(event)
+
+        XCTAssertEqual(delegate.sent, [[0x0d]])
+    }
+
+    func testControlReturnWithoutKeyboardReportingClearsSelection() throws {
+        guard #available(macOS 15.0, *) else { throw XCTSkip("Requires macOS 15") }
+        let (view, _) = makeView()
+        view.feed(text: "hello world\n")
+        view.selectAll()
+        XCTAssertTrue(view.selectionActive)
+        let event = try keyDownEvent(keyCode: 36, characters: "\r", modifiers: .control)
+
+        view.contextMenuKeyDown(event)
+
+        XCTAssertFalse(view.selectionActive)
+    }
+
     func testContextMenuKeyDownForOtherKeysSendsNothing() throws {
         guard #available(macOS 15.0, *) else { throw XCTSkip("Requires macOS 15") }
         let cases = [

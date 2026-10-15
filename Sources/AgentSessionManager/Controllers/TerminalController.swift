@@ -72,6 +72,7 @@ final class BellCapturingTerminalView: LocalProcessTerminalView {
             return
         }
         if terminal.keyboardEnhancementFlags.isEmpty {
+            selection.active = false
             send([0x0d])
         } else {
             keyDown(with: event)
