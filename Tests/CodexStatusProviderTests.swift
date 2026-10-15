@@ -872,7 +872,7 @@ extension CodexStatusProviderTests {
         let hookObserved = expectation(description: "session start is delivered before the failure")
         let traceCheck = expectation(description: "post-bind writer failure becomes a bounded provider diagnostic")
         provider.onHookRecords = { _ in
-            try? "queue_lock_timeout".write(to: diagnosticURL, atomically: true, encoding: .utf8)
+            try? "failed|unknown|queue_lock_timeout\n".write(to: diagnosticURL, atomically: true, encoding: .utf8)
             hookObserved.fulfill()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { traceCheck.fulfill() }

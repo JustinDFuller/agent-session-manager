@@ -255,3 +255,55 @@ final class CodexHookQueue {
             partialRecordRetained: hasPartialRecord)
     }
 }
+
+struct CodexHookDiagnosticRecord: Equatable {
+    let kind: String
+    let eventName: String
+    let result: String
+}
+
+final class CodexHookDiagnosticQueue {
+    static let maximumBytes = 8192
+    private static let allowedEvents = Set([
+        "SessionStart", "UserPromptSubmit", "Stop", "PermissionRequest", "PostToolUse", "Interrupt", "unknown",
+    ])
+    private static let allowedResults = Set(["started", "queue_lock_timeout", "hook_write_failed"])
+
+    let fileURL: URL
+
+    init(fileURL: URL) {
+        self.fileURL = fileURL
+    }
+
+    func drain() throws -> [CodexHookDiagnosticRecord] {
+        let descriptor = fileURL.path.withCString { open($0, O_RDWR | O_CREAT | O_CLOEXEC, 0o600) }
+        guard descriptor >= 0 else { throw CodexHookQueueError.openFailed }
+        defer { _ = close(descriptor) }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { throw CodexHookQueueError.lockUnavailable }
+        defer { _ = flock(descriptor, LOCK_UN) }
+
+        var information = stat()
+        guard fstat(descriptor, &information) == 0 else { throw CodexHookQueueError.readFailed }
+        guard information.st_size <= Self.maximumBytes else { throw CodexHookQueueError.fileTooLarge }
+        var bytes = [UInt8](repeating: 0, count: Int(information.st_size))
+        if !bytes.isEmpty {
+            let readCount = bytes.withUnsafeMutableBytes { read(descriptor, $0.baseAddress, $0.count) }
+            guard readCount == bytes.count else { throw CodexHookQueueError.readFailed }
+        }
+        var records: [CodexHookDiagnosticRecord] = []
+        for line in Data(bytes).split(separator: 0x0A) {
+            let fields = line.split(separator: 0x7C, omittingEmptySubsequences: false)
+            guard fields.count == 3,
+                let kind = String(bytes: fields[0], encoding: .ascii),
+                let eventName = String(bytes: fields[1], encoding: .ascii),
+                let result = String(bytes: fields[2], encoding: .ascii),
+                ["invoked", "failed"].contains(kind),
+                Self.allowedEvents.contains(eventName),
+                Self.allowedResults.contains(result)
+            else { continue }
+            records.append(CodexHookDiagnosticRecord(kind: kind, eventName: eventName, result: result))
+        }
+        guard ftruncate(descriptor, 0) == 0 else { throw CodexHookQueueError.writeFailed }
+        return records
+    }
+}

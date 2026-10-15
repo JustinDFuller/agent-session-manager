@@ -354,16 +354,37 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
         XCTAssertEqual(timeoutResult.status, 0)
         XCTAssertTrue(timeoutResult.standardOutput.isEmpty)
         XCTAssertTrue(timeoutResult.standardError.isEmpty)
-        XCTAssertEqual(
-            try String(contentsOf: URL(filePath: monitor.codexHookDiagnosticFilePath), encoding: .utf8),
-            "queue_lock_timeout")
         let invalidResult = try runHook(Data("{invalid json".utf8))
         XCTAssertNotEqual(invalidResult.status, 0)
         XCTAssertTrue(invalidResult.standardOutput.isEmpty)
         XCTAssertTrue(invalidResult.standardError.isEmpty)
+
+        let invocationTraceObserved = expectation(description: "hook invocation is traced after queue failure")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { invocationTraceObserved.fulfill() }
+        wait(for: [invocationTraceObserved], timeout: 2)
+        let invocationTrace = TracingService.shared.recordedEventsForTesting.first {
+            $0.name == "statusline.codex.hook.invoked"
+                && $0.attributes["pane.id"] == paneID.uuidString
+                && $0.attributes["hook_event_name"] == "PermissionRequest"
+        }
+        XCTAssertEqual(invocationTrace?.attributes["result"], "started")
+        let failureTrace = TracingService.shared.recordedEventsForTesting.first {
+            $0.name == "statusline.codex.hook_queue.write_failed"
+                && $0.attributes["pane.id"] == paneID.uuidString
+                && $0.attributes["result"] == "queue_lock_timeout"
+        }
+        XCTAssertEqual(failureTrace?.attributes["hook_event_name"], "PermissionRequest")
+        let diagnosticQueueURL = tempDir.appending(path: "codex-diagnostics.jsonl")
+        try "invoked|SessionStart|started\nfailed|Interrupt|hook_write_failed\ninvalid|Sensitive|value\n"
+            .write(to: diagnosticQueueURL, atomically: true, encoding: .utf8)
+        let diagnosticQueue = CodexHookDiagnosticQueue(fileURL: diagnosticQueueURL)
         XCTAssertEqual(
-            try String(contentsOf: URL(filePath: monitor.codexHookDiagnosticFilePath), encoding: .utf8),
-            "hook_write_failed")
+            try diagnosticQueue.drain(),
+            [
+                CodexHookDiagnosticRecord(kind: "invoked", eventName: "SessionStart", result: "started"),
+                CodexHookDiagnosticRecord(kind: "failed", eventName: "Interrupt", result: "hook_write_failed"),
+            ])
+        XCTAssertTrue(try diagnosticQueue.drain().isEmpty)
 
         XCTAssertFalse(recoveredQueueText.contains("SENSITIVE_PROMPT_SENTINEL"))
         XCTAssertFalse(recoveredQueueText.contains("SENSITIVE_COMMAND_SENTINEL"))
@@ -377,6 +398,70 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
         let attributes = try FileManager.default.attributesOfItem(atPath: monitor.codexHookQueueFilePath)
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
         monitor.stop()
+    }
+
+    @MainActor
+    func testReplacingCodexMonitorPreservesReplacementHookScriptAndQueue() throws {
+        let tab = Tab(name: "repo", directory: tempDir)
+        let pane = Pane(name: "codex-pane", tab: tab, harness: .codex)
+        let previousMonitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: tempDir.path,
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"))
+        let replacementMonitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: tempDir.path,
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"))
+        defer {
+            pane.removeStatusLineMonitor()
+            previousMonitor.stop()
+            replacementMonitor.stop()
+        }
+
+        try previousMonitor.writeCodexHookScript()
+        pane.installStatusLineMonitor(previousMonitor)
+        try replacementMonitor.writeCodexHookScript()
+        pane.installStatusLineMonitor(replacementMonitor)
+
+        XCTAssertEqual(previousMonitor.codexHookScriptFilePath, replacementMonitor.codexHookScriptFilePath)
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: replacementMonitor.codexHookScriptFilePath))
+
+        let environment = ProcessInfo.processInfo.environment.merging([
+            "AGENT_SESSION_MANAGER_PANE_ID": pane.id.uuidString,
+            "AGENT_SESSION_MANAGER_TAB_ID": tab.id.uuidString,
+            "AGENT_SESSION_MANAGER_CODEX_LAUNCH_GENERATION": replacementMonitor.codexLaunchGeneration,
+            "AGENT_SESSION_MANAGER_CODEX_HOOK_QUEUE_PATH": replacementMonitor.codexHookQueueFilePath,
+            "AGENT_SESSION_MANAGER_CODEX_HOOK_DIAGNOSTIC_PATH": replacementMonitor.codexHookDiagnosticFilePath,
+        ]) { _, new in new }
+        let process = Process()
+        let standardInput = Pipe()
+        process.executableURL = URL(filePath: "/usr/bin/env")
+        process.arguments = ["python3", replacementMonitor.codexHookScriptFilePath]
+        process.environment = environment
+        process.standardInput = standardInput
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        standardInput.fileHandleForWriting.write(
+            Data(
+                "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"replacement-session\",\"cwd\":\"\(tempDir.path)\"}"
+                    .utf8))
+        try standardInput.fileHandleForWriting.close()
+        process.waitUntilExit()
+
+        XCTAssertEqual(process.terminationStatus, 0)
+        let records = try CodexHookQueue(fileURL: URL(filePath: replacementMonitor.codexHookQueueFilePath)).drain()
+        XCTAssertEqual(records.records.count, 1)
+        XCTAssertEqual(records.records.first?.sessionID, "replacement-session")
+        XCTAssertEqual(records.records.first?.launchGeneration, replacementMonitor.codexLaunchGeneration)
     }
 
     @MainActor

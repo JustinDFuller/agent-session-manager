@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Darwin
 import Foundation
 import Observation
@@ -23,6 +24,7 @@ enum SidebarSide: String, Codable, CaseIterable {
 @Observable
 @MainActor
 final class StatusLineMonitor {
+    private static var codexHookScriptReferenceCounts: [String: Int] = [:]
     enum ClaudeLifecycle { case unknown, working, stopped }
     enum CursorLifecycle { case unknown, working, stopped }
 
@@ -47,7 +49,7 @@ final class StatusLineMonitor {
     let codexHookRecordFilePath: String
     let codexHookQueueFilePath: String
     let codexHookDiagnosticFilePath: String
-    let codexHookScriptFilePath: String
+    private(set) var codexHookScriptFilePath: String
     let codexLaunchGeneration: String
     let codexAdapter: CodexCompatibilityAdapter?
     private let workingDirectory: String?
@@ -66,6 +68,7 @@ final class StatusLineMonitor {
     private var attentionRetryAttempt = 0
     private var attentionWatcherGeneration = 0
     private var lastAttentionPayloadFingerprint: Int?
+    private var retainsCodexHookScript = false
     private var pendingStopWork: DispatchWorkItem?
     private var hasConfirmedBackgroundWork = false
     var stopNotificationGracePeriod: TimeInterval = 1.8
@@ -408,7 +411,16 @@ final class StatusLineMonitor {
         try? FileManager.default.removeItem(atPath: hookLogFilePath)
         try? FileManager.default.removeItem(atPath: hookLogScriptFilePath)
         try? FileManager.default.removeItem(atPath: codexHookRecordFilePath)
-        try? FileManager.default.removeItem(atPath: codexHookScriptFilePath)
+        if retainsCodexHookScript {
+            let referenceCount = Self.codexHookScriptReferenceCounts[codexHookScriptFilePath, default: 1] - 1
+            if referenceCount == 0 {
+                try? FileManager.default.removeItem(atPath: codexHookScriptFilePath)
+                Self.codexHookScriptReferenceCounts.removeValue(forKey: codexHookScriptFilePath)
+            } else {
+                Self.codexHookScriptReferenceCounts[codexHookScriptFilePath] = referenceCount
+            }
+            retainsCodexHookScript = false
+        }
         try? FileManager.default.removeItem(atPath: codexHookQueueFilePath)
         try? FileManager.default.removeItem(atPath: codexHookDiagnosticFilePath)
     }
@@ -1254,19 +1266,49 @@ extension StatusLineMonitor {
             import fcntl
             import json
             import os
+            import re
             import sys
             import time
 
-            def report_failure(code):
+            def report_diagnostic(kind, event_name, result=None):
                 try:
                     path = os.environ.get("AGENT_SESSION_MANAGER_CODEX_HOOK_DIAGNOSTIC_PATH")
                     if not path:
                         return
-                    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                    os.write(descriptor, code.encode("ascii")[:64])
-                    os.close(descriptor)
+                    allowed_events = {"SessionStart", "UserPromptSubmit", "Stop", "PermissionRequest", "PostToolUse", "Interrupt"}
+                    event = event_name if event_name in allowed_events else "unknown"
+                    allowed_results = {"started", "queue_lock_timeout", "hook_write_failed"}
+                    outcome = result if result in allowed_results else "started"
+                    encoded = f"{kind}|{event}|{outcome}\\n".encode("ascii")
+                    with open(path, "a+b", buffering=0) as handle:
+                        lock_deadline = time.monotonic() + 0.4
+                        while True:
+                            try:
+                                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                break
+                            except BlockingIOError:
+                                if time.monotonic() >= lock_deadline:
+                                    return
+                                time.sleep(0.01)
+                        handle.seek(0, os.SEEK_END)
+                        if handle.tell() + len(encoded) > 8192:
+                            start = max(0, handle.tell() - 4096)
+                            handle.seek(start)
+                            existing = handle.read(4096)
+                            existing = existing[existing.find(b"\\n") + 1:] if b"\\n" in existing else b""
+                            handle.seek(0)
+                            handle.truncate()
+                            handle.write(existing)
+                        handle.seek(0, os.SEEK_END)
+                        handle.write(encoded)
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
                 except BaseException:
                     pass
+
+            hook_event_name = "unknown"
+
+            def report_failure(code):
+                report_diagnostic("failed", hook_event_name, code)
 
             def silent_exception(error_type, error_value, error_traceback):
                 report_failure("hook_write_failed")
@@ -1278,8 +1320,13 @@ extension StatusLineMonitor {
                     return None
                 return value.encode("utf-8", errors="replace")[:limit].decode("utf-8", errors="ignore")
 
-            payload = json.load(sys.stdin)
-            hook_event_name = bounded(payload.get("hook_event_name"), 64) or ""
+            raw_payload = sys.stdin.buffer.read()
+            event_match = re.search(
+                rb'"hook_event_name"\\s*:\\s*"(SessionStart|UserPromptSubmit|Stop|PermissionRequest|PostToolUse|Interrupt)"',
+                raw_payload[:4096])
+            hook_event_name = event_match.group(1).decode("ascii") if event_match else "unknown"
+            report_diagnostic("invoked", hook_event_name, "started")
+            payload = json.loads(raw_payload)
             record = {
                 "pane_id": os.environ.get("AGENT_SESSION_MANAGER_PANE_ID", ""),
                 "tab_id": os.environ.get("AGENT_SESSION_MANAGER_TAB_ID", ""),
@@ -1321,10 +1368,20 @@ extension StatusLineMonitor {
                 handle.write(encoded)
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
             """
+        let scriptFingerprint = SHA256.hash(data: Data(script.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        codexHookScriptFilePath =
+            NSTemporaryDirectory()
+            + "agent-session-manager-codex-hook-\(paneID.uuidString)-\(scriptFingerprint).py"
         try script.write(to: URL(filePath: codexHookScriptFilePath), atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o700],
             ofItemAtPath: codexHookScriptFilePath)
+        if !retainsCodexHookScript {
+            Self.codexHookScriptReferenceCounts[codexHookScriptFilePath, default: 0] += 1
+            retainsCodexHookScript = true
+        }
         if !FileManager.default.createFile(atPath: codexHookQueueFilePath, contents: nil),
             !FileManager.default.fileExists(atPath: codexHookQueueFilePath)
         {

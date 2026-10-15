@@ -732,19 +732,32 @@ final class CodexStatusProvider: StatusLineDataProvider {
     }
 
     private func readAndRecordHookWriterDiagnostic() {
-        guard let path = context.codexHookDiagnosticPath,
-            FileManager.default.fileExists(atPath: path),
-            let handle = try? FileHandle(forReadingFrom: URL(filePath: path))
-        else { return }
-        let data = try? handle.read(upToCount: 64)
-        try? handle.close()
-        try? FileManager.default.removeItem(atPath: path)
-        guard let data, let value = String(data: data, encoding: .utf8),
-            ["queue_lock_timeout", "hook_write_failed"].contains(value),
-            value != lastHookWriterDiagnostic
-        else { return }
-        lastHookWriterDiagnostic = value
-        trace("statusline.codex.hook_queue.write_failed", attributes: ["result": value])
+        guard let path = context.codexHookDiagnosticPath else { return }
+        do {
+            let records = try CodexHookDiagnosticQueue(fileURL: URL(filePath: path)).drain()
+            for record in records {
+                if record.kind == "invoked" {
+                    trace(
+                        "statusline.codex.hook.invoked",
+                        attributes: ["hook_event_name": record.eventName, "result": record.result])
+                } else {
+                    trace(
+                        "statusline.codex.hook_queue.write_failed",
+                        attributes: ["hook_event_name": record.eventName, "result": record.result])
+                }
+            }
+        } catch {
+            let reason: String
+            switch error as? CodexHookQueueError {
+            case .openFailed: reason = "open_failed"
+            case .lockUnavailable: reason = "lock_unavailable"
+            case .readFailed: reason = "read_failed"
+            case .writeFailed: reason = "truncate_failed"
+            case .fileTooLarge: reason = "file_too_large"
+            case nil: reason = "unknown"
+            }
+            trace("statusline.codex.hook_diagnostic.read_failed", attributes: ["reason": reason])
+        }
     }
 
     private func bind(record: CodexHookSessionRecord, attempt: Int, lateBound: Bool) async {
