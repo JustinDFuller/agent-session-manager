@@ -67,6 +67,20 @@ The five-hour and weekly quota facts MUST describe Codex's standard usage bucket
 - **WHEN** the standard bucket reports 15% five-hour use and 65% weekly use with reset times
 - **THEN** the app shows those used percentages and their matching reset times
 
+### Requirement: Status enrichment uses the effective Codex home
+
+Optional SQLite enrichment MUST use the final `CODEX_HOME` exported by the configured interactive shell that launches Codex. This includes an inherited app or pane value when shell startup preserves it and a value that shell startup exports or overrides. The provider MUST NOT inspect a different Codex home.
+
+#### Scenario: Shell startup exports a Codex home
+
+- **WHEN** the configured interactive shell exports or overrides `CODEX_HOME` during startup
+- **THEN** the interactive Codex process and status enrichment use that final shell value
+
+#### Scenario: The shell preserves an inherited Codex home
+
+- **WHEN** the app or pane supplies `CODEX_HOME` and configured shell startup leaves it unchanged
+- **THEN** the interactive Codex process and status enrichment use that inherited value
+
 ### Requirement: Unsupported rich status is visibly unavailable
 
 The app MUST populate rich Codex facts only through a supported compatibility contract. With an unsupported version or unavailable rich-data source, app-owned baseline facts MUST continue updating while unsupported facts appear unavailable. Previously bound conversation facts MUST NOT masquerade as current data.

@@ -8,7 +8,7 @@ Codex continuation preserves the specific conversation a user was working on whe
 
 ### Requirement: Refresh and Continue resumes the exact conversation
 
-Refresh and Continue on a Codex pane MUST resume its current foreground conversation with the same checkout, profile, CLI options, and control-injection decision. The app MUST NOT select a conversation by latest activity or shared working directory. The sheet MUST describe continuation without promising an unsupported `--continue` flag.
+Refresh and Continue on a Codex pane MUST resume that pane's current foreground conversation with the same checkout, profile, CLI options, and control-injection decision. Its exact-session preflight MUST use the same final `CODEX_HOME` exported by the configured interactive shell as the Codex process. The app MUST NOT select a conversation by latest activity or shared working directory. The sheet MUST describe conversation continuation without promising an unsupported `--continue` flag.
 
 #### Scenario: Two Codex panes use distinct checkouts
 
