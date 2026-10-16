@@ -141,10 +141,24 @@ Other status-line events remain trace events:
 | `statusline.attention.read_failed` | Claude attention queue open, nonblocking lock, read, or compaction failure; includes pane/tab context, bounded error code, and retry delay/attempt context. Pending state retries with backoff capped at one second while the watcher is active; success resets backoff and teardown cancels retries. |
 | `statusline.cursor.<role>_watcher.<state>` | A Cursor hook, lifecycle, or attention watcher starts, fails to attach, recovers, or stops |
 | `statusline.codex.hook_waiting` | Codex provider is still waiting for a hook record; includes retry attempt, late-binding state, and hook availability |
-| `statusline.codex.hook_bound` | Codex hook record bound the pane to a session; includes hook availability, event name, session id prefix, retry attempt, late-binding state, and transcript availability |
+| `statusline.codex.session.bound.received` | A pane monitor receives its Codex provider's bound session identity |
+| `statusline.codex.binding.changed` | The provider binds a different foreground session; includes bounded old/new identity prefixes and transcript availability |
+| `statusline.codex.binding.unchanged` | A repeated foreground identity matches the current binding |
+| `statusline.codex.binding.transcript_updated` | Transcript metadata becomes available for the already-bound foreground session |
+| `statusline.codex.binding.facts_cleared` | Facts belonging to the prior foreground conversation are cleared after a change is recognized |
+| `statusline.codex.binding.callback` | A changed foreground identity is published to the pane monitor |
 | `statusline.codex.hook_record_ignored` | Codex hook record was present but rejected, usually because the pane/tab ids did not match |
+| `statusline.codex.hook_queue.record_ignored` | A queued record is rejected because its pane, tab, launch generation, or event identity does not match |
+| `statusline.codex.hook.invoked` | The generated app-owned hook script starts for an allowlisted event |
+| `statusline.codex.hook_diagnostic.read_failed` | The hook process cannot read its bounded diagnostic context; records a bounded reason |
 | `statusline.codex.sqlite_enrichment` | Optional Codex SQLite enrichment result; includes exact-match outcome, retry attempt, selected session id prefix, and rollout path match |
 | `statusline.codex.selection_failed` | Codex hook binding failed or was still waiting; retryable startup failures include retry reason/attempt |
+| `statusline.codex.activity.changed` | A supported foreground hook changes the Codex pane between working and stopped |
+| `statusline.codex.completion` | A foreground completion alert is scheduled, canceled, or delivered with a bounded reason |
+| `statusline.codex.permission.attention` / `statusline.codex.permission.ignored` | A permission attention request is delivered or ignored for a bounded mismatch reason |
+| `statusline.codex.question.attention` | A native question request is delivered or resolved; raw question text and call IDs are excluded |
+| `statusline.codex.continuation.preflight` | Exact saved-session availability is checked before restoration; records bounded identity prefixes and outcome |
+| `statusline.codex.continuation.restore_deferred` | Restoration waits for the user to retry or start a fresh conversation because the exact saved session is unavailable |
 | `statusline.codex.compatibility.selected` | Records a bounded adapter identifier, detected version, result, and hook count; baseline-only selection is an expected degraded mode |
 | `statusline.codex.compatibility.rejected_option` | A saved built-in Codex option value is rejected before launch; includes the adapter, option name, and bounded reason without changing the value |
 | `statusline.codex.hook_setup.failed` | App-owned Codex hook preparation failed and is surfaced through the pane setup UI |

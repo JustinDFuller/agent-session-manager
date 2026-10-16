@@ -2,15 +2,16 @@
 
 Every tab and pane shows a small indicator that answers one question: **where should I focus attention right now?**
 
-## Three states (priority order)
+## Four states (priority order)
 
 | State | Visual | Meaning |
 |-------|--------|---------|
-| **Waiting** | Crisp filled accent-color dot, breathing pulse | Agent needs your input — a notification is pending |
+| **Waiting** | Static filled accent-color dot | A notification is pending for the pane |
 | **Working** | Soft secondary-color circular glow, subtle pulse | A supported agent lifecycle signal says work is active |
-| **Idle** | Static dim hollow ring | Process stopped or running quietly with no output |
+| **Stopped** | Static secondary-color octagon | A supported agent lifecycle signal says the foreground turn ended |
+| **Idle** | Static dim hollow ring | The process stopped or is running quietly with no output |
 
-A tab aggregates its panes: it shows `waiting` if any pane is waiting, `working` if any pane is working, and `idle` otherwise. Every tab always shows an indicator so an idle tab is positively identifiable, not just "absent dot."
+A tab aggregates its panes in this priority order: `waiting`, `working`, `stopped`, then `idle`. Every tab always shows an indicator so an idle tab is positively identifiable, not just "absent dot."
 
 ## Working detection
 
@@ -26,9 +27,9 @@ Shell panes remain idle unless an explicit attention notification exists. Codex 
 
 ## Waiting and notifications
 
-A pane is `waiting` whenever `AppState.notifications` contains an entry for that pane — regardless of notification kind, including Codex completion, permission, and question attention. Focusing the pane clears its notification (`AppState.setActivePane` → `clearNotification`), reverting the indicator to `working` or `idle`. The active pane therefore never shows `waiting`.
+A pane is `waiting` whenever `AppState.notifications` contains an entry for that pane — regardless of notification kind, including Codex completion, permission, and question attention. Focusing the pane clears its notification (`AppState.setActivePane` → `clearNotification`), reverting the indicator to its current `working`, `stopped`, or `idle` state.
 
-This means the activity indicator and the notification are the same signal. There is no separate notification dot in the pane header.
+This means the activity indicator and the notification are the same signal. There is no separate notification dot in the pane header. Focusing acknowledges the current notification; a new attention event can put the active pane into `waiting` again.
 
 ## PR status is separate
 
@@ -38,10 +39,11 @@ PR status (CI checks, merge state) appears only in the status-line `pr` fact and
 
 When Accessibility → Reduce Motion is enabled:
 - **Working**: shows a static soft secondary-color circular glow (no pulse)
-- **Waiting**: shows a static crisp accent-color dot (no pulse)
+- **Waiting**: remains a static crisp accent-color dot
+- **Stopped**: unchanged (already static)
 - **Idle**: unchanged (already static)
 
-All three states remain visually distinguishable without animation.
+All four states remain visually distinguishable without animation.
 
 ## Accessibility identifiers
 
@@ -65,6 +67,7 @@ When off, `ActivityIndicatorView` renders nothing. The setting is persisted to `
 | Event | When |
 |-------|------|
 | `pane.activity.changed` | Claude lifecycle state changes, with `state`, `source`, and `hook_event` attributes |
+| `statusline.codex.activity.changed` | A supported Codex hook changes the foreground pane between working and stopped; includes pane/tab identity, state, and hook event |
 | `pane.notification.cleared` | `clearNotification(paneID:)` called with `reason: "cleared"` |
 
 The `pane.notification.added` event was already traced; `cleared` was added to make enter/exit symmetric and debuggable.

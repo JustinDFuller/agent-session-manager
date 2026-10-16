@@ -290,8 +290,14 @@ final class RefreshPaneTests: XCTestCase {
 
         XCTAssertNotEqual(originalMonitor.codexLaunchGeneration, restoredMonitor.codexLaunchGeneration)
         XCTAssertNotEqual(originalMonitor.codexHookQueueFilePath, restoredMonitor.codexHookQueueFilePath)
-        XCTAssertNotEqual(originalMonitor.codexHookScriptFilePath, restoredMonitor.codexHookScriptFilePath)
+        XCTAssertNotEqual(originalMonitor.codexHookDiagnosticFilePath, restoredMonitor.codexHookDiagnosticFilePath)
+        XCTAssertEqual(originalMonitor.codexHookScriptFilePath, restoredMonitor.codexHookScriptFilePath)
         XCTAssertTrue(command.contains(where: { $0.contains(originalMonitor.codexHookScriptFilePath) }))
+
+        restoredMonitor.stop()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: originalMonitor.codexHookScriptFilePath))
+        originalMonitor.stop()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: originalMonitor.codexHookScriptFilePath))
     }
 
     @MainActor

@@ -1556,7 +1556,7 @@ extension StatusLineMonitor {
             .joined()
         codexHookScriptFilePath =
             NSTemporaryDirectory()
-            + "agent-session-manager-codex-hook-\(paneID.uuidString)-\(codexLaunchGeneration)-\(scriptFingerprint).py"
+            + "agent-session-manager-codex-hook-\(paneID.uuidString)-\(scriptFingerprint).py"
         try script.write(to: URL(filePath: codexHookScriptFilePath), atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o700],

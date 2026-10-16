@@ -443,11 +443,14 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
         try previousMonitor.writeCodexHookScript()
         pane.installStatusLineMonitor(previousMonitor)
         try replacementMonitor.writeCodexHookScript()
-        pane.installStatusLineMonitor(replacementMonitor)
 
-        XCTAssertNotEqual(previousMonitor.codexHookScriptFilePath, replacementMonitor.codexHookScriptFilePath)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: previousMonitor.codexHookScriptFilePath))
+        XCTAssertNotEqual(previousMonitor.codexLaunchGeneration, replacementMonitor.codexLaunchGeneration)
+        XCTAssertNotEqual(previousMonitor.codexHookQueueFilePath, replacementMonitor.codexHookQueueFilePath)
+        XCTAssertNotEqual(previousMonitor.codexHookDiagnosticFilePath, replacementMonitor.codexHookDiagnosticFilePath)
+        XCTAssertEqual(previousMonitor.codexHookScriptFilePath, replacementMonitor.codexHookScriptFilePath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: previousMonitor.codexHookScriptFilePath))
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: replacementMonitor.codexHookScriptFilePath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: previousMonitor.codexHookDiagnosticFilePath))
 
         let environment = ProcessInfo.processInfo.environment.merging([
             "AGENT_SESSION_MANAGER_PANE_ID": pane.id.uuidString,
@@ -473,10 +476,24 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
         process.waitUntilExit()
 
         XCTAssertEqual(process.terminationStatus, 0)
+        XCTAssertEqual(
+            try String(contentsOfFile: replacementMonitor.codexHookDiagnosticFilePath, encoding: .utf8),
+            "invoked|SessionStart|started\n")
+        XCTAssertEqual(
+            try String(contentsOfFile: previousMonitor.codexHookDiagnosticFilePath, encoding: .utf8), "")
+
+        pane.installStatusLineMonitor(replacementMonitor)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: previousMonitor.codexHookDiagnosticFilePath))
+
         let records = try CodexHookQueue(fileURL: URL(filePath: replacementMonitor.codexHookQueueFilePath)).drain()
         XCTAssertEqual(records.records.count, 1)
         XCTAssertEqual(records.records.first?.sessionID, "replacement-session")
         XCTAssertEqual(records.records.first?.launchGeneration, replacementMonitor.codexLaunchGeneration)
+        XCTAssertEqual(
+            try CodexHookQueue(fileURL: URL(filePath: previousMonitor.codexHookQueueFilePath)).drain().records.count, 0)
+
+        pane.removeStatusLineMonitor()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: replacementMonitor.codexHookScriptFilePath))
     }
 
     @MainActor
