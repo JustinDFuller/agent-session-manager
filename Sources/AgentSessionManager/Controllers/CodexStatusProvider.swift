@@ -607,8 +607,9 @@ final class CodexStatusProvider: StatusLineDataProvider {
     private let startupRetryInterval: TimeInterval
     private let startupTimeout: TimeInterval
     private let baseline: ToolAgnosticDataProvider
-    private var tailer: CodexRolloutTailer?
+    private(set) var tailer: CodexRolloutTailer?
     private var tailerSessionID: String?
+    private var tailerGeneration: UInt64 = 0
     private var stateTask: Task<Void, Never>?
     private var enrichmentTask: Task<Void, Never>?
     private var hookDiagnosticTask: Task<Void, Never>?
@@ -859,9 +860,7 @@ final class CodexStatusProvider: StatusLineDataProvider {
         hookDiagnosticTask?.cancel()
         hookDiagnosticTask = nil
         baseline.stop()
-        tailer?.stop()
-        tailer = nil
-        tailerSessionID = nil
+        stopTailer()
     }
 
     private func readAndRecordHookWriterDiagnostic() {
@@ -939,9 +938,7 @@ final class CodexStatusProvider: StatusLineDataProvider {
             enrichmentTask?.cancel()
             enrichmentTask = nil
             if tailer != nil {
-                tailer?.stop()
-                tailer = nil
-                tailerSessionID = nil
+                stopTailer()
                 trace("statusline.codex.tailer_detached", attributes: ["reason": "session_changed"])
             }
             boundSessionID = record.sessionID
@@ -1141,14 +1138,20 @@ final class CodexStatusProvider: StatusLineDataProvider {
     }
 
     private func startTailer(path: String, sessionID: String) {
-        tailer?.stop()
+        stopTailer()
+        let generation = tailerGeneration
         let next = CodexRolloutTailer(
             rolloutPath: path, expectedCWD: context.workingDirectory, adapter: adapter)
         next.onTrace = { [weak self] name, attributes in
             self?.trace(name, attributes: attributes)
         }
         next.onAttention = { [weak self] event in
-            guard let self, self.boundSessionID == sessionID,
+            guard let self else { return }
+            guard self.tailerGeneration == generation else {
+                self.trace("statusline.codex.tailer_update_ignored", attributes: ["result": "stale_generation"])
+                return
+            }
+            guard self.boundSessionID == sessionID,
                 self.boundTranscriptPath == path, self.tailerSessionID == sessionID,
                 self.tailer?.rolloutPath == path
             else { return }
@@ -1164,7 +1167,12 @@ final class CodexStatusProvider: StatusLineDataProvider {
             }
         }
         next.onUnavailable = { [weak self] in
-            guard let self, self.boundSessionID == sessionID,
+            guard let self else { return }
+            guard self.tailerGeneration == generation else {
+                self.trace("statusline.codex.tailer_update_ignored", attributes: ["result": "stale_generation"])
+                return
+            }
+            guard self.boundSessionID == sessionID,
                 self.boundTranscriptPath == path, self.tailerSessionID == sessionID,
                 self.tailer?.rolloutPath == path
             else { return }
@@ -1175,7 +1183,12 @@ final class CodexStatusProvider: StatusLineDataProvider {
             self.emitMerged()
         }
         next.onUpdate = { [weak self] data in
-            guard let self, self.boundSessionID == sessionID,
+            guard let self else { return }
+            guard self.tailerGeneration == generation else {
+                self.trace("statusline.codex.tailer_update_ignored", attributes: ["result": "stale_generation"])
+                return
+            }
+            guard self.boundSessionID == sessionID,
                 self.boundTranscriptPath == path, self.tailerSessionID == sessionID,
                 self.tailer?.rolloutPath == path
             else { return }
@@ -1195,6 +1208,13 @@ final class CodexStatusProvider: StatusLineDataProvider {
         tailer = next
         tailerSessionID = sessionID
         next.start()
+    }
+
+    private func stopTailer() {
+        tailerGeneration &+= 1
+        tailer?.stop()
+        tailer = nil
+        tailerSessionID = nil
     }
 
     private func mergeHarnessData(_ update: StatusLineData) -> StatusLineData {

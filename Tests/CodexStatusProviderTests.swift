@@ -1130,7 +1130,7 @@ final class CodexStatusProviderTests: XCTestCase {
     }
 
     @MainActor
-    func testProvidersSharingCheckoutRejectEachOthersForegroundBindings() throws {
+    func testProvidersOnDistinctCheckoutsRejectEachOthersForegroundBindings() throws {
         let paneA = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
         let paneB = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
         let tabA = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
@@ -1139,17 +1139,21 @@ final class CodexStatusProviderTests: XCTestCase {
         let generationB = "generation-b"
         let queueA = tempDir.appending(path: "pane-a-hooks.jsonl")
         let queueB = tempDir.appending(path: "pane-b-hooks.jsonl")
+        let checkoutA = tempDir.appending(path: ".agent-session-manager/worktrees/pane-a", directoryHint: .isDirectory)
+        let checkoutB = tempDir.appending(path: ".agent-session-manager/worktrees/pane-b", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: checkoutA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: checkoutB, withIntermediateDirectories: true)
         let providerA = CodexStatusProvider(
             context: makeContext(
                 processStartTime: Date(), queuePath: queueA.path, launchGeneration: generationA,
-                paneID: paneA, tabID: tabA),
+                workingDirectory: checkoutA.path, paneID: paneA, tabID: tabA),
             stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-a.sqlite")),
             startupRetryInterval: 0.05,
             startupTimeout: 0.2)
         let providerB = CodexStatusProvider(
             context: makeContext(
                 processStartTime: Date(), queuePath: queueB.path, launchGeneration: generationB,
-                paneID: paneB, tabID: tabB),
+                workingDirectory: checkoutB.path, paneID: paneB, tabID: tabB),
             stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-b.sqlite")),
             startupRetryInterval: 0.05,
             startupTimeout: 0.2)
@@ -1182,6 +1186,99 @@ final class CodexStatusProviderTests: XCTestCase {
 
         XCTAssertEqual(idsA, ["session-a"])
         XCTAssertEqual(idsB, ["session-b"])
+    }
+
+    @MainActor
+    func testProviderIgnoresCallbacksFromPreviousAndStoppedTailerGenerations() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+
+        let queueURL = tempDir.appending(path: "tailer-generation-queue.jsonl")
+        let firstTranscript = tempDir.appending(path: "tailer-generation-first.jsonl")
+        let secondTranscript = tempDir.appending(path: "tailer-generation-second.jsonl")
+        try codexTokenLine(model: "first-model", input: 10, output: 1, contextTokens: 11, window: 100)
+            .write(to: firstTranscript, atomically: true, encoding: .utf8)
+        try codexTokenLine(model: "second-model", input: 20, output: 2, contextTokens: 22, window: 100)
+            .write(to: secondTranscript, atomically: true, encoding: .utf8)
+        let context = makeContext(
+            processStartTime: Date(), queuePath: queueURL.path, launchGeneration: "tailer-generation",
+            adapter: .current(version: "0.162.1"))
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "tailer-generation-absent.sqlite")),
+            startupRetryInterval: 0.05,
+            startupTimeout: 0.5)
+        var snapshots: [StatusLineData] = []
+        let firstUpdate = expectation(description: "first tailer emits its metrics")
+        let secondUpdate = expectation(description: "rebound tailer emits its metrics")
+        var didObserveFirstUpdate = false
+        var didObserveSecondUpdate = false
+        provider.onUpdate = { data in
+            snapshots.append(data)
+            if data.model?.id == "first-model", !didObserveFirstUpdate {
+                didObserveFirstUpdate = true
+                firstUpdate.fulfill()
+            }
+            if data.model?.id == "second-model", !didObserveSecondUpdate {
+                didObserveSecondUpdate = true
+                secondUpdate.fulfill()
+            }
+        }
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "tailer-generation",
+            sessionID: "first-session",
+            transcriptPath: firstTranscript.path,
+            model: "first-hook-model",
+            hookEventName: "SessionStart")
+
+        provider.start()
+        wait(for: [firstUpdate], timeout: 2)
+        let previousTailer = try XCTUnwrap(provider.tailer)
+        let previousSnapshot = try XCTUnwrap(snapshots.last)
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "tailer-generation",
+            sessionID: "second-session",
+            transcriptPath: secondTranscript.path,
+            model: "second-hook-model",
+            hookEventName: "UserPromptSubmit")
+        wait(for: [secondUpdate], timeout: 2)
+        let activeTailer = try XCTUnwrap(provider.tailer)
+        let secondSnapshot = try XCTUnwrap(snapshots.last)
+        let snapshotCountAfterRebind = snapshots.count
+
+        previousTailer.onUnavailable?()
+        previousTailer.onUpdate?(previousSnapshot)
+
+        XCTAssertEqual(snapshots.count, snapshotCountAfterRebind)
+        XCTAssertEqual(snapshots.last?.model?.id, "second-model")
+        XCTAssertEqual(snapshots.last?.contextWindow?.totalInputTokens, 20)
+
+        provider.stop()
+        let snapshotCountAfterStop = snapshots.count
+        activeTailer.onUnavailable?()
+        activeTailer.onUpdate?(secondSnapshot)
+
+        XCTAssertEqual(snapshots.count, snapshotCountAfterStop)
+        XCTAssertEqual(snapshots.last?.model?.id, "second-model")
+        let ignoredEvents = TracingService.shared.recordedEventsForTesting.filter {
+            $0.name == "statusline.codex.tailer_update_ignored"
+        }
+        XCTAssertEqual(ignoredEvents.count, 4)
+        XCTAssertTrue(
+            ignoredEvents.allSatisfy {
+                $0.attributes["result"] == "stale_generation"
+                    && $0.attributes["pane.id"] == context.paneID.uuidString
+                    && $0.attributes["pane.name"] == context.paneName
+                    && $0.attributes["tab.id"] == context.tabID.uuidString
+                    && $0.attributes["tab.name"] == context.tabName
+            })
     }
 
     @MainActor
@@ -1982,6 +2079,7 @@ extension CodexStatusProviderTests {
         adapter: CodexCompatibilityAdapter? = nil,
         codexShell: String? = nil,
         environment: [String: String] = [:],
+        workingDirectory: String? = nil,
         paneID: UUID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
         tabID: UUID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
     ) -> StatusProviderContext {
@@ -1990,7 +2088,7 @@ extension CodexStatusProviderTests {
             paneName: "codex-pane",
             tabID: tabID,
             tabName: "repo",
-            workingDirectory: tempDir.path,
+            workingDirectory: workingDirectory ?? tempDir.path,
             harness: .codex,
             processStartTime: processStartTime,
             launchArgs: [],
