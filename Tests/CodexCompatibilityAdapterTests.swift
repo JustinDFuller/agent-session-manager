@@ -431,7 +431,8 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
         try replacementMonitor.writeCodexHookScript()
         pane.installStatusLineMonitor(replacementMonitor)
 
-        XCTAssertEqual(previousMonitor.codexHookScriptFilePath, replacementMonitor.codexHookScriptFilePath)
+        XCTAssertNotEqual(previousMonitor.codexHookScriptFilePath, replacementMonitor.codexHookScriptFilePath)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: previousMonitor.codexHookScriptFilePath))
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: replacementMonitor.codexHookScriptFilePath))
 
         let environment = ProcessInfo.processInfo.environment.merging([

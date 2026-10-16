@@ -144,7 +144,8 @@ final class StatusLineMonitor {
             + "agent-session-manager-codex-hook-diagnostic-\(paneID.uuidString)-\(resolvedCodexLaunchGeneration).txt"
         codexHookDiagnosticFilePath = resolvedCodexHookDiagnosticFilePath
         let resolvedCodexHookScriptFilePath =
-            NSTemporaryDirectory() + "agent-session-manager-codex-hook-\(paneID.uuidString).py"
+            NSTemporaryDirectory()
+            + "agent-session-manager-codex-hook-\(paneID.uuidString)-\(resolvedCodexLaunchGeneration).py"
         codexHookScriptFilePath = resolvedCodexHookScriptFilePath
         providerContext = workingDirectory.map { cwd in
             StatusProviderContext(
@@ -1373,7 +1374,7 @@ extension StatusLineMonitor {
             .joined()
         codexHookScriptFilePath =
             NSTemporaryDirectory()
-            + "agent-session-manager-codex-hook-\(paneID.uuidString)-\(scriptFingerprint).py"
+            + "agent-session-manager-codex-hook-\(paneID.uuidString)-\(codexLaunchGeneration)-\(scriptFingerprint).py"
         try script.write(to: URL(filePath: codexHookScriptFilePath), atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o700],
