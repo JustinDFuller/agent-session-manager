@@ -55,6 +55,42 @@ extension Pane {
                 )
             }
         }
+        statusLineMonitor?.onCodexStopped = { [weak appState, weak tab, weak self] in
+            Task { @MainActor in
+                guard let appState, let tab, let pane = self else { return }
+                guard
+                    SettingsPersistence.load(NotificationConfig.self, from: "notification-settings.json")?
+                        .isCodexCompletionNotificationEnabled ?? true
+                else { return }
+                appState.addNotification(
+                    paneID: pane.id,
+                    paneName: pane.name,
+                    tabID: tab.id,
+                    tabName: tab.name,
+                    isPriority: pane.isPriority,
+                    event: .codexStop
+                )
+            }
+        }
+        statusLineMonitor?.onCodexAttention = { [weak appState, weak tab, weak self] event in
+            Task { @MainActor in
+                guard let appState, let tab, let pane = self else { return }
+                appState.addNotification(
+                    paneID: pane.id,
+                    paneName: pane.name,
+                    tabID: tab.id,
+                    tabName: tab.name,
+                    isPriority: pane.isPriority,
+                    event: event
+                )
+            }
+        }
+        statusLineMonitor?.onCodexAttentionResolved = { [weak appState, weak self] kind in
+            Task { @MainActor in
+                guard let appState, let pane = self else { return }
+                appState.clearNotification(paneID: pane.id, kind: kind)
+            }
+        }
         statusLineMonitor?.onOpencodeStopped = { [weak appState, weak tab, weak self] in
             Task { @MainActor in
                 guard let appState, let tab, let pane = self else { return }
@@ -73,6 +109,14 @@ extension Pane {
             Task { @MainActor in
                 self?.opencodeRaceLossRestarted = false
                 self?.opencodeSessionID = id
+                if let appState { SessionPersistence.save(appState: appState) }
+            }
+        }
+        statusLineMonitor?.onCodexSessionBound = { [weak appState, weak self] id, transcriptPath in
+            Task { @MainActor in
+                guard let pane = self else { return }
+                pane.codexSessionID = id
+                pane.codexTranscriptPath = transcriptPath
                 if let appState { SessionPersistence.save(appState: appState) }
             }
         }

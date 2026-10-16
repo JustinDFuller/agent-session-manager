@@ -73,6 +73,46 @@ final class StatusLineMonitorInvariantTests: XCTestCase {
         XCTAssertEqual(event?.attributes["position"], "1")
     }
 
+    func testCodexFactsRemainInCurrentDataAfterProviderRefreshAndTraceOnlyPresence() {
+        let monitor = StatusLineMonitor(paneID: UUID(), harness: .codex)
+        var codexSnapshot = StatusLineData.empty()
+        codexSnapshot.model = StatusLineData.Model(id: "private-model-name", displayName: "private-model-name")
+        codexSnapshot.contextWindow = StatusLineData.ContextWindow(
+            usedPercentage: 8,
+            remainingPercentage: 92,
+            totalInputTokens: 92_892,
+            totalOutputTokens: 28,
+            contextWindowSize: 1_000_000
+        )
+        codexSnapshot.rateLimits = StatusLineData.RateLimits(
+            fiveHour: StatusLineData.RateLimit(usedPercentage: 7, resetsAt: 2_000_000_000),
+            sevenDay: nil,
+            bucketID: "codex"
+        )
+
+        monitor.testApplyProviderSnapshot(codexSnapshot, providerName: "codex")
+
+        var refreshedSnapshot = codexSnapshot
+        refreshedSnapshot.version = "0.162.1"
+        refreshedSnapshot.worktree = StatusLineData.Worktree(name: "worktree", branch: "main")
+        monitor.testApplyProviderSnapshot(refreshedSnapshot, providerName: "codex")
+
+        XCTAssertEqual(monitor.currentData?.model?.id, "private-model-name")
+        XCTAssertEqual(monitor.currentData?.contextWindow?.usedPercentage, 8)
+        XCTAssertEqual(monitor.currentData?.contextWindow?.totalInputTokens, 92_892)
+        XCTAssertEqual(monitor.currentData?.contextWindow?.totalOutputTokens, 28)
+        let update = TracingService.shared.recordedEventsForTesting.last {
+            $0.name == "statusline.provider.update_applied"
+        }
+        XCTAssertEqual(update?.attributes["has_model"], "true")
+        XCTAssertEqual(update?.attributes["has_context"], "true")
+        XCTAssertEqual(update?.attributes["has_input_tokens"], "true")
+        XCTAssertEqual(update?.attributes["has_output_tokens"], "true")
+        XCTAssertEqual(update?.attributes["has_rate_limits"], "true")
+        XCTAssertNil(update?.attributes["model"])
+        XCTAssertNil(update?.attributes["input_tokens"])
+    }
+
     func testMigrationDropsGitWorktreeAndTraces() throws {
         let json = Data(
             """
@@ -570,6 +610,65 @@ final class StatusLineMonitorInvariantTests: XCTestCase {
         monitor.testApplyLatestPayload(reason: "test")
 
         XCTAssertNil(monitor.currentData?.repo)
+    }
+
+    func testRepoIdentityUsesHTTPSAndSSHRemotesWithoutAuthentication() async throws {
+        let repository = try GitTestRepository.make(withRemote: false)
+        defer { repository.cleanUp() }
+        let missingIdentity = await StatusLineMonitor.fetchRepoIdentity(workingDirectory: repository.root.path)
+        XCTAssertNil(missingIdentity)
+        try repository.git(["remote", "add", "origin", "https://github.com/acme/widget.git"])
+
+        let httpsIdentity = await StatusLineMonitor.fetchRepoIdentity(workingDirectory: repository.root.path)
+        XCTAssertEqual(httpsIdentity?.host, "github.com")
+        XCTAssertEqual(httpsIdentity?.owner, "acme")
+        XCTAssertEqual(httpsIdentity?.name, "widget")
+
+        try repository.git(["remote", "set-url", "origin", "git@github.com:acme/widget.git"])
+        let sshIdentity = await StatusLineMonitor.fetchRepoIdentity(workingDirectory: repository.root.path)
+        XCTAssertEqual(sshIdentity?.host, "github.com")
+        XCTAssertEqual(sshIdentity?.owner, "acme")
+        XCTAssertEqual(sshIdentity?.name, "widget")
+
+        try repository.git(["remote", "set-url", "origin", "file:///tmp/widget.git"])
+        let unsupportedIdentity = await StatusLineMonitor.fetchRepoIdentity(workingDirectory: repository.root.path)
+        XCTAssertNil(unsupportedIdentity)
+    }
+
+    func testRepositoryAndGitFactsMergeIntoSharedProviderSnapshots() throws {
+        let workingDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("widget-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workingDirectory) }
+
+        let snapshot = try JSONDecoder().decode(
+            StatusLineData.self,
+            from: Data(
+                """
+                {"model":{"id":"gpt-5.1","display_name":"GPT-5.1"},"context_window":{"used_percentage":48,"remaining_percentage":52},"cost":{"total_cost_usd":0.01,"total_lines_added":1,"total_lines_removed":0}}
+                """.utf8)
+        )
+        let identity = StatusLineData.Repo(host: "github.com", owner: "acme", name: "widget")
+
+        for harness in [Harness.codex, .cursor, .opencode, .shell] {
+            let monitor = StatusLineMonitor(
+                paneID: UUID(),
+                workingDirectory: workingDirectory.path,
+                harness: harness
+            )
+            monitor.testSetCachedRepoIdentity(identity)
+            monitor.testSetCachedGitStats((added: 7, removed: 2))
+
+            monitor.testApplyProviderSnapshot(snapshot)
+
+            XCTAssertEqual(monitor.currentData?.repo?.owner, "acme")
+            XCTAssertEqual(monitor.currentData?.repo?.name, "widget")
+            XCTAssertEqual(monitor.currentData?.model?.id, "gpt-5.1")
+            XCTAssertEqual(monitor.currentData?.contextWindow?.usedPercentage, 48)
+            XCTAssertEqual(monitor.currentData?.worktree?.name, workingDirectory.lastPathComponent)
+            XCTAssertEqual(monitor.currentData?.cost?.totalLinesAdded, 7)
+            XCTAssertEqual(monitor.currentData?.cost?.totalLinesRemoved, 2)
+        }
     }
 
     func testCustomFieldsMergedIntoCurrentDataOnClaudePayloadApply() throws {

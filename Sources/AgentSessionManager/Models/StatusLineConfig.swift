@@ -993,9 +993,11 @@ struct StatusLineData: Codable {
     struct RateLimits: Codable {
         let fiveHour: RateLimit?
         let sevenDay: RateLimit?
+        var bucketID: String?
         enum CodingKeys: String, CodingKey {
             case fiveHour = "five_hour"
             case sevenDay = "seven_day"
+            case bucketID = "bucket_id"
         }
     }
 

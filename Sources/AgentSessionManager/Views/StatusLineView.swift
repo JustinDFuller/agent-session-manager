@@ -87,7 +87,7 @@ struct StatusLineView: View {
             factValueView(item: item, data: data)
         }
         .fixedSize(horizontal: true, vertical: false)
-        if item.id == "pr", data?.pr != nil {
+        if item.id == "pr" {
             Button {
                 showPRPopover.toggle()
             } label: {
@@ -97,10 +97,12 @@ struct StatusLineView: View {
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
             .popover(isPresented: $showPRPopover, arrowEdge: .bottom) {
-                if let pr = data?.pr {
-                    PRPopoverContent(pr: pr)
-                        .padding()
-                }
+                PRPopoverContent(
+                    pr: data?.pr,
+                    status: monitor.prTrackingStatus,
+                    onRetry: { PRTrackingCoordinator.shared.retry(paneID: paneID) }
+                )
+                .padding()
             }
         } else {
             content
@@ -114,6 +116,10 @@ struct StatusLineView: View {
                 Image(systemName: pr.stateIconName)
                     .font(.system(size: 10))
                     .foregroundStyle(AnyShapeStyle(prCircleColor(pr: pr)))
+            } else if item.id == "pr", monitor.prTrackingStatus.isStale {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
             } else if item.id.hasPrefix("custom:") {
                 let custom = data?.customFields?[item.id]
                 Image(
@@ -200,11 +206,16 @@ struct StatusLineView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                    if monitor.prTrackingStatus.isStale {
+                        Text("stale")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
                 }
             } else {
-                Text("—")
+                Text(prTrackingValue)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(monitor.prTrackingStatus.isStale ? .orange : .secondary)
             }
         default:
             if item.id.hasPrefix("custom:"), let percent = data?.customFields?[item.id]?.percent {
@@ -288,6 +299,17 @@ struct StatusLineView: View {
         pr.circleColor
     }
 
+    private var prTrackingValue: String {
+        switch monitor.prTrackingStatus {
+        case .loading: "Checking…"
+        case .current: "—"
+        case .noPullRequest: "No PR"
+        case .unavailable: "Unavailable"
+        case .disabled: "Off"
+        case .failed: "Unavailable"
+        }
+    }
+
     private func progressTint(_ pct: Int) -> Color {
         pct < 70 ? .green : pct < 90 ? .orange : .red
     }
@@ -322,27 +344,38 @@ private struct RateProgressView: View {
 }
 
 private struct PRPopoverContent: View {
-    let pr: PullRequest
+    let pr: PullRequest?
+    let status: PRTrackingStatus
+    let onRetry: () -> Void
 
     private static let maxVisibleChecks = 5
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Circle()
-                    .fill(pr.circleColor)
-                    .frame(width: 8, height: 8)
-                Text("#\(pr.number)")
-                    .font(.headline)
-                    .fontDesign(.monospaced)
+            if let pr {
+                HStack {
+                    Circle()
+                        .fill(pr.circleColor)
+                        .frame(width: 8, height: 8)
+                    Text("#\(pr.number)")
+                        .font(.headline)
+                        .fontDesign(.monospaced)
+                    if status.isStale {
+                        Text("Stale")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+
+                Text(pr.title)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
 
-            Text(pr.title)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
+            statusMessage
 
-            if let reviewLabel = pr.reviewStateLabel {
+            if let pr, let reviewLabel = pr.reviewStateLabel {
                 Divider()
 
                 HStack(spacing: 4) {
@@ -355,7 +388,7 @@ private struct PRPopoverContent: View {
                 }
             }
 
-            if pr.hasMergeConflicts {
+            if let pr, pr.hasMergeConflicts {
                 Divider()
 
                 HStack(spacing: 4) {
@@ -368,7 +401,7 @@ private struct PRPopoverContent: View {
                 }
             }
 
-            if !visibleChecks.isEmpty {
+            if pr != nil, !visibleChecks.isEmpty {
                 Divider()
 
                 Text("Failing Checks")
@@ -387,7 +420,7 @@ private struct PRPopoverContent: View {
                 }
             }
 
-            if let commentCount = pr.unresolvedCommentCount, commentCount > 0 {
+            if let commentCount = pr?.unresolvedCommentCount, commentCount > 0 {
                 Divider()
 
                 HStack(spacing: 4) {
@@ -399,29 +432,92 @@ private struct PRPopoverContent: View {
                 .foregroundStyle(.secondary)
             }
 
-            Divider()
+            if let pr {
+                Divider()
 
-            HStack {
-                if let url = URL(string: pr.url) {
-                    Button {
-                        NSWorkspace.shared.open(url)
-                    } label: {
-                        Label("Open Pull Request", systemImage: "arrow.up.forward.square")
-                            .font(.caption)
+                HStack {
+                    if let url = URL(string: pr.url) {
+                        Button {
+                            NSWorkspace.shared.open(url)
+                        } label: {
+                            Label("Open Pull Request", systemImage: "arrow.up.forward.square")
+                                .font(.caption)
+                        }
                     }
                 }
+            }
+
+            if case .failed = status {
+                Button("Retry") { onRetry() }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("pr-tracking-retry")
             }
         }
         .frame(width: 320)
         .textSelection(.enabled)
+        .accessibilityIdentifier("pr-tracking-popover")
+    }
+
+    @ViewBuilder
+    private var statusMessage: some View {
+        switch status {
+        case .loading:
+            Text(pr == nil ? "Checking GitHub for a pull request…" : "Checking for updates…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .current:
+            EmptyView()
+        case .noPullRequest:
+            Text("No pull request was found for this branch.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .unavailable:
+            Text("A supported GitHub repository and branch are required for pull-request tracking.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .disabled:
+            Text("Pull-request tracking is off. Enable it in Settings → Status Line.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .failed(let failure):
+            VStack(alignment: .leading, spacing: 4) {
+                Text(failureMessage(failure))
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                if pr != nil {
+                    Text("The last pull-request result is shown as stale.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func failureMessage(_ failure: GitHubCLIFailure) -> String {
+        switch failure {
+        case .authentication:
+            "GitHub CLI authentication failed. Authenticate the configured `gh`, then retry."
+        case .missingExecutable:
+            "GitHub CLI (`gh`) was not found through GH_PATH or the configured shell."
+        case .network:
+            "GitHub could not be reached. Check your connection, then retry."
+        case .timeout:
+            "The GitHub request timed out. Retry when the service is available."
+        case .parse:
+            "GitHub returned an unreadable pull-request response. Retry to check again."
+        case .cancelled:
+            "The GitHub request was cancelled. Retry to check again."
+        case .launch, .stdinWrite, .api:
+            "GitHub PR status could not be refreshed. Retry to check again."
+        }
     }
 
     private var visibleChecks: [StatusCheck] {
-        Array(pr.failingChecks.prefix(Self.maxVisibleChecks))
+        Array((pr?.failingChecks ?? []).prefix(Self.maxVisibleChecks))
     }
 
     private var hiddenCheckCount: Int {
-        max(0, pr.failingChecks.count - Self.maxVisibleChecks)
+        max(0, (pr?.failingChecks.count ?? 0) - Self.maxVisibleChecks)
     }
 
     private struct CheckRow: View {

@@ -111,6 +111,9 @@ final class AppState {
         let kind: NotificationKind = {
             switch event.source {
             case .claudeStop: return .claudeStop
+            case .codexStop: return .codexStop
+            case .codexPermissionRequest: return .codexPermissionRequest
+            case .codexQuestion: return .codexQuestion
             case .cursorStop: return .cursorStop
             case .opencodeStop: return .opencodeStop
             case .opencodePermissionRequest: return .opencodePermissionRequest

@@ -11,19 +11,19 @@ Facts show their SF Symbol and label by default. Explicit `labelOnly` and `symbo
 | ID | Label | Availability | Source |
 |----|-------|-------------|--------|
 | `agentName` | Agent | Claude only | Claude hook JSON `agent.name` |
-| `context` | Context Used | Claude, Codex | Claude hook JSON; version-gated Codex rollout data while foreground metric repair is in progress |
-| `contextRemaining` | Context Remaining | Claude, Codex | Claude hook JSON; legacy Codex 0.136.x rollout data, with current-version accuracy pending acceptance |
+| `context` | Context Used | Claude, Codex | Claude hook JSON; supported Codex adapter's current foreground token usage and effective context window |
+| `contextRemaining` | Context Remaining | Claude, Codex | Claude hook JSON; supported Codex adapter's normalized remaining percentage |
 | `cost` | Cost | Claude, OpenCode | Claude hook JSON; OpenCode provider |
 | `duration` | Duration | All | App-computed from process start time |
 | `effort` | Effort | Claude only | Claude hook JSON `effort.level` |
 | `exceeds200k` | Exceeds 200k | Claude only | Claude hook JSON `exceeds_200k_tokens` |
-| `inputTokens` | Input Tokens | Claude, Codex, OpenCode | Harness provider token usage; Codex values require a supported adapter and current foreground record |
+| `inputTokens` | Input Tokens | Claude, Codex, OpenCode | Harness provider token usage; Codex cumulative totals from the current bound foreground record |
 | `linesAdded` | Lines Added | All | `git diff --shortstat HEAD` (polled every 15s) |
 | `linesRemoved` | Lines Removed | All | `git diff --shortstat HEAD` (polled every 15s) |
 | `model` | Model | All | Harness provider model data |
 | `outputStyle` | Output Style | Claude only | Claude hook JSON `output_style.name` |
-| `outputTokens` | Output Tokens | Claude, Codex, OpenCode | Harness provider token usage; Codex values require a supported adapter and current foreground record |
-| `pr` | PR | All | GitHub CLI (`gh pr view`) via PRTrackingCoordinator |
+| `outputTokens` | Output Tokens | Claude, Codex, OpenCode | Harness provider token usage; Codex cumulative totals from the current bound foreground record |
+| `pr` | PR | All | Batched authenticated GitHub CLI query with app-owned loading, current, no-PR, unavailable, and stale-error states |
 | `profileName` | Profile | All | App state (selected profile) |
 | `rate5h` | 5h Rate | Claude, Codex | Claude hook JSON; supported Codex adapter's 300-minute primary window |
 | `rate5hReset` | 5h Resets At | Claude, Codex | Claude hook JSON; supported Codex adapter's 300-minute primary window |
@@ -45,10 +45,11 @@ Facts show their SF Symbol and label by default. Explicit `labelOnly` and `symbo
 `StatusLineMonitor` coordinates one provider path per pane and exposes merged `StatusLineData` to `StatusLineView`.
 
 - Claude panes use the Claude `statusLine` hook payload and preserve the existing I1/I3 enforcement.
+- Repository identity and git diff line counts are app-computed for every harness and merge into provider snapshots independently of GitHub authentication. PR tracking distinguishes a successful no-PR result from unavailable and failed queries; failures keep the prior result visibly stale, offer Retry, and suppress merge/close notifications until a successful response.
 - Cursor panes combine app-owned baseline facts with Cursor hook model data.
-- Codex panes combine app-owned baseline facts with adapters selected from the installed CLI version. The `codex_0_162` adapter installs only its supported lifecycle events and drains a locked pane-scoped metadata queue; bounded hook-write retries can still exhaust, in which case redacted diagnostics report the failure and event delivery is not guaranteed. The retained `codex_0_136` adapter uses its legacy hook contract and has no `Interrupt` event. Unrecognized versions use baseline facts without guessed Codex lifecycle hooks or rich parsing. The provider is being updated to follow foreground conversation changes and exact current metrics; until real Dev acceptance is recorded, those repaired facts remain unverified.
+- Codex panes combine app-owned baseline facts with adapters selected from the installed CLI version. The `codex_0_162` adapter installs only its supported lifecycle events and drains a locked pane-scoped metadata queue; bounded hook-write retries can still exhaust, in which case redacted diagnostics report the failure and event delivery is not guaranteed. The retained `codex_0_136` adapter uses its legacy hook contract and has no `Interrupt` event. `UserPromptSubmit` starts current and legacy working indicators; `Stop` stops them, and current `Interrupt` also stops the indicator. Unrecognized versions use baseline facts without guessed Codex lifecycle hooks or rich parsing. The provider follows foreground conversation changes, detaches the previous transcript tailer, clears conversation-bound facts, and publishes the new binding callback when a changed session is observed. A real Codex 0.162.1 Dev run confirmed model, context, cumulative token, and rate-limit facts after new and resumed turns and a model change. The old snapshot can remain visible until the next hook event identifies a changed foreground session.
 
-Codex rollout parsing is intended to remain bounded and content-avoiding. It uses metadata and token-count records, ignores message-content records, and treats SQLite as optional enrichment only for an exact known identity. Prompt text, commands, questions, tool input/output, and credentials are excluded from the hook queue and diagnostics. Cost remains unsupported for Codex until Codex exposes a stable source.
+Codex rollout parsing remains bounded and content-avoiding. It uses metadata and token-count records, ignores message-content records, and treats SQLite as optional enrichment only for an exact known identity under the effective Codex home. The app resolves that home from the configured interactive shell's exported `CODEX_HOME`, then the inherited launch value, then `~/.codex`, so enrichment and exact-session preflight use the same home as the interactive Codex process. Prompt text, commands, questions, tool input/output, and credentials are excluded from the hook queue and diagnostics. Cost remains unsupported for Codex until Codex exposes a stable source.
 
 ## Invariants
 

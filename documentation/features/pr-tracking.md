@@ -10,7 +10,7 @@ This works for all CLI tools because it runs independently of session data. It u
 
 ## How to use
 
-1. Ensure the [GitHub CLI](https://cli.github.com) (`gh`) is installed and authenticated (`gh auth login`).
+1. Ensure the [GitHub CLI](https://cli.github.com) (`gh`) is installed and authenticated in the shell selected in **Settings → Panes → Terminal**. PR tracking uses that shell's GitHub CLI configuration.
 2. Open **Settings** (⌘,) and go to the **Status Line** tab.
 3. Enable the **Track pull requests** toggle in the **GitHub PR Tracking** section.
 4. Add the **PR** item to a status line row (it appears in the "Add Item" menu as "PR").
@@ -59,9 +59,9 @@ Click outside the popover to dismiss it.
 
 Each polling cycle determines the current branch for eligible panes and sends one batched, aliased GraphQL request. Each alias contains the PR metadata, status rollup, and review-thread count for one pane, so all eligible panes are updated from that single request. The owner and repository are extracted from `git remote get-url origin`. Polling repeats every 60 seconds to catch status changes.
 
-Finder and DMG launches use the app's sanitized environment, including macOS login-shell PATH entries. The app preserves GitHub CLI credential/configuration variables (`HOME`, `GH_CONFIG_DIR`, `XDG_CONFIG_HOME`, `GH_HOST`, and GitHub token variables) and disables prompts. `gh` remains the authentication boundary and must be installed and authenticated for PR tracking.
+PR polling starts the configured interactive shell to resolve its current `PATH` and exported GitHub CLI configuration, then runs `gh` with that in-memory environment. An explicit `GH_PATH` override takes precedence over shell lookup, including when the override is invalid. If shell startup fails or times out, polling falls back to the app's inherited environment. Shell output and environment values are bounded and excluded from diagnostics. `gh` remains the authentication boundary and must be installed and authenticated for PR tracking.
 
-A successful query with no PR clears the item. Failed queries retain the last known PR and cannot trigger resolution notifications; later polls recover automatically.
+A successful query with an empty `nodes` list clears the item and displays **No PR**. Missing or malformed response aliases are failures, not evidence that the branch has no PR. Failed queries retain the last known PR, mark it stale in the status line and popover, and cannot trigger merge or close notifications. The popover offers **Retry**; authentication failures direct the user to authenticate the configured GitHub CLI before retrying. The `pr.graphql.query` and `pr.result.delivered` diagnostics distinguish classified query failures from a successful `not_found` result; they record bounded result categories without response content or credentials.
 
 The batched GraphQL request is passed to `gh` through standard input. If `gh` exits or closes standard input before consuming the request, Agent Session Manager records bounded pipe failure details and treats the poll as failed. A classified authentication, network, or API failure remains the primary outcome; otherwise the result is `stdin_write`. The closed pipe cannot terminate the app.
 

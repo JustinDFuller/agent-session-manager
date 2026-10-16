@@ -87,6 +87,8 @@ extension Tab {
                 workingDirectory: cwd, harness: pane.harness, processStartTime: Date(),
                 tabID: self.id, tabName: self.name,
                 codexAdapter: codexAdapter,
+                codexShell: appSettings.map { ShellResolver.resolved($0) } ?? ShellResolver.detectedLoginShell(),
+                codexEnvironment: ProcessEnvironment.dictionary(from: codexEnvironment),
                 customFieldEnvironment: extraEnvVars)
             pane.installStatusLineMonitor(monitor)
         }
@@ -146,8 +148,12 @@ extension Tab {
         monitor: StatusLineMonitor,
         controller: TerminalController,
         extraArgs: [String],
-        appSettings: AppSettings?
+        appSettings: AppSettings?,
+        resumeSessionID: String? = nil
     ) -> Bool {
+        if pane.codexContinuationRecovery == .exactSessionUnavailable, resumeSessionID != nil {
+            return false
+        }
         guard let adapter = monitor.codexAdapter else {
             pane.setupState = .failed(
                 error: "Codex compatibility could not be selected. Retry after checking the configured shell.")
@@ -185,7 +191,10 @@ extension Tab {
             controller.pendingCommandArgs = Tab.buildCodexCommand(
                 hookScriptPath: monitor.codexHookScriptFilePath,
                 adapter: adapter,
-                extraArgs: extraArgs)
+                extraArgs: extraArgs,
+                resumeSessionID: resumeSessionID,
+                previousResumeSessionID: pane.codexLaunchResumeSessionID)
+            pane.codexLaunchResumeSessionID = resumeSessionID
             TracingService.shared.record(
                 "statusline.codex.compatibility.selected",
                 attributes: [
@@ -228,7 +237,10 @@ extension Tab {
         controller.pendingCommandArgs = Tab.buildCodexCommand(
             hookScriptPath: monitor.codexHookScriptFilePath,
             adapter: adapter,
-            extraArgs: extraArgs)
+            extraArgs: extraArgs,
+            resumeSessionID: resumeSessionID,
+            previousResumeSessionID: pane.codexLaunchResumeSessionID)
+        pane.codexLaunchResumeSessionID = resumeSessionID
         TracingService.shared.record(
             "statusline.codex.compatibility.selected",
             attributes: [

@@ -1264,6 +1264,23 @@ struct NotificationsContent: View {
                     }
                 }
             }
+            Section("Codex") {
+                SettingRow(
+                    title: "Codex completion notifications",
+                    description: "Show a banner and sidebar row when Codex finishes a foreground turn."
+                ) {
+                    Toggle(
+                        "Codex completion notifications",
+                        isOn: $appSettings.isCodexCompletionNotificationEnabled
+                    )
+                    .toggleStyle(.checkbox)
+                    .labelsHidden()
+                    .accessibilityIdentifier("settings-codex-completion-notification-toggle")
+                    .onChange(of: appSettings.isCodexCompletionNotificationEnabled) {
+                        SettingsPersistence.saveNotificationSettings(appSettings: appSettings)
+                    }
+                }
+            }
             Section("OpenCode") {
                 SettingRow(
                     title: "Notify when OpenCode stops",

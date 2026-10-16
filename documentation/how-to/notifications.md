@@ -27,6 +27,8 @@ In-app indicators and the notifications sidebar do not require macOS permission.
 - Focusing a pane clears its notification.
 - Use **Clear All** in the sidebar to dismiss all current rows.
 
+Codex uses separate notifications for a finished foreground turn, an approval request, and a question. **Codex completion notifications** controls only finished-turn alerts; approval and question attention still appears when it is off. On Codex 0.162.1, an approval row clears when the next foreground turn begins because the permission event has no request ID, while a question row clears when Codex reports the matching answer. Focusing the pane or entering terminal input also acknowledges either row.
+
 The sidebar can group priority notifications above other notifications. Priority is selected per pane when **Priority Notifications** is enabled.
 
 To mark a pane as important, enable **Priority Notifications** in Settings, then turn on **Priority Pane** when creating a pane or from the pane's context menu. Priority notifications appear above other notifications and use the priority color.
@@ -37,7 +39,7 @@ Pending in-app notifications are saved with the session and restored after relau
 
 1. Open **Settings → Notifications**.
 2. Enable **Banner Notifications** if you want macOS alerts.
-3. Configure tool-specific completion alerts such as **Notify when Claude stops**, **Stop hook for attention**, or **Notify when OpenCode stops**.
+3. Configure tool-specific completion alerts such as **Notify when Claude stops**, **Codex completion notifications**, **Stop hook for attention**, or **Notify when OpenCode stops**.
 4. Choose the **Sidebar Position** and whether to enable **Always Show Notifications Bar**.
 5. Enable **Priority Notifications** if you want to mark important panes.
 
@@ -60,6 +62,7 @@ _The sidebar occupies a fixed rail beside the active tab's panes._
 - If in-app notifications appear but macOS banners do not, allow notifications for the correct Agent Session Manager app in **System Settings → Notifications**.
 - If the sidebar is hidden, enable **Always Show Notifications Bar** or wait for a pending notification. If a pane is focused, also check **Settings → Panes → Focus Mode → Hide Notification Sidebar**.
 - If a tool completion alert is missing, check its tool-specific setting in **Settings → Notifications** and reopen the pane after changing hook-related settings.
+- **Codex completion notifications** controls only the alert after a foreground Codex turn finishes. Permission requests and native questions still create attention when this setting is off.
 - If Claude does not send a finished alert, it may still have a background agent, command, or repeating `/loop` schedule. Persistent commands such as dev servers can keep the pane working indefinitely. Background-work reporting was added in Claude Code v2.1.145. If you cancel reported background work by hand, the pane may stay working until Claude reports its state again. If you interrupt a foreground turn with Esc and no background work was reported, Claude's later idle notification recovers the pane and requests your attention. Questions and plan approvals still request attention while background work is running.
 
 ## Related tasks

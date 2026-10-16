@@ -56,9 +56,9 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
             expectedCWD: "/repo",
             adapter: .unsupported(version: "0.163.0"))
 
-        XCTAssertEqual(current?.contextWindow?.totalInputTokens, 30)
-        XCTAssertEqual(current?.contextWindow?.totalOutputTokens, 10)
-        XCTAssertEqual(current?.contextWindow?.usedPercentage, 40)
+        XCTAssertEqual(current?.contextWindow?.totalInputTokens, 900)
+        XCTAssertEqual(current?.contextWindow?.totalOutputTokens, 100)
+        XCTAssertEqual(current?.contextWindow?.usedPercentage, 25)
         XCTAssertEqual(current?.rateLimits?.fiveHour?.usedPercentage, 25)
         XCTAssertEqual(current?.rateLimits?.sevenDay?.usedPercentage, 50)
         XCTAssertEqual(legacy?.contextWindow?.totalInputTokens, 20)
@@ -145,8 +145,8 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
             expectedCWD: context.workingDirectory,
             adapter: context.codexAdapter ?? .unsupported(version: nil))
 
-        XCTAssertEqual(parsed?.contextWindow?.totalInputTokens, 30)
-        XCTAssertEqual(parsed?.contextWindow?.usedPercentage, 40)
+        XCTAssertEqual(parsed?.contextWindow?.totalInputTokens, 900)
+        XCTAssertEqual(parsed?.contextWindow?.usedPercentage, 25)
     }
 
     func testUnsupportedSavedBuiltinApprovalIsRejectedButDisabledOrCustomOptionIsPreserved() {
@@ -243,7 +243,9 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
             tabID: tab.id,
             tabName: tab.name,
             codexAdapter: .current(version: "0.162.1"))
+        try monitor.writeCodexHookScript()
         let scriptURL = URL(filePath: monitor.codexHookScriptFilePath)
+        try FileManager.default.removeItem(at: scriptURL)
         try FileManager.default.createDirectory(at: scriptURL, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: scriptURL) }
         let controller = TerminalController()
@@ -266,8 +268,10 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
 
     @MainActor
     func testGeneratedHookScriptQueuesOnlyAllowedMetadata() throws {
-        let paneID = UUID()
-        let tabID = UUID()
+        let tab = Tab(name: "metadata-tab", directory: tempDir)
+        let pane = Pane(name: "metadata-test", tab: tab, harness: .codex)
+        let paneID = pane.id
+        let tabID = tab.id
         let monitor = StatusLineMonitor(
             paneID: paneID,
             paneName: "metadata-test",
@@ -277,6 +281,13 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
             tabName: "metadata-tab",
             codexAdapter: .current(version: "0.162.1"))
         try monitor.writeCodexHookScript()
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        pane.installStatusLineMonitor(monitor)
+        defer {
+            pane.removeStatusLineMonitor()
+            TracingService.shared.resetForTesting()
+        }
         let environment = ProcessInfo.processInfo.environment.merging([
             "AGENT_SESSION_MANAGER_PANE_ID": paneID.uuidString,
             "AGENT_SESSION_MANAGER_TAB_ID": tabID.uuidString,
@@ -347,6 +358,9 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
         let recoveredRecords = try hookQueue.drain().records
         XCTAssertEqual(recoveredRecords.count, 1)
         XCTAssertEqual(recoveredRecords.first?.sessionID, "session-safe")
+        XCTAssertEqual(recoveredRecords.first?.source, "hook")
+        let hookScript = try String(contentsOfFile: monitor.codexHookScriptFilePath, encoding: .utf8)
+        XCTAssertTrue(hookScript.contains("\"source\": \"subagent\" if payload.get(\"agent_id\")"))
         let timeoutReady = tempDir.appending(path: "queue-lock-timeout-ready")
         let timeoutHolder = try holdQueueLock(for: 0.7, readyAt: timeoutReady)
         let timeoutResult = try runHook(Data(input.utf8))
@@ -491,7 +505,7 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
         import sys
         for index in range(1000):
             payload = {"hook_event_name": "SessionStart", "session_id": f"session-{index}", "transcript_path": "x" * 1024}
-            sys.stdin = io.StringIO(json.dumps(payload))
+            sys.stdin = io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode()))
             runpy.run_path(sys.argv[1], run_name="__main__")
         """.write(to: wrapper, atomically: true, encoding: .utf8)
         let process = Process()

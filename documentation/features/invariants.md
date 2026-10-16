@@ -30,6 +30,8 @@ Each occurrence has its own UUID. Repeated violations of the same invariant rema
 
 An unrecognized Codex version falling back to baseline-only integration and a saved Codex option requiring user correction are expected compatibility outcomes, not invariant violations. Compatibility spans record those decisions without turning unsupported versions or preserved user settings into false invariant failures.
 
+Codex activity transitions, completion delivery, permission requests, and native question requests are operational status and attention events, not contract violations. Their bounded decisions belong to the Codex trace family; no Codex-specific invariant ID is currently defined.
+
 `AuxiliaryWindowRegistry.checkOpenWindows()` records `app.launch.auxiliary_windows_checked` (observed window titles and requested ids) every time it runs, regardless of outcome, so a quiet launch is distinguishable from a check that never executed.
 
 ## File

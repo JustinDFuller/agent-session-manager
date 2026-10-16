@@ -60,17 +60,26 @@ For supported Codex versions, a pending native permission request or native user
 
 ### Requirement: Attention is acknowledged through normal pane flows
 
-Focusing a Codex pane, selecting its notification, or entering terminal input MUST acknowledge its notification through existing app behavior. Resolving the originating request or starting a new foreground turn MUST clear obsolete Codex attention. Duplicate delivery of one request MUST NOT create multiple sidebar rows or banners.
+Focusing a Codex pane, selecting its notification, or entering terminal input MUST acknowledge its notification through existing app behavior.
 
 #### Scenario: The user selects an attention row
 
 - **WHEN** the user selects a Codex notification
 - **THEN** the app focuses that pane, clears the notification, and recomputes its indicator from the current lifecycle
 
-#### Scenario: A request is resolved elsewhere
+### Requirement: Resolved Codex attention is cleared
 
-- **WHEN** Codex reports the pending request resolved or a subsequent foreground turn starts
+Native question attention MUST clear only on its matching call result. Codex 0.162.1 permission attention MUST clear on the next foreground turn because its permission hook does not provide a request identifier. Duplicate delivery of one request MUST NOT create multiple sidebar rows or banners.
+
+#### Scenario: A native question is resolved elsewhere
+
+- **WHEN** Codex reports the matching native question call resolved
 - **THEN** the obsolete attention notification is cleared
+
+#### Scenario: A permission request has no matching identifier
+
+- **WHEN** Codex 0.162.1 reports a permission request without an identifier
+- **THEN** its attention remains until the next foreground turn starts
 
 ### Requirement: Completion alerts have a persistent Codex setting
 

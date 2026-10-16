@@ -1139,10 +1139,7 @@ private struct CLIOptionRow: View {
                     Text(option.description)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(nil)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .layoutPriority(1)
                 Spacer()
                 VStack(alignment: .trailing, spacing: 4) {
                     HStack(spacing: 4) {

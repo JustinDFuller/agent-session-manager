@@ -158,6 +158,8 @@ struct PersistedPane: Codable {
     var scrollbackOverride: ScrollbackLimit?
     var extraArgs: [String]
     var opencodeSessionID: String?
+    var codexSessionID: String?
+    var codexTranscriptPath: String?
     var agentControlInjectionEnabled: Bool?
     var statusLineHeight: Double?
 
@@ -168,6 +170,7 @@ struct PersistedPane: Codable {
         case scrollbackOverride
         case extraArgs
         case opencodeSessionID
+        case codexSessionID, codexTranscriptPath
         case agentControlInjectionEnabled
         case statusLineHeight
     }
@@ -177,6 +180,7 @@ struct PersistedPane: Codable {
         isClosed: Bool = false,
         worktreeDirectory: String? = nil, worktreeIsManaged: Bool = false, profileID: UUID? = nil,
         scrollbackOverride: ScrollbackLimit? = nil, extraArgs: [String] = [], opencodeSessionID: String? = nil,
+        codexSessionID: String? = nil, codexTranscriptPath: String? = nil,
         agentControlInjectionEnabled: Bool? = nil, statusLineHeight: Double? = nil
     ) {
         self.id = id
@@ -191,6 +195,8 @@ struct PersistedPane: Codable {
         self.scrollbackOverride = scrollbackOverride
         self.extraArgs = extraArgs
         self.opencodeSessionID = opencodeSessionID
+        self.codexSessionID = codexSessionID
+        self.codexTranscriptPath = codexTranscriptPath
         self.agentControlInjectionEnabled = agentControlInjectionEnabled
         self.statusLineHeight = Self.validStatusLineHeight(statusLineHeight)
     }
@@ -212,6 +218,8 @@ struct PersistedPane: Codable {
             try? container.decodeIfPresent(ScrollbackLimit.self, forKey: .scrollbackOverride)
         extraArgs = (try? container.decodeIfPresent([String].self, forKey: .extraArgs)) ?? []
         opencodeSessionID = try container.decodeIfPresent(String.self, forKey: .opencodeSessionID)
+        codexSessionID = try container.decodeIfPresent(String.self, forKey: .codexSessionID)
+        codexTranscriptPath = try container.decodeIfPresent(String.self, forKey: .codexTranscriptPath)
         agentControlInjectionEnabled = try container.decodeIfPresent(Bool.self, forKey: .agentControlInjectionEnabled)
         let decodedHeight = try? container.decode(Double.self, forKey: .statusLineHeight)
         statusLineHeight = Self.validStatusLineHeight(decodedHeight)
@@ -231,6 +239,8 @@ struct PersistedPane: Codable {
         try container.encodeIfPresent(scrollbackOverride, forKey: .scrollbackOverride)
         try container.encode(extraArgs, forKey: .extraArgs)
         try container.encodeIfPresent(opencodeSessionID, forKey: .opencodeSessionID)
+        try container.encodeIfPresent(codexSessionID, forKey: .codexSessionID)
+        try container.encodeIfPresent(codexTranscriptPath, forKey: .codexTranscriptPath)
         try container.encodeIfPresent(agentControlInjectionEnabled, forKey: .agentControlInjectionEnabled)
         try container.encodeIfPresent(statusLineHeight, forKey: .statusLineHeight)
     }
@@ -273,6 +283,8 @@ struct SessionPersistence {
                         scrollbackOverride: pane.scrollbackOverride,
                         extraArgs: pane.extraArgs,
                         opencodeSessionID: pane.opencodeSessionID,
+                        codexSessionID: pane.codexSessionID,
+                        codexTranscriptPath: pane.codexTranscriptPath,
                         agentControlInjectionEnabled: pane.agentControlInjectionEnabled,
                         statusLineHeight: pane.statusLineHeight
                     )
@@ -398,6 +410,32 @@ struct SessionPersistence {
                         result[envVar.id] = envVar.value
                     }
                 }()
+                let codexResumeSessionID = Tab.codexResumeSessionIDForRestore(
+                    harness: persistedPane.harness,
+                    savedSessionID: persistedPane.codexSessionID,
+                    continueOnRestart: appSettings.continueOnRestart)
+                let codexRecovery: CodexContinuationRecovery? = {
+                    guard let codexResumeSessionID else { return nil }
+                    let environment = ProcessEnvironment.dictionary(
+                        from: ProcessEnvironment.sanitize(
+                            Tab.hostEnvironmentForChildProcess()
+                                + restoredEnvironment.map { "\($0.key)=\($0.value)" }))
+                    let access = CodexContinuationVerifier.check(
+                        sessionID: codexResumeSessionID,
+                        transcriptPath: persistedPane.codexTranscriptPath,
+                        shell: ShellResolver.resolved(appSettings),
+                        workingDirectory: worktreeDir?.path ?? dir.path,
+                        environment: environment)
+                    TracingService.shared.record(
+                        "statusline.codex.continuation.preflight",
+                        attributes: [
+                            "pane.id": persistedPane.id.uuidString,
+                            "requested_session_id_prefix": String(codexResumeSessionID.prefix(12)),
+                            "result": access.traceValue,
+                            "source": "restore",
+                        ])
+                    return access == .available ? nil : .exactSessionUnavailable
+                }()
                 let pane = tab.addPane(
                     name: persistedPane.name,
                     extraArgs: extraArgs,
@@ -410,11 +448,21 @@ struct SessionPersistence {
                     scrollbackOverride: persistedPane.scrollbackOverride,
                     agentControlInjectionEnabled: agentControlInjectionEnabled,
                     resumeOpencodeSessionID: resumeOpencodeSessionID,
+                    resumeCodexSessionID: codexRecovery == nil ? codexResumeSessionID : nil,
+                    codexContinuationRecovery: codexRecovery,
+                    codexContinuationNotice: Tab.codexRestoreNotice(
+                        harness: persistedPane.harness,
+                        savedSessionID: persistedPane.codexSessionID,
+                        continueOnRestart: appSettings.continueOnRestart),
                     appSettings: appSettings
                 )
                 pane.isMerged = persistedPane.isMerged
                 pane.isClosed = persistedPane.isClosed
                 pane.statusLineHeight = persistedPane.statusLineHeight
+                if codexResumeSessionID != nil || codexRecovery != nil {
+                    pane.codexSessionID = persistedPane.codexSessionID
+                    pane.codexTranscriptPath = persistedPane.codexTranscriptPath
+                }
                 pane.bindNotifications(
                     appState: appState,
                     isPriority: persistedPane.isPriority

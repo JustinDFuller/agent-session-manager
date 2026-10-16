@@ -127,6 +127,7 @@ final class AppSettings {
     var isCursorNotificationHookAttentionEnabled: Bool = true
     var isClaudeStopNotificationEnabled: Bool = true
     var isOpencodeStopNotificationEnabled: Bool = true
+    var isCodexCompletionNotificationEnabled: Bool = true
     var continueOnRestart: Bool = true
     var worktreeCleanupBehavior: WorktreeCleanupBehavior = .ask
     var deleteBranchWithWorktree: Bool = true

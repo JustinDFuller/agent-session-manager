@@ -6,6 +6,21 @@ enum PaneSetupState {
     case failed(error: String)
 }
 
+enum CodexContinuationRecovery: Equatable {
+    case identityNotRecorded
+    case exactSessionUnavailable
+}
+
+extension CodexSessionAccess {
+    var traceValue: String {
+        switch self {
+        case .available: "available"
+        case .missing: "missing"
+        case .inaccessible: "inaccessible"
+        }
+    }
+}
+
 enum Harness: String, Codable, CaseIterable, Sendable {
     case claude
     case codex
@@ -66,6 +81,11 @@ final class Pane: Identifiable {
     var opencodePort: Int?
     var cursorAgentControlPluginDirectory: URL?
     var opencodeSessionID: String?
+    var codexSessionID: String?
+    var codexTranscriptPath: String?
+    var codexLaunchResumeSessionID: String?
+    var codexContinuationRecovery: CodexContinuationRecovery?
+    var codexContinuationNotice: String?
 
     init(
         id: UUID = UUID(),
@@ -120,6 +140,7 @@ final class Pane: Identifiable {
     func removeStatusLineMonitor() {
         statusLineMonitor?.stop()
         statusLineMonitor?.onClaudeHookAttention = nil
+        statusLineMonitor?.onCodexSessionBound = nil
         statusLineMonitor?.onPRMerged = nil
         statusLineMonitor?.onPRClosed = nil
         statusLineMonitor?.onPRReopened = nil

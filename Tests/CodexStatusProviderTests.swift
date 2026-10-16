@@ -3,6 +3,13 @@ import XCTest
 
 @testable import AgentSessionManager
 
+private struct ContextPercentageScenario {
+    let window: Int
+    let current: Int
+    let used: Int
+    let remaining: Int
+}
+
 final class CodexStatusProviderTests: XCTestCase {
     private var tempDir: URL!
 
@@ -51,6 +58,226 @@ final class CodexStatusProviderTests: XCTestCase {
         XCTAssertEqual(selected?.gitBranch, "feature")
         XCTAssertEqual(selected?.createdAtMs, 2300)
         XCTAssertEqual(selected?.updatedAtMs, 4000)
+    }
+
+    func testContinuationVerifierRequiresExactAccessibleSessionInEffectiveCodexHome() throws {
+        let codexHome = tempDir.appending(path: "custom-codex-home", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        let rollout = tempDir.appending(path: "exact-session.jsonl")
+        try Data("{}\n".utf8).write(to: rollout)
+        let database = codexHome.appending(path: "state_5.sqlite")
+        try createThreadDatabase(
+            at: database,
+            rolloutPath: rollout.path,
+            model: "gpt-6-luna",
+            createdAtMs: 1)
+        let environment = ["CODEX_HOME": codexHome.path]
+
+        XCTAssertEqual(
+            CodexContinuationVerifier.check(
+                sessionID: "thread-abcdef1234567890",
+                transcriptPath: rollout.path,
+                shell: "/bin/sh",
+                workingDirectory: tempDir.path,
+                environment: environment),
+            .available)
+        XCTAssertEqual(
+            CodexContinuationVerifier.check(
+                sessionID: "different-session",
+                transcriptPath: rollout.path,
+                shell: "/bin/sh",
+                workingDirectory: tempDir.path,
+                environment: environment),
+            .missing)
+        XCTAssertEqual(
+            CodexContinuationVerifier.check(
+                sessionID: "thread-abcdef1234567890",
+                transcriptPath: "/tmp/stale-transcript.jsonl",
+                shell: "/bin/sh",
+                workingDirectory: tempDir.path,
+                environment: environment),
+            .missing)
+        XCTAssertEqual(
+            CodexContinuationVerifier.check(
+                sessionID: "thread-abcdef1234567890",
+                transcriptPath: rollout.path,
+                shell: "/bin/sh",
+                workingDirectory: "/tmp/another-checkout",
+                environment: environment),
+            .missing)
+    }
+
+    func testCodexHomeResolverUsesExplicitNondefaultHome() {
+        let customHome = tempDir.appending(path: "custom-codex-home", directoryHint: .isDirectory)
+        let resolved = CodexHomeResolver.resolve(
+            shell: "/bin/sh", environment: ["CODEX_HOME": customHome.path])
+
+        XCTAssertEqual(resolved.path, customHome.path)
+        XCTAssertEqual(
+            CodexHomeResolver.databaseURL(shell: "/bin/sh", environment: ["CODEX_HOME": customHome.path]).path,
+            customHome.appending(path: "state_5.sqlite").path)
+    }
+
+    func testCodexHomeResolverUsesInteractiveShellExport() throws {
+        let shell = "/bin/zsh"
+        guard FileManager.default.isExecutableFile(atPath: shell) else {
+            throw XCTSkip("zsh is unavailable")
+        }
+        let shellDirectory = tempDir.appending(path: "shell", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: shellDirectory, withIntermediateDirectories: true)
+        let customHome = tempDir.appending(path: "shell-codex-home", directoryHint: .isDirectory)
+        try "export CODEX_HOME='\(customHome.path)'\n".write(
+            to: shellDirectory.appending(path: ".zshenv"), atomically: true, encoding: .utf8)
+
+        let resolved = CodexHomeResolver.resolve(
+            shell: shell, environment: ["ZDOTDIR": shellDirectory.path])
+
+        XCTAssertEqual(resolved.path, customHome.path)
+    }
+
+    func testStateStoreUsesConfiguredShellAndEffectiveLaunchEnvironment() throws {
+        let shellDirectory = tempDir.appending(path: "configured-shell", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: shellDirectory, withIntermediateDirectories: true)
+        let customHome = tempDir.appending(path: "configured-shell-codex-home", directoryHint: .isDirectory)
+        try "export CODEX_HOME='\(customHome.path)'\n".write(
+            to: shellDirectory.appending(path: ".zshenv"), atomically: true, encoding: .utf8)
+        let context = makeContext(
+            processStartTime: Date(),
+            codexShell: "/bin/zsh",
+            environment: ["ZDOTDIR": shellDirectory.path])
+
+        XCTAssertEqual(
+            CodexStateStore(context: context).databaseURL.path,
+            customHome.appending(path: "state_5.sqlite").path)
+    }
+
+    func testCodexHomeResolverFallsBackWhenHomeAndStateDatabaseAreMissing() {
+        let customHome = tempDir.appending(path: "missing-codex-home", directoryHint: .isDirectory)
+        let databaseURL = CodexHomeResolver.databaseURL(
+            shell: "/bin/sh", environment: ["CODEX_HOME": customHome.path])
+
+        XCTAssertEqual(databaseURL.path, customHome.appending(path: "state_5.sqlite").path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: databaseURL.path))
+        XCTAssertThrowsError(
+            try CodexStateStore(databaseURL: databaseURL)
+                .selectThread(sessionID: "exact-session", rolloutPath: nil))
+    }
+
+    func testTranscriptAttentionAcceptsOnlyNativeQuestionCallsAndMatchingResults() {
+        let request = Data(
+            #"{"type":"response_item","payload":{"type":"function_call","name":"functions.request_user_input","call_id":"call-private","arguments":"PRIVATE PROMPT CONTENT"}}"#
+                .utf8)
+        let unrelated = Data(
+            #"{"type":"response_item","payload":{"type":"function_call","name":"functions.exec_command","call_id":"call-other","arguments":"PRIVATE COMMAND"}}"#
+                .utf8)
+        let result = Data(
+            #"{"type":"response_item","payload":{"type":"function_call_output","call_id":"call-private","output":"PRIVATE ANSWER"}}"#
+                .utf8)
+
+        XCTAssertEqual(
+            CodexTranscriptAttentionEvent.parseLine(request),
+            .questionRequested(callID: "call-private"))
+        XCTAssertNil(CodexTranscriptAttentionEvent.parseLine(unrelated))
+        XCTAssertEqual(
+            CodexTranscriptAttentionEvent.parseLine(result),
+            .questionResolved(callID: "call-private"))
+    }
+
+    @MainActor
+    func testProviderDeduplicatesNativeQuestionAndClearsOnlyMatchingCall() throws {
+        let rolloutURL = tempDir.appending(path: "question-session.jsonl")
+        let lines =
+            [
+                #"{"type":"response_item","payload":{"type":"function_call","name":"functions.request_user_input","call_id":"question-call","arguments":"PRIVATE QUESTION"}}"#,
+                #"{"type":"response_item","payload":{"type":"function_call","name":"functions.request_user_input","call_id":"question-call","arguments":"PRIVATE QUESTION"}}"#,
+                #"{"type":"response_item","payload":{"type":"function_call","name":"functions.exec_command","call_id":"other-call","arguments":"PRIVATE COMMAND"}}"#,
+                #"{"type":"response_item","payload":{"type":"function_call_output","call_id":"other-call","output":"PRIVATE RESULT"}}"#,
+                #"{"type":"response_item","payload":{"type":"function_call_output","call_id":"question-call","output":"PRIVATE ANSWER"}}"#,
+            ].joined(separator: "\n") + "\n"
+        try lines.write(to: rolloutURL, atomically: true, encoding: .utf8)
+        let hookRecordURL = tempDir.appending(path: "question-hook-record.json")
+        try writeHookRecord(to: hookRecordURL, sessionID: "question-session", transcriptPath: rolloutURL.path)
+        let dbURL = tempDir.appending(path: "question-session.sqlite")
+        try createThreadDatabase(
+            at: dbURL,
+            rolloutPath: rolloutURL.path,
+            model: "question-model",
+            createdAtMs: Int64(Date().timeIntervalSince1970 * 1000))
+        let provider = CodexStatusProvider(
+            context: makeContext(
+                processStartTime: Date(),
+                hookRecordPath: hookRecordURL.path,
+                adapter: .current(version: "0.162.1")),
+            stateStore: CodexStateStore(databaseURL: dbURL),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.5)
+        let requested = expectation(description: "one native question requests attention")
+        let resolved = expectation(description: "matching question result clears attention")
+        var attentionEvents: [PaneAttentionEvent] = []
+        var resolvedKinds: [NotificationKind] = []
+        provider.onAttention = { event in
+            attentionEvents.append(event)
+            requested.fulfill()
+        }
+        provider.onAttentionResolved = { kind in
+            resolvedKinds.append(kind)
+            resolved.fulfill()
+        }
+
+        provider.start()
+        wait(for: [requested, resolved], timeout: 2)
+        provider.stop()
+
+        XCTAssertEqual(attentionEvents, [.codexQuestion])
+        XCTAssertEqual(resolvedKinds, [.codexQuestion])
+    }
+
+    @MainActor
+    func testProviderRoutesBoundPermissionHooksWithFixedCopyAndNoRequestData() throws {
+        let context = makeContext(
+            processStartTime: Date(),
+            queuePath: tempDir.appending(path: "permission-queue.jsonl").path,
+            launchGeneration: "permission-generation",
+            adapter: .current(version: "0.162.1"))
+        let records = ["SessionStart", "PermissionRequest", "PermissionRequest"].map { event in
+            CodexHookQueueRecord(
+                paneID: context.paneID.uuidString,
+                tabID: context.tabID.uuidString,
+                launchGeneration: "permission-generation",
+                hookEventName: event,
+                sessionID: "permission-session",
+                turnID: nil,
+                requestID: "private-request-id",
+                timestamp: Date().timeIntervalSince1970,
+                source: "hook",
+                model: nil,
+                transcriptPath: nil,
+                result: nil)
+        }
+        let queueData = try records.reduce(into: Data()) { data, record in
+            data.append(try JSONEncoder().encode(record))
+            data.append(UInt8(ascii: "\n"))
+        }
+        try queueData.write(to: URL(filePath: context.codexHookQueuePath!))
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-state.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.5)
+        let attention = expectation(description: "duplicate permission hook deliveries remain fixed copy")
+        attention.expectedFulfillmentCount = 2
+        var events: [PaneAttentionEvent] = []
+        provider.onAttention = { event in
+            events.append(event)
+            attention.fulfill()
+        }
+
+        provider.start()
+        wait(for: [attention], timeout: 2)
+        provider.stop()
+
+        XCTAssertEqual(events, [.codexPermissionRequest, .codexPermissionRequest])
+        XCTAssertFalse(String(describing: events).contains("private-request-id"))
     }
 
     func testStateStoreSelectsThreadByExactRolloutPath() throws {
@@ -137,16 +364,283 @@ final class CodexStatusProviderTests: XCTestCase {
     func testRolloutParserMapsTokenCountAndRateLimits() throws {
         let line = Data(CodexCompatibilityFixtures.currentTokenCount.utf8)
 
-        let data = CodexRolloutParser.parseLine(line, expectedCWD: "/repo")
+        let data = CodexRolloutParser.parseLine(
+            line, expectedCWD: "/repo", adapter: .current(version: "0.162.1"))
 
-        XCTAssertEqual(data?.contextWindow?.totalInputTokens, 30)
-        XCTAssertEqual(data?.contextWindow?.totalOutputTokens, 10)
-        XCTAssertEqual(data?.contextWindow?.usedPercentage, 40)
-        XCTAssertEqual(data?.contextWindow?.remainingPercentage, 60)
+        XCTAssertEqual(data?.contextWindow?.totalInputTokens, 900)
+        XCTAssertEqual(data?.contextWindow?.totalOutputTokens, 100)
+        XCTAssertEqual(data?.contextWindow?.usedPercentage, 25)
+        XCTAssertEqual(data?.contextWindow?.remainingPercentage, 75)
         XCTAssertEqual(data?.rateLimits?.fiveHour?.usedPercentage, 25)
         XCTAssertEqual(data?.rateLimits?.fiveHour?.resetsAt, 2_000_000_000)
         XCTAssertEqual(data?.rateLimits?.sevenDay?.usedPercentage, 50)
         XCTAssertEqual(data?.rateLimits?.sevenDay?.resetsAt, 2_000_003_600)
+    }
+
+    func testRolloutParserKeepsQuotaBucketAndUsesOnlyUsedPercentageFields() {
+        let premium =
+            #"{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"premium","primary":{"window_minutes":300,"remaining":12},"secondary":{"window_minutes":10080,"used_percent":65,"resets_at":2000003600}}}}"#
+        let data = CodexRolloutParser.parseLine(
+            Data(premium.utf8), expectedCWD: "/repo", adapter: .current(version: "0.162.1"))
+
+        XCTAssertEqual(data?.rateLimits?.bucketID, "premium")
+        XCTAssertNil(data?.rateLimits?.fiveHour?.usedPercentage)
+        XCTAssertEqual(data?.rateLimits?.sevenDay?.usedPercentage, 65)
+        XCTAssertEqual(data?.rateLimits?.sevenDay?.resetsAt, 2_000_003_600)
+    }
+
+    @MainActor
+    func testProviderRetainsStandardQuotaAcrossPremiumAndPartialUpdatesThenClearsOnRebind() throws {
+        let queueURL = tempDir.appending(path: "quota-hooks.jsonl")
+        let firstTranscript = tempDir.appending(path: "quota-first.jsonl")
+        let secondTranscript = tempDir.appending(path: "quota-second.jsonl")
+        let standard =
+            #"{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"window_minutes":300,"used_percent":20,"resets_at":2000000000},"secondary":{"window_minutes":10080,"used_percent":70,"resets_at":2000003600}}}}"#
+        let premium =
+            #"{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"premium","primary":null,"secondary":null}}}"#
+        let partialStandard =
+            #"{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"window_minutes":300,"used_percent":15,"resets_at":2000007200}}}}"#
+        try (standard + "\n").write(to: firstTranscript, atomically: true, encoding: .utf8)
+        try Data().write(to: secondTranscript)
+        let context = makeContext(
+            processStartTime: Date(), queuePath: queueURL.path, launchGeneration: "quota-generation")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "quota-generation",
+            sessionID: "quota-session-one",
+            transcriptPath: firstTranscript.path)
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-quota-state.sqlite")),
+            startupRetryInterval: 0.02,
+            startupTimeout: 0.2)
+        let initialQuota = expectation(description: "standard quotas are available")
+        let premiumRetained = expectation(description: "premium update leaves standard quotas available")
+        let partialRetained = expectation(description: "partial standard update retains weekly quota")
+        let reboundCleared = expectation(description: "new conversation clears quota values")
+        var stage = "initial"
+        provider.onUpdate = { data in
+            guard let rates = data.rateLimits else {
+                if stage == "rebound" { reboundCleared.fulfill() }
+                return
+            }
+            if stage == "initial", rates.fiveHour?.usedPercentage == 20,
+                rates.sevenDay?.usedPercentage == 70
+            {
+                initialQuota.fulfill()
+            }
+            if stage == "premium", rates.fiveHour?.usedPercentage == 20,
+                rates.sevenDay?.usedPercentage == 70
+            {
+                premiumRetained.fulfill()
+            }
+            if stage == "partial", rates.fiveHour?.usedPercentage == 15,
+                rates.fiveHour?.resetsAt == 2_000_007_200,
+                rates.sevenDay?.usedPercentage == 70, rates.sevenDay?.resetsAt == 2_000_003_600
+            {
+                partialRetained.fulfill()
+            }
+        }
+
+        provider.start()
+        wait(for: [initialQuota], timeout: 2)
+        stage = "premium"
+        let handle = try FileHandle(forWritingTo: firstTranscript)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((premium + "\n").utf8))
+        try handle.close()
+        wait(for: [premiumRetained], timeout: 2)
+        stage = "partial"
+        let partialHandle = try FileHandle(forWritingTo: firstTranscript)
+        try partialHandle.seekToEnd()
+        try partialHandle.write(contentsOf: Data((partialStandard + "\n").utf8))
+        try partialHandle.close()
+        wait(for: [partialRetained], timeout: 2)
+        stage = "rebound"
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "quota-generation",
+            sessionID: "quota-session-two",
+            transcriptPath: secondTranscript.path)
+        wait(for: [reboundCleared], timeout: 2)
+        provider.stop()
+    }
+
+    func testCurrentRolloutParserReadsTurnContextModelChanges() {
+        let adapter = CodexCompatibilityAdapter.current(version: "0.162.1")
+        let initial = CodexRolloutParser.parseLine(
+            Data(CodexCompatibilityFixtures.currentTurnContext.utf8),
+            expectedCWD: "/repo",
+            adapter: adapter)
+        let changed = CodexRolloutParser.parseLine(
+            Data(#"{"type":"turn_context","payload":{"model":"updated-model"}}"#.utf8),
+            expectedCWD: "/repo",
+            adapter: adapter)
+
+        XCTAssertEqual(initial?.model?.id, "current-model")
+        XCTAssertEqual(changed?.model?.id, "updated-model")
+        XCTAssertNil(initial?.contextWindow)
+        XCTAssertNil(
+            CodexRolloutParser.parseLine(
+                Data(CodexCompatibilityFixtures.currentTurnContext.utf8), expectedCWD: "/repo"))
+    }
+
+    func testCurrentTokenCountSeparatesCumulativeTotalsFromCurrentOccupancy() {
+        let data = CodexRolloutParser.parseLine(
+            Data(CodexCompatibilityFixtures.currentTokenCount.utf8),
+            expectedCWD: "/repo",
+            adapter: .current(version: "0.162.1"))
+
+        XCTAssertEqual(data?.contextWindow?.totalInputTokens, 900)
+        XCTAssertEqual(data?.contextWindow?.totalOutputTokens, 100)
+        XCTAssertEqual(data?.contextWindow?.usedPercentage, 25)
+        XCTAssertEqual(data?.contextWindow?.remainingPercentage, 75)
+        XCTAssertNil(data?.model)
+    }
+
+    func testCurrentContextPercentageMatchesBaselineRoundingAndClamping() {
+        let scenarios: [ContextPercentageScenario] = [
+            ContextPercentageScenario(window: 475_000, current: 236_085, used: 48, remaining: 52),
+            ContextPercentageScenario(window: 11_999, current: 0, used: 100, remaining: 0),
+            ContextPercentageScenario(window: 12_000, current: 12_000, used: 100, remaining: 0),
+            ContextPercentageScenario(window: 100_000, current: 12_000, used: 0, remaining: 100),
+            ContextPercentageScenario(window: 12_200, current: 12_095, used: 47, remaining: 53),
+            ContextPercentageScenario(window: 12_200, current: 12_097, used: 48, remaining: 52),
+            ContextPercentageScenario(window: 100_000, current: 130_000, used: 100, remaining: 0),
+        ]
+
+        for scenario in scenarios {
+            let line = Data(
+                #"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{},"last_token_usage":{"total_tokens":\#(scenario.current)},"model_context_window":\#(scenario.window)}}}"#
+                    .utf8)
+            let data = CodexRolloutParser.parseLine(
+                line,
+                expectedCWD: "/repo",
+                adapter: .current(version: "0.162.1"))
+
+            XCTAssertEqual(data?.contextWindow?.usedPercentage, scenario.used)
+            XCTAssertEqual(data?.contextWindow?.remainingPercentage, scenario.remaining)
+        }
+    }
+
+    func testCurrentTokenCountLeavesAbsentFieldsUnavailable() {
+        let line = Data(
+            #"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":250}}}}"#
+                .utf8)
+        let data = CodexRolloutParser.parseLine(
+            line,
+            expectedCWD: "/repo",
+            adapter: .current(version: "0.162.1"))
+
+        XCTAssertNil(data?.contextWindow?.usedPercentage)
+        XCTAssertNil(data?.contextWindow?.totalInputTokens)
+        XCTAssertNil(data?.contextWindow?.totalOutputTokens)
+        XCTAssertNil(data?.rateLimits)
+    }
+
+    @MainActor
+    func testCurrentModelChangesAbsentFieldsAndUnreadableTranscriptRecover() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+        let rolloutURL = tempDir.appending(path: "current-rollout.jsonl")
+        let initialLine = CodexCompatibilityFixtures.currentTokenCount
+        let initialModelLine = CodexCompatibilityFixtures.currentTurnContext
+        try (initialModelLine + "\n" + initialLine + "\n")
+            .write(to: rolloutURL, atomically: true, encoding: .utf8)
+        let hookRecordURL = tempDir.appending(path: "current-hook-record.json")
+        try writeHookRecord(
+            to: hookRecordURL,
+            sessionID: "thread-abcdef1234567890",
+            transcriptPath: rolloutURL.path)
+        let provider = CodexStatusProvider(
+            context: makeContext(
+                processStartTime: Date(),
+                hookRecordPath: hookRecordURL.path,
+                adapter: .current(version: "0.162.1")),
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-current.sqlite")),
+            startupRetryInterval: 0.02,
+            startupTimeout: 0.5)
+        let initial = expectation(description: "current model and token snapshot")
+        let changedModel = expectation(description: "current model metadata change")
+        let absentFields = expectation(description: "absent token fields clear the snapshot")
+        let unreadable = expectation(description: "unreadable transcript clears rich facts")
+        let recovered = expectation(description: "valid transcript restores rich facts")
+        var fulfilledInitial = false
+        var fulfilledChangedModel = false
+        var fulfilledAbsentFields = false
+        var fulfilledUnreadable = false
+        var fulfilledRecovered = false
+        var hasObservedInitialFacts = false
+        provider.onUpdate = { data in
+            if !fulfilledInitial, data.model?.id == "current-model", data.contextWindow?.usedPercentage == 25 {
+                fulfilledInitial = true
+                hasObservedInitialFacts = true
+                initial.fulfill()
+            }
+            if !fulfilledChangedModel, data.model?.id == "updated-model" {
+                fulfilledChangedModel = true
+                changedModel.fulfill()
+            }
+            if !fulfilledAbsentFields, data.model?.id == "updated-model",
+                data.contextWindow?.usedPercentage == nil,
+                data.contextWindow?.totalInputTokens == nil,
+                data.contextWindow?.totalOutputTokens == nil
+            {
+                fulfilledAbsentFields = true
+                absentFields.fulfill()
+            }
+            if hasObservedInitialFacts, !fulfilledUnreadable,
+                data.model == nil, data.contextWindow == nil
+            {
+                fulfilledUnreadable = true
+                unreadable.fulfill()
+            }
+            if !fulfilledRecovered, data.model?.id == "recovered-model",
+                data.contextWindow?.usedPercentage == 25
+            {
+                fulfilledRecovered = true
+                recovered.fulfill()
+            }
+        }
+
+        provider.start()
+        wait(for: [initial], timeout: 2)
+        let updateHandle = try FileHandle(forWritingTo: rolloutURL)
+        try updateHandle.seekToEnd()
+        try updateHandle.write(
+            contentsOf: Data(
+                #"{"type":"turn_context","payload":{"model":"updated-model"}}"#.appending("\n").utf8))
+        try updateHandle.write(
+            contentsOf: Data(
+                #"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":250}}}}"#
+                    .appending("\n").utf8))
+        try updateHandle.close()
+        wait(for: [changedModel, absentFields], timeout: 2)
+
+        try FileManager.default.removeItem(at: rolloutURL)
+        wait(for: [unreadable], timeout: 2)
+        try
+            (#"{"type":"turn_context","payload":{"model":"recovered-model"}}"# + "\n"
+            + initialLine + "\n")
+            .write(to: rolloutURL, atomically: true, encoding: .utf8)
+        wait(for: [recovered], timeout: 2)
+        provider.stop()
+        XCTAssertTrue(
+            TracingService.shared.recordedEventsForTesting.contains {
+                let isUnreadableRead =
+                    $0.name == "statusline.codex.tailer_read"
+                    && $0.attributes["result"] == "unreadable"
+                let isWaitingForTranscript =
+                    $0.name == "statusline.codex.tailer_attachment"
+                    && $0.attributes["result"] == "waiting"
+                let hasPaneContext = $0.attributes["pane.id"] != nil && $0.attributes["tab.id"] != nil
+                return (isUnreadableRead || isWaitingForTranscript) && hasPaneContext
+            }, "Missing pane-scoped unreadable-source diagnostic")
     }
 
     func testRolloutParserMapsCodex136SessionMetaPayload() throws {
@@ -177,7 +671,7 @@ final class CodexStatusProviderTests: XCTestCase {
     func testRolloutParserUsesLastTokenUsageForContextAndTotalUsageForTokenTotals() throws {
         let line = Data(
             """
-            {"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":900,"output_tokens":100},"last_token_usage":{"total_tokens":250},"model_context_window":1000}}}
+            {"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":900,"output_tokens":100},"last_token_usage":{"total_tokens":12250},"model_context_window":13000}}}
             """.utf8)
 
         let data = CodexRolloutParser.parseLine(line, expectedCWD: "/repo")
@@ -253,7 +747,7 @@ final class CodexStatusProviderTests: XCTestCase {
     func testTailerBuffersPartialJsonlUntilNewlineArrives() throws {
         let rolloutURL = tempDir.appending(path: "rollout.jsonl")
         let partial =
-            #"{"type":"event_msg","payload":{"type":"token_count","model":"partial","total_token_usage":{"input_tokens":10,"output_tokens":2},"last_token_usage":{"total_tokens":6},"model_context_window":100}}"#
+            #"{"type":"event_msg","payload":{"type":"token_count","model":"partial","total_token_usage":{"input_tokens":10,"output_tokens":2},"last_token_usage":{"total_tokens":12006},"model_context_window":12100}}"#
         try partial.write(to: rolloutURL, atomically: true, encoding: .utf8)
 
         let tailer = CodexRolloutTailer(rolloutPath: rolloutURL.path, expectedCWD: tempDir.path)
@@ -374,7 +868,7 @@ final class CodexStatusProviderTests: XCTestCase {
         let rolloutURL = tempDir.appending(path: "rollout.jsonl")
         try """
         {"type":"session_meta","payload":{"cwd":"\(tempDir.path)","cli_version":"0.136.0","model":"gpt-5.1-codex"}}
-            {"type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.1-codex","total_token_usage":{"input_tokens":320,"output_tokens":80},"last_token_usage":{"total_tokens":400},"model_context_window":2000},"rate_limits":{"primary":{"window_minutes":300,"used_percent":12.5,"resets_at":2000000000},"secondary":{"window_minutes":10080,"used_percent":44,"resets_at":2000003600}}}}
+            {"type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.1-codex","total_token_usage":{"input_tokens":320,"output_tokens":80},"last_token_usage":{"total_tokens":12400},"model_context_window":14000},"rate_limits":{"primary":{"window_minutes":300,"used_percent":12.5,"resets_at":2000000000},"secondary":{"window_minutes":10080,"used_percent":44,"resets_at":2000003600}}}}
         """
         .appending("\n")
         .write(to: rolloutURL, atomically: true, encoding: .utf8)
@@ -446,7 +940,7 @@ final class CodexStatusProviderTests: XCTestCase {
         XCTAssertNil(observed?.cost?.totalCostUsd)
 
         let events = TracingService.shared.recordedEventsForTesting
-        XCTAssertTrue(events.contains { $0.name == "statusline.codex.hook_bound" })
+        XCTAssertTrue(events.contains { $0.name == "statusline.codex.binding.changed" })
         XCTAssertTrue(events.contains { $0.name == "statusline.codex.sqlite_enrichment" })
         XCTAssertTrue(events.contains { $0.name == "statusline.codex.tailer_started" })
         XCTAssertTrue(events.contains { $0.name == "statusline.codex.tailer_read" })
@@ -503,6 +997,174 @@ final class CodexStatusProviderTests: XCTestCase {
         }
         XCTAssertGreaterThanOrEqual(stateReads.count, 1)
         XCTAssertTrue(stateReads.contains { $0.attributes["retry_attempt"] != nil })
+    }
+
+    @MainActor
+    func testProviderFollowsForegroundNewAndResumeBindingsAndDelayedTranscript() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+
+        let queueURL = tempDir.appending(path: "foreground-hooks.jsonl")
+        let firstTranscript = tempDir.appending(path: "first-rollout.jsonl")
+        let resumedTranscript = tempDir.appending(path: "resumed-rollout.jsonl")
+        try codexTokenLine(model: "first-model", input: 40, output: 10, contextTokens: 20, window: 100)
+            .appending("\n")
+            .write(to: firstTranscript, atomically: true, encoding: .utf8)
+        let paneID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let tabID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        let generation = "generation-foreground"
+        let provider = CodexStatusProvider(
+            context: makeContext(
+                processStartTime: Date(), queuePath: queueURL.path, launchGeneration: generation),
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-state.sqlite")),
+            startupRetryInterval: 0.05,
+            startupTimeout: 0.3)
+        let firstBound = expectation(description: "first foreground conversation binds")
+        let firstFacts = expectation(description: "first transcript facts arrive")
+        let resumedBound = expectation(description: "resumed foreground conversation binds")
+        let resumedTranscriptParsed = expectation(description: "delayed resumed transcript is parsed")
+        var boundIDs: [String] = []
+        var boundTranscriptPaths: [String?] = []
+        var awaitingClearedFactsFor: String?
+        var sawClearedFacts = false
+        var sawStalePriorSessionFacts = false
+        provider.onSessionBound = { id, transcriptPath in
+            boundIDs.append(id)
+            boundTranscriptPaths.append(transcriptPath)
+            if id == "session-first" { firstBound.fulfill() }
+            if id == "session-resumed" {
+                awaitingClearedFactsFor = id
+                resumedBound.fulfill()
+            }
+        }
+        provider.onUpdate = { data in
+            if data.model?.id == "first-model", data.contextWindow?.usedPercentage == 20 {
+                firstFacts.fulfill()
+            }
+            if awaitingClearedFactsFor == "session-resumed", data.contextWindow == nil {
+                sawClearedFacts = true
+            }
+            if awaitingClearedFactsFor == "session-resumed", data.contextWindow?.usedPercentage == 90 {
+                sawStalePriorSessionFacts = true
+            }
+            if data.model?.id == "resumed-model", data.contextWindow?.usedPercentage == 30 {
+                resumedTranscriptParsed.fulfill()
+            }
+        }
+
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: paneID,
+            tabID: tabID,
+            generation: generation,
+            sessionID: "session-first",
+            transcriptPath: firstTranscript.path)
+        provider.start()
+        wait(for: [firstBound], timeout: 2)
+        wait(for: [firstFacts], timeout: 2)
+
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: paneID,
+            tabID: tabID,
+            generation: generation,
+            sessionID: "session-resumed",
+            transcriptPath: resumedTranscript.path,
+            hookEventName: "UserPromptSubmit")
+        wait(for: [resumedBound], timeout: 2)
+        XCTAssertTrue(sawClearedFacts)
+
+        let priorTranscriptContent = try String(contentsOf: firstTranscript, encoding: .utf8)
+        try
+            (priorTranscriptContent
+            + codexTokenLine(model: "first-model", input: 100, output: 50, contextTokens: 90, window: 100)
+            + "\n")
+            .write(to: firstTranscript, atomically: true, encoding: .utf8)
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: paneID,
+            tabID: tabID,
+            generation: generation,
+            sessionID: "session-resumed",
+            transcriptPath: resumedTranscript.path,
+            hookEventName: "UserPromptSubmit")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+        XCTAssertEqual(boundIDs, ["session-first", "session-resumed"])
+        XCTAssertEqual(boundTranscriptPaths, [firstTranscript.path, resumedTranscript.path])
+        XCTAssertFalse(sawStalePriorSessionFacts)
+
+        try codexTokenLine(model: "resumed-model", input: 60, output: 15, contextTokens: 30, window: 100)
+            .appending("\n")
+            .write(to: resumedTranscript, atomically: true, encoding: .utf8)
+        wait(for: [resumedTranscriptParsed], timeout: 2)
+        provider.stop()
+
+        let events = TracingService.shared.recordedEventsForTesting
+        XCTAssertTrue(events.contains { $0.name == "statusline.codex.binding.facts_cleared" })
+        XCTAssertTrue(events.contains { $0.name == "statusline.codex.binding.callback" })
+        XCTAssertTrue(events.contains { $0.name == "statusline.codex.tailer_detached" })
+        XCTAssertTrue(
+            events.contains {
+                $0.name == "statusline.codex.binding.changed"
+                    && $0.attributes["pane.id"] == paneID.uuidString
+                    && $0.attributes["tab.id"] == tabID.uuidString
+            })
+    }
+
+    @MainActor
+    func testProvidersSharingCheckoutRejectEachOthersForegroundBindings() throws {
+        let paneA = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let paneB = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+        let tabA = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        let tabB = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
+        let generationA = "generation-a"
+        let generationB = "generation-b"
+        let queueA = tempDir.appending(path: "pane-a-hooks.jsonl")
+        let queueB = tempDir.appending(path: "pane-b-hooks.jsonl")
+        let providerA = CodexStatusProvider(
+            context: makeContext(
+                processStartTime: Date(), queuePath: queueA.path, launchGeneration: generationA,
+                paneID: paneA, tabID: tabA),
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-a.sqlite")),
+            startupRetryInterval: 0.05,
+            startupTimeout: 0.2)
+        let providerB = CodexStatusProvider(
+            context: makeContext(
+                processStartTime: Date(), queuePath: queueB.path, launchGeneration: generationB,
+                paneID: paneB, tabID: tabB),
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-b.sqlite")),
+            startupRetryInterval: 0.05,
+            startupTimeout: 0.2)
+        let boundA = expectation(description: "pane A binds its session")
+        let boundB = expectation(description: "pane B binds its session")
+        var idsA: [String] = []
+        var idsB: [String] = []
+        providerA.onSessionBound = { id, _ in
+            idsA.append(id)
+            boundA.fulfill()
+        }
+        providerB.onSessionBound = { id, _ in
+            idsB.append(id)
+            boundB.fulfill()
+        }
+
+        try appendQueueRecord(
+            to: queueA, paneID: paneB, tabID: tabB, generation: generationB, sessionID: "session-b")
+        try appendQueueRecord(
+            to: queueA, paneID: paneA, tabID: tabA, generation: generationA, sessionID: "session-a")
+        try appendQueueRecord(
+            to: queueB, paneID: paneA, tabID: tabA, generation: generationA, sessionID: "session-a")
+        try appendQueueRecord(
+            to: queueB, paneID: paneB, tabID: tabB, generation: generationB, sessionID: "session-b")
+        providerA.start()
+        providerB.start()
+        wait(for: [boundA, boundB], timeout: 2)
+        providerA.stop()
+        providerB.stop()
+
+        XCTAssertEqual(idsA, ["session-a"])
+        XCTAssertEqual(idsB, ["session-b"])
     }
 
     @MainActor
@@ -649,7 +1311,11 @@ final class CodexStatusProviderTests: XCTestCase {
         defer { TracingService.shared.resetForTesting() }
 
         let rolloutURL = tempDir.appending(path: "rollout.jsonl")
-        try codexTokenLine(model: "trace-model", input: 5, output: 2, contextTokens: 7, window: 100)
+        let tokenLine = codexTokenLine(model: "trace-model", input: 5, output: 2, contextTokens: 7, window: 100)
+        XCTAssertEqual(
+            CodexRolloutParser.parseLine(Data(tokenLine.utf8), expectedCWD: tempDir.path)?.model?.id,
+            "trace-model")
+        try tokenLine
             .write(to: rolloutURL, atomically: true, encoding: .utf8)
         let dbURL = tempDir.appending(path: "state_5.sqlite")
         let hookRecordURL = tempDir.appending(path: "trace-hook-record.json")
@@ -667,7 +1333,9 @@ final class CodexStatusProviderTests: XCTestCase {
             startupTimeout: 0.5
         )
         let expectation = XCTestExpectation(description: "provider emits trace-model update")
+        var observedCodexUpdates: [(String?, Int?)] = []
         provider.onUpdate = { data in
+            observedCodexUpdates.append((data.model?.id, data.contextWindow?.usedPercentage))
             if data.model?.id == "trace-model", data.contextWindow?.usedPercentage == 7 {
                 expectation.fulfill()
             }
@@ -676,6 +1344,9 @@ final class CodexStatusProviderTests: XCTestCase {
         provider.start()
         wait(for: [expectation], timeout: 2)
         provider.stop()
+        XCTAssertTrue(
+            observedCodexUpdates.contains { $0.0 == "trace-model" && $0.1 == 7 },
+            "Observed Codex snapshots: \(observedCodexUpdates)")
 
         let events = TracingService.shared.recordedEventsForTesting
         XCTAssertFalse(events.contains { $0.name == "statusline.provider.started" })
@@ -683,6 +1354,12 @@ final class CodexStatusProviderTests: XCTestCase {
         XCTAssertFalse(events.contains { $0.name == "statusline.provider.update_applied" })
         let codexEvents = events.filter { $0.name.hasPrefix("statusline.codex.") }
         XCTAssertFalse(codexEvents.isEmpty)
+        XCTAssertTrue(
+            codexEvents.contains { $0.name == "statusline.codex.tailer_started" },
+            codexEvents.map(\.name).joined(separator: ","))
+        XCTAssertTrue(
+            codexEvents.contains { $0.name == "statusline.codex.parsed_update" },
+            codexEvents.map(\.name).joined(separator: ","))
         XCTAssertTrue(
             codexEvents.allSatisfy {
                 $0.attributes["pane.name"] == "codex-pane"
@@ -726,6 +1403,87 @@ final class CodexStatusProviderTests: XCTestCase {
 
 extension CodexStatusProviderTests {
     @MainActor
+    func testContinuationDiagnosticsMatchRequestedAndBoundSessionIdentity() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+
+        let codexHome = tempDir.appending(path: "codex-home", directoryHint: .isDirectory)
+        let bin = tempDir.appending(path: "bin", directoryHint: .isDirectory)
+        let transcript = tempDir.appending(path: "requested-session.jsonl")
+        let database = codexHome.appending(path: "state_5.sqlite")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        try Data().write(to: transcript)
+        try createThreadDatabase(
+            at: database,
+            rolloutPath: transcript.path,
+            model: "requested-model",
+            createdAtMs: Int64(Date().timeIntervalSince1970 * 1000))
+        let codex = bin.appending(path: "codex")
+        try "#!/bin/sh\nprintf '%s\\n' 'codex-cli 0.162.1'\n"
+            .write(to: codex, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: codex.path)
+
+        let settings = AppSettings()
+        settings.preferredShell = "/bin/sh"
+        settings.agentControlInjectionPolicy = .never
+        let tab = Tab(name: "repo", directory: tempDir)
+        let pane = Pane(name: "codex-pane", tab: tab, harness: .codex, appSettings: settings)
+        let requestedSessionID = "thread-abcdef1234567890"
+        pane.codexSessionID = requestedSessionID
+        pane.codexTranscriptPath = transcript.path
+        pane.extraEnvVars = [
+            "CODEX_HOME": codexHome.path,
+            "PATH": "\(bin.path):\(ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")",
+        ]
+        let originalController = TerminalController()
+        originalController.pendingCommandArgs = ["codex"]
+        pane.installTerminalController(originalController)
+        tab.panes.append(pane)
+        defer {
+            pane.terminalController?.terminate()
+            pane.removeStatusLineMonitor()
+        }
+
+        tab.refreshPane(pane, appSettings: settings)
+
+        let monitor = try XCTUnwrap(pane.statusLineMonitor)
+        XCTAssertEqual(monitor.codexAdapter, .current(version: "0.162.1"))
+        let boundSessionID = "thread-9876543210fedcba"
+        let bound = expectation(description: "provider records the bound exact session")
+        let previousCallback = monitor.onCodexSessionBound
+        monitor.onCodexSessionBound = { id, path in
+            previousCallback?(id, path)
+            bound.fulfill()
+        }
+        try appendQueueRecord(
+            to: URL(filePath: monitor.codexHookQueueFilePath),
+            paneID: pane.id,
+            tabID: tab.id,
+            generation: monitor.codexLaunchGeneration,
+            sessionID: boundSessionID,
+            transcriptPath: transcript.path)
+        wait(for: [bound], timeout: 2)
+
+        let events = TracingService.shared.recordedEventsForTesting
+        let requested = try XCTUnwrap(
+            events.first { $0.name == "statusline.codex.continuation.preflight" })
+        let boundSession = try XCTUnwrap(
+            events.first { $0.name == "statusline.codex.binding.changed" })
+        XCTAssertEqual(requested.attributes["requested_session_id_prefix"], String(requestedSessionID.prefix(12)))
+        XCTAssertEqual(requested.attributes["result"], "available")
+        XCTAssertEqual(boundSession.attributes["session_id_prefix"], String(boundSessionID.prefix(12)))
+        XCTAssertNotEqual(
+            requested.attributes["requested_session_id_prefix"],
+            boundSession.attributes["session_id_prefix"])
+        XCTAssertFalse(
+            events.contains { event in
+                event.attributes.values.contains { $0.contains(requestedSessionID) || $0.contains(boundSessionID) }
+            })
+    }
+
+    @MainActor
     func testProviderBindsWhenHookRecordAppearsAfterStartupTimeout() throws {
         TracingService.shared.resetForTesting()
         TracingService.shared.enableTestCapture()
@@ -767,7 +1525,7 @@ extension CodexStatusProviderTests {
         XCTAssertTrue(events.contains { $0.name == "statusline.codex.hook_waiting" })
         XCTAssertTrue(
             events.contains {
-                $0.name == "statusline.codex.hook_bound"
+                $0.name == "statusline.codex.binding.changed"
                     && $0.attributes["late_bound"] == "true"
                     && $0.attributes["hook_event_name"] == "UserPromptSubmit"
             })
@@ -828,13 +1586,177 @@ extension CodexStatusProviderTests {
             })
         XCTAssertTrue(
             events.contains {
-                $0.name == "statusline.codex.hook_bound"
+                $0.name == "statusline.codex.binding.changed"
                     && $0.attributes["hook_event_name"] == "Stop"
             })
     }
 }
 
 extension CodexStatusProviderTests {
+    @MainActor
+    func testCurrentAdapterReportsForegroundWorkingAndStoppedTransitions() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+
+        let queueURL = tempDir.appending(path: "activity-queue.jsonl")
+        let context = makeContext(
+            processStartTime: Date(),
+            queuePath: queueURL.path,
+            launchGeneration: "activity-generation",
+            adapter: .current(version: "0.162.1"))
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "activity-generation",
+            sessionID: "activity-session",
+            hookEventName: "UserPromptSubmit")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "activity-generation",
+            sessionID: "activity-session",
+            hookEventName: "Stop")
+
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-activity.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.2)
+        let transitionsObserved = expectation(description: "foreground start and stop are reported")
+        transitionsObserved.expectedFulfillmentCount = 2
+        let stateLock = NSLock()
+        var states: [Bool] = []
+        provider.onActivityChanged = { isWorking in
+            stateLock.withLock { states.append(isWorking) }
+            transitionsObserved.fulfill()
+        }
+
+        provider.start()
+        wait(for: [transitionsObserved], timeout: 2)
+        provider.stop()
+
+        XCTAssertEqual(stateLock.withLock { states }, [true, false])
+        let events = TracingService.shared.recordedEventsForTesting.filter {
+            $0.name == "statusline.codex.activity.changed"
+        }
+        XCTAssertEqual(events.map(\.attributes["state"]), ["working", "stopped"])
+        XCTAssertTrue(events.allSatisfy { $0.attributes["pane.id"] == context.paneID.uuidString })
+        XCTAssertTrue(events.allSatisfy { $0.attributes["tab.id"] == context.tabID.uuidString })
+    }
+
+    @MainActor
+    func testDelegatedHookRecordsDoNotBindForegroundSessionOrActivity() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+        let queueURL = tempDir.appending(path: "delegated-hooks.jsonl")
+        let context = makeContext(
+            processStartTime: Date(),
+            queuePath: queueURL.path,
+            launchGeneration: "delegated-generation",
+            adapter: .current(version: "0.162.1"))
+        for event in ["SessionStart", "UserPromptSubmit", "Stop"] {
+            try appendQueueRecord(
+                to: queueURL,
+                paneID: context.paneID,
+                tabID: context.tabID,
+                generation: "delegated-generation",
+                sessionID: "delegated-session",
+                hookEventName: event,
+                source: "subagent")
+        }
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-delegated.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.2)
+        var boundSessions: [String] = []
+        var activityChanges: [Bool] = []
+        provider.onSessionBound = { sessionID, _ in boundSessions.append(sessionID) }
+        provider.onActivityChanged = { activityChanges.append($0) }
+
+        provider.start()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.12))
+        provider.stop()
+
+        XCTAssertTrue(boundSessions.isEmpty)
+        XCTAssertTrue(activityChanges.isEmpty)
+        XCTAssertTrue(provider.pendingHookRecords.isEmpty)
+        XCTAssertTrue(
+            TracingService.shared.recordedEventsForTesting.contains {
+                $0.name == "statusline.codex.hook_queue.record_ignored"
+                    && $0.attributes["reason"] == "delegated_source"
+            })
+    }
+
+    @MainActor
+    func testInterruptStopsCurrentAdapterAndLegacyAdapterIgnoresIt() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+
+        let currentQueue = tempDir.appending(path: "current-interrupt-queue.jsonl")
+        let legacyQueue = tempDir.appending(path: "legacy-interrupt-queue.jsonl")
+        let currentContext = makeContext(
+            processStartTime: Date(),
+            queuePath: currentQueue.path,
+            launchGeneration: "current-interrupt-generation",
+            adapter: .current(version: "0.162.1"))
+        let legacyContext = makeContext(
+            processStartTime: Date(),
+            queuePath: legacyQueue.path,
+            launchGeneration: "legacy-interrupt-generation",
+            adapter: .legacy(version: "0.136.4"))
+        try appendQueueRecord(
+            to: currentQueue,
+            paneID: currentContext.paneID,
+            tabID: currentContext.tabID,
+            generation: "current-interrupt-generation",
+            sessionID: "current-session",
+            hookEventName: "Interrupt")
+        try appendQueueRecord(
+            to: legacyQueue,
+            paneID: legacyContext.paneID,
+            tabID: legacyContext.tabID,
+            generation: "legacy-interrupt-generation",
+            sessionID: "legacy-session",
+            hookEventName: "Interrupt")
+
+        let currentProvider = CodexStatusProvider(
+            context: currentContext,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-current.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.2)
+        let legacyProvider = CodexStatusProvider(
+            context: legacyContext,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-legacy.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.2)
+        let currentInterrupted = expectation(description: "current adapter reports interruption as stopped")
+        let legacyIgnoredInterrupt = expectation(description: "legacy adapter has no interruption lifecycle event")
+        legacyIgnoredInterrupt.isInverted = true
+        currentProvider.onActivityChanged = { isWorking in
+            XCTAssertFalse(isWorking)
+            currentInterrupted.fulfill()
+        }
+        legacyProvider.onActivityChanged = { _ in legacyIgnoredInterrupt.fulfill() }
+
+        currentProvider.start()
+        legacyProvider.start()
+        wait(for: [currentInterrupted, legacyIgnoredInterrupt], timeout: 0.4)
+        currentProvider.stop()
+        legacyProvider.stop()
+
+        XCTAssertTrue(
+            TracingService.shared.recordedEventsForTesting.contains {
+                $0.name == "statusline.codex.hook_queue.record_ignored"
+                    && $0.attributes["hook_event_name"] == "Interrupt"
+            })
+    }
+
     @MainActor
     func testHookWriterFailureIsReportedWithOnlyBoundedCode() throws {
         TracingService.shared.resetForTesting()
@@ -1040,18 +1962,23 @@ extension CodexStatusProviderTests {
         queuePath: String? = nil,
         diagnosticPath: String? = nil,
         launchGeneration: String? = nil,
-        adapter: CodexCompatibilityAdapter? = nil
+        adapter: CodexCompatibilityAdapter? = nil,
+        codexShell: String? = nil,
+        environment: [String: String] = [:],
+        paneID: UUID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+        tabID: UUID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
     ) -> StatusProviderContext {
         StatusProviderContext(
-            paneID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            paneID: paneID,
             paneName: "codex-pane",
-            tabID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+            tabID: tabID,
             tabName: "repo",
             workingDirectory: tempDir.path,
             harness: .codex,
             processStartTime: processStartTime,
             launchArgs: [],
-            environment: [:],
+            environment: environment,
+            codexShell: codexShell,
             detectedHarnessVersion: "codex-cli 0.136.0",
             codexHookRecordPath: hookRecordPath ?? tempDir.appending(path: "hook-record.json").path,
             opencodePort: nil,
@@ -1061,6 +1988,42 @@ extension CodexStatusProviderTests {
             codexLaunchGeneration: launchGeneration,
             codexAdapter: adapter
         )
+    }
+
+    fileprivate func appendQueueRecord(
+        to url: URL,
+        paneID: UUID,
+        tabID: UUID,
+        generation: String,
+        sessionID: String,
+        transcriptPath: String? = nil,
+        model: String? = nil,
+        hookEventName: String = "SessionStart",
+        source: String = "hook"
+    ) throws {
+        let record = CodexHookQueueRecord(
+            paneID: paneID.uuidString,
+            tabID: tabID.uuidString,
+            launchGeneration: generation,
+            hookEventName: hookEventName,
+            sessionID: sessionID,
+            turnID: nil,
+            requestID: nil,
+            timestamp: Date().timeIntervalSince1970,
+            source: source,
+            model: model,
+            transcriptPath: transcriptPath,
+            result: nil)
+        var data = try JSONEncoder().encode(record)
+        data.append(UInt8(ascii: "\n"))
+        if FileManager.default.fileExists(atPath: url.path) {
+            let handle = try FileHandle(forWritingTo: url)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+        } else {
+            try data.write(to: url)
+        }
     }
 
     fileprivate func writeHookRecord(
@@ -1093,9 +2056,11 @@ extension CodexStatusProviderTests {
         contextTokens: Int,
         window: Int
     ) -> String {
-        """
-        {"type":"event_msg","payload":{"type":"token_count","model":"\(model)","total_token_usage":{"input_tokens":\(input),"output_tokens":\(output)},"last_token_usage":{"total_tokens":\(contextTokens)},"model_context_window":\(window)}}
-        """
-        .appending("\n")
+        let currentContext = 12_000 + contextTokens
+        let contextWindow = 12_000 + window
+        return """
+            {"type":"event_msg","payload":{"type":"token_count","model":"\(model)","total_token_usage":{"input_tokens":\(input),"output_tokens":\(output)},"last_token_usage":{"total_tokens":\(currentContext)},"model_context_window":\(contextWindow)}}
+            """
+            .appending("\n")
     }
 }

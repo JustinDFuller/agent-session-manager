@@ -216,6 +216,95 @@ final class PRTrackingCoordinatorTests: XCTestCase {
         XCTAssertEqual(receivedPR?.number, 5)
     }
 
+    func testAuthenticationFailureRetainsPRAsStaleWithoutDeliveringResolution() throws {
+        let coordinator = PRTrackingCoordinator()
+        let paneID = UUID()
+        let existing = PullRequest(number: 42, title: "Open", state: "open", url: "url")
+        var deliveredPRs: [PullRequest?] = []
+        var deliveredStatuses: [PRTrackingStatus] = []
+        coordinator.subscribers[paneID] = PRTrackingCoordinator.SubscriberRecord(
+            workingDirectory: "/tmp",
+            owner: "owner",
+            repo: "repo",
+            branchName: "feature",
+            lastData: existing,
+            status: .current,
+            callback: { deliveredPRs.append($0) },
+            statusCallback: { deliveredStatuses.append($0) },
+            isActive: true
+        )
+
+        coordinator.handleBatchResponse(makeQueryResult(failure: .authentication), token: 0)
+
+        XCTAssertEqual(coordinator.subscribers[paneID]?.lastData?.number, 42)
+        XCTAssertEqual(coordinator.subscribers[paneID]?.status, .failed(.authentication))
+        XCTAssertTrue(deliveredPRs.isEmpty)
+        XCTAssertEqual(deliveredStatuses.last, .failed(.authentication))
+    }
+
+    func testConfirmedNoPRClearsCachedPRAndSuccessfulRetryRecovers() throws {
+        let coordinator = PRTrackingCoordinator()
+        let paneID = UUID()
+        var deliveredPRs: [PullRequest?] = []
+        var deliveredStatuses: [PRTrackingStatus] = []
+        coordinator.subscribers[paneID] = PRTrackingCoordinator.SubscriberRecord(
+            workingDirectory: "/tmp",
+            owner: "owner",
+            repo: "repo",
+            branchName: "feature",
+            lastData: PullRequest(number: 42, title: "Old", state: "open", url: "url"),
+            status: .failed(.authentication),
+            callback: { deliveredPRs.append($0) },
+            statusCallback: { deliveredStatuses.append($0) },
+            isActive: true
+        )
+
+        coordinator.handleBatchResponse(
+            makeQueryResult(outData: try batchResponse(paneID: paneID, nodes: [])), token: 0)
+
+        XCTAssertNil(coordinator.subscribers[paneID]?.lastData)
+        XCTAssertEqual(coordinator.subscribers[paneID]?.status, .noPullRequest)
+        XCTAssertEqual(deliveredPRs.count, 1)
+        XCTAssertNil(deliveredPRs[0])
+
+        let found = [
+            [
+                "number": 43,
+                "title": "Recovered",
+                "state": "OPEN",
+                "url": "https://github.com/owner/repo/pull/43",
+            ]
+        ]
+        coordinator.handleBatchResponse(
+            makeQueryResult(outData: try batchResponse(paneID: paneID, nodes: found)), token: 0)
+
+        XCTAssertEqual(coordinator.subscribers[paneID]?.lastData?.number, 43)
+        XCTAssertEqual(coordinator.subscribers[paneID]?.status, .current)
+        XCTAssertEqual(deliveredStatuses, [.noPullRequest, .current])
+    }
+
+    func testMissingPRResponseAliasIsFailureAndRetainsCachedPR() {
+        let coordinator = PRTrackingCoordinator()
+        let paneID = UUID()
+        let existing = PullRequest(number: 42, title: "Open", state: "open", url: "url")
+        coordinator.subscribers[paneID] = PRTrackingCoordinator.SubscriberRecord(
+            workingDirectory: "/tmp",
+            owner: "owner",
+            repo: "repo",
+            branchName: "feature",
+            lastData: existing,
+            status: .current,
+            callback: { _ in },
+            isActive: true
+        )
+        let outData = Data(#"{"data":{}}"#.utf8)
+
+        coordinator.handleBatchResponse(makeQueryResult(outData: outData), token: 0)
+
+        XCTAssertEqual(coordinator.subscribers[paneID]?.lastData?.number, 42)
+        XCTAssertEqual(coordinator.subscribers[paneID]?.status, .failed(.parse))
+    }
+
     func testUnsubscribeRemovesRecord() {
         let coordinator = PRTrackingCoordinator()
         let paneID = UUID()
@@ -417,6 +506,30 @@ final class PRTrackingCoordinatorTests: XCTestCase {
             callback: { _ in },
             isActive: true
         )
+    }
+
+    private func makeQueryResult(
+        outData: Data = Data(),
+        failure: GitHubCLIFailure? = nil
+    ) -> PRTrackingCoordinator.QueryResult {
+        PRTrackingCoordinator.QueryResult(
+            outData: outData,
+            exitStatus: failure == nil ? 0 : 4,
+            result: failure?.rawValue ?? "ok",
+            failure: failure,
+            inputFailure: nil,
+            count: 1,
+            startTime: Date(),
+            endTime: Date()
+        )
+    }
+
+    private func batchResponse(paneID: UUID, nodes: [[String: Any]]) throws -> Data {
+        let alias = "pane_" + paneID.uuidString.replacingOccurrences(of: "-", with: "")
+        let json: [String: Any] = [
+            "data": [alias: ["pullRequests": ["nodes": nodes]]]
+        ]
+        return try JSONSerialization.data(withJSONObject: json)
     }
 
     @discardableResult

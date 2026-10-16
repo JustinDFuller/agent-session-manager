@@ -41,6 +41,25 @@ final class SessionPersistenceNotificationTests: XCTestCase {
         XCTAssertEqual(decoded.pendingNotifications[0], pending)
     }
 
+    func testCodexNotificationKindsRoundTrip() throws {
+        let kinds: [NotificationKind] = [.codexStop, .codexPermissionRequest, .codexQuestion]
+        let persisted = kinds.map {
+            PersistedPaneNotification(
+                notificationID: UUID(),
+                paneID: UUID(),
+                paneName: "codex-pane",
+                tabID: UUID(),
+                tabName: "project",
+                isPriority: true,
+                timestamp: Date(),
+                kind: $0)
+        }
+
+        let decoded = try JSONDecoder().decode([PersistedPaneNotification].self, from: JSONEncoder().encode(persisted))
+
+        XCTAssertEqual(decoded.map(\.kind), kinds)
+    }
+
     func testLegacyPendingNotificationReasonDefaultsNil() throws {
         let data = Data(
             """
@@ -160,6 +179,62 @@ final class SessionPersistenceNotificationTests: XCTestCase {
 
         let session = SessionPersistence.makePersistedSession(appState: appState)
         XCTAssertEqual(session.tabs.first?.panes.first?.opencodeSessionID, "ses_xyz")
+    }
+
+    func testCodexConversationMetadataPersistsWithPaneConfiguration() throws {
+        let appState = AppState()
+        let tab = Tab(name: "project", directory: URL(filePath: "/tmp/project"))
+        let pane = Pane(
+            name: "codex-pane", tab: tab, harness: .codex,
+            worktreeDirectory: URL(filePath: "/tmp/project/.agent-session-manager/worktrees/codex-pane"),
+            worktreeIsManaged: true, profileID: UUID(), appSettings: AppSettings())
+        pane.extraArgs = ["--model", "gpt-5"]
+        pane.codexSessionID = "conversation-exact"
+        pane.codexTranscriptPath = "/tmp/codex-home/sessions/conversation-exact.jsonl"
+        tab.panes.append(pane)
+        appState.tabs.append(tab)
+        appState.notifications = [
+            PaneNotification(
+                paneID: pane.id,
+                paneName: pane.name,
+                tabID: tab.id,
+                tabName: tab.name,
+                isPriority: true,
+                kind: .codexQuestion)
+        ]
+
+        let session = SessionPersistence.makePersistedSession(appState: appState)
+        let persisted = try XCTUnwrap(
+            session.tabs.first?.panes.first)
+        let encoded = try String(decoding: JSONEncoder().encode(persisted), as: UTF8.self)
+
+        XCTAssertEqual(persisted.codexSessionID, "conversation-exact")
+        XCTAssertEqual(persisted.codexTranscriptPath, "/tmp/codex-home/sessions/conversation-exact.jsonl")
+        XCTAssertEqual(persisted.worktreeDirectory, pane.worktreeDirectory?.path)
+        XCTAssertTrue(persisted.worktreeIsManaged)
+        XCTAssertEqual(persisted.profileID, pane.profileID)
+        XCTAssertEqual(persisted.extraArgs, ["--model", "gpt-5"])
+        XCTAssertEqual(session.pendingNotifications.map(\.kind), [.codexQuestion])
+        XCTAssertFalse(encoded.localizedCaseInsensitiveContains("bearer"))
+        XCTAssertFalse(encoded.localizedCaseInsensitiveContains("credential"))
+    }
+
+    func testLegacyCodexPaneDefaultsConversationMetadataToNil() throws {
+        let json = Data(
+            """
+            {
+              "id": "00000000-0000-0000-0000-000000000001",
+              "name": "p",
+              "harness": "codex",
+              "isPriority": false,
+              "worktreeIsManaged": false
+            }
+            """.utf8)
+
+        let decoded = try JSONDecoder().decode(PersistedPane.self, from: json)
+
+        XCTAssertNil(decoded.codexSessionID)
+        XCTAssertNil(decoded.codexTranscriptPath)
     }
 
     func testExtraArgsRoundTripInPersistedPane() throws {

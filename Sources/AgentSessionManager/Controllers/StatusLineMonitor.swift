@@ -25,16 +25,22 @@ enum SidebarSide: String, Codable, CaseIterable {
 @MainActor
 final class StatusLineMonitor {
     private static var codexHookScriptReferenceCounts: [String: Int] = [:]
+
     enum ClaudeLifecycle { case unknown, working, stopped }
     enum CursorLifecycle { case unknown, working, stopped }
+    enum CodexLifecycle { case unknown, working, stopped }
 
     private(set) var currentData: StatusLineData?
+    private(set) var prTrackingStatus: PRTrackingStatus = .loading
     private(set) var claudeLifecycle: ClaudeLifecycle = .unknown
     private(set) var cursorLifecycle: CursorLifecycle = .unknown
+    private(set) var codexLifecycle: CodexLifecycle = .unknown
     var isClaudeWorking: Bool { claudeLifecycle == .working }
     var isClaudeStopped: Bool { claudeLifecycle == .stopped }
     var isCursorWorking: Bool { cursorLifecycle == .working }
     var isCursorStopped: Bool { cursorLifecycle == .stopped }
+    var isCodexWorking: Bool { codexLifecycle == .working }
+    var isCodexStopped: Bool { codexLifecycle == .stopped }
     private(set) var isOpenCodeWorking = false
 
     private let paneID: UUID
@@ -70,7 +76,13 @@ final class StatusLineMonitor {
     private var lastAttentionPayloadFingerprint: Int?
     private var retainsCodexHookScript = false
     private var pendingStopWork: DispatchWorkItem?
+    private var pendingCodexCompletionWork: DispatchWorkItem?
+    private var codexCompletionGeneration = 0
+    private var codexBoundSessionID: String?
+    private var codexForegroundTurnID: String?
+    private var codexHasActiveForegroundTurn = false
     private var hasConfirmedBackgroundWork = false
+    private var codexLifecycleGeneration = 0
     var stopNotificationGracePeriod: TimeInterval = 1.8
     private var agnosticProvider: (any StatusLineDataProvider)?
     private var gitDiffTimer: Timer?
@@ -87,9 +99,13 @@ final class StatusLineMonitor {
 
     var onClaudeHookAttention: ((PaneAttentionEvent) -> Void)?
     var onClaudeStopped: (() -> Void)?
+    var onCodexStopped: (() -> Void)?
+    var onCodexAttention: ((PaneAttentionEvent) -> Void)?
+    var onCodexAttentionResolved: ((NotificationKind) -> Void)?
     var onOpencodeStopped: (() -> Void)?
     var onOpencodeActivityChanged: ((Bool) -> Void)?
     var onOpencodeSessionBound: ((String) -> Void)?
+    var onCodexSessionBound: ((String, String?) -> Void)?
     var onOpencodePermissionReplied: (() -> Void)?
     var onOpencodePortRaceLost: (() -> Void)?
     var onPRMerged: ((_ prNumber: Int, _ prTitle: String) -> Void)?
@@ -111,6 +127,8 @@ final class StatusLineMonitor {
         opencodeSessionID: String? = nil,
         opencodeEnvironment: [String: String] = [:],
         codexAdapter: CodexCompatibilityAdapter? = nil,
+        codexShell: String? = nil,
+        codexEnvironment: [String: String] = [:],
         customFieldEnvironment: [String: String] = [:]
     ) {
         self.paneID = paneID
@@ -157,7 +175,8 @@ final class StatusLineMonitor {
                 harness: harness,
                 processStartTime: processStartTime,
                 launchArgs: [],
-                environment: [:],
+                environment: codexEnvironment,
+                codexShell: codexShell,
                 detectedHarnessVersion: nil,
                 codexHookRecordPath: nil,
                 opencodePort: opencodePort,
@@ -177,7 +196,45 @@ final class StatusLineMonitor {
                     workingDirectory: cwd, paneID: paneID, processStartTime: processStartTime,
                     paneName: self.paneName, tabID: tabID, tabName: tabName)
             } else if harness == .codex, let providerContext {
-                provider = CodexStatusProvider(context: providerContext)
+                let codexProvider = CodexStatusProvider(context: providerContext)
+                if codexProvider.supportsForegroundLifecycle {
+                    let lifecycleGeneration = codexLifecycleGeneration
+                    codexProvider.onActivityChanged = { [weak self] isWorking in
+                        Task { @MainActor in
+                            guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
+                            self.codexLifecycle = isWorking ? .working : .stopped
+                        }
+                    }
+                    codexProvider.onHookRecords = { [weak self] records in
+                        Task { @MainActor in
+                            self?.handleCodexHookRecords(records)
+                        }
+                    }
+                    codexProvider.onHookFailure = { [weak self] in
+                        Task { @MainActor in
+                            self?.cancelCodexCompletion(reason: "hook_failure")
+                        }
+                    }
+                    codexProvider.onAttention = { [weak self] event in
+                        self?.onCodexAttention?(event)
+                    }
+                    codexProvider.onAttentionResolved = { [weak self] kind in
+                        self?.onCodexAttentionResolved?(kind)
+                    }
+                }
+                codexProvider.onSessionBound = { [weak self] id, transcriptPath in
+                    self?.bindCodexSession(id)
+                    guard let self else { return }
+                    TracingService.shared.record(
+                        "statusline.codex.session.bound.received",
+                        attributes: [
+                            "pane.name": self.paneName, "pane.id": self.paneID.uuidString,
+                            "tab.id": self.tabID.uuidString, "tab.name": self.tabName,
+                            "session_id_prefix": String(id.prefix(12)),
+                        ])
+                    self.onCodexSessionBound?(id, transcriptPath)
+                }
+                provider = codexProvider
             } else if harness == .opencode, let providerContext {
                 let opencodeProvider = OpenCodeStatusProvider(context: providerContext)
                 opencodeProvider.onActivityChanged = { [weak self] isWorking in
@@ -258,6 +315,55 @@ final class StatusLineMonitor {
     }
 
     func start() {
+        if let cwd = workingDirectory {
+            Task { [weak self] in
+                guard let self else { return }
+                if let stats = await GitDiffStats.compute(in: cwd) {
+                    await MainActor.run {
+                        self.cachedGitStats = stats
+                        if var data = self.currentData {
+                            self.applyI3Enforcement(to: &data)
+                            self.currentData = data
+                        }
+                    }
+                }
+            }
+            Task { [weak self] in
+                guard let self else { return }
+                let identity = await Self.fetchRepoIdentity(workingDirectory: cwd)
+                await MainActor.run {
+                    self.cachedRepoIdentity = identity
+                    if self.currentData == nil { self.currentData = .empty() }
+                    self.currentData?.repo = identity
+                    TracingService.shared.record(
+                        "statusline.repository.identity",
+                        attributes: [
+                            "pane.name": self.paneName,
+                            "pane.id": self.paneID.uuidString,
+                            "tab.id": self.tabID.uuidString,
+                            "tab.name": self.tabName,
+                            "harness": self.harness.rawValue,
+                            "result": identity == nil ? "unavailable" : "resolved",
+                        ])
+                }
+            }
+            gitDiffTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                Task { [weak self] in
+                    guard let self else { return }
+                    if let stats = await GitDiffStats.compute(in: cwd) {
+                        await MainActor.run {
+                            self.cachedGitStats = stats
+                            if var data = self.currentData {
+                                self.applyI3Enforcement(to: &data)
+                                self.currentData = data
+                            }
+                        }
+                    }
+                    await MainActor.run { self.checkPayloadFreshness() }
+                }
+            }
+        }
         if isClaude {
             writeSettingsFile()
             TracingService.shared.record(
@@ -310,26 +416,6 @@ final class StatusLineMonitor {
             }
             hookLogWatcher?.start()
 
-            if let cwd = workingDirectory {
-                Task { [weak self] in
-                    guard let self else { return }
-                    if let stats = await GitDiffStats.compute(in: cwd) {
-                        await MainActor.run { self.cachedGitStats = stats }
-                    }
-                }
-                startRepoIdentityFetch(cwd: cwd)
-                gitDiffTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
-                    guard let self else { return }
-                    Task { [weak self] in
-                        guard let self else { return }
-                        if let stats = await GitDiffStats.compute(in: cwd) {
-                            await MainActor.run { self.cachedGitStats = stats }
-                        }
-                        await MainActor.run { self.checkPayloadFreshness() }
-                    }
-                }
-            }
-
             stopAttentionWatcher()
             FileManager.default.createFile(
                 atPath: attentionSignalFilePath, contents: nil, attributes: [.posixPermissions: 0o600])
@@ -355,16 +441,19 @@ final class StatusLineMonitor {
                 isActive: true,
                 paneName: paneName,
                 tabID: tabID,
-                tabName: tabName
-            ) { [weak self] pr in
-                guard let self else { return }
-                if self.currentData == nil {
-                    self.currentData = .empty(pr: pr)
-                } else {
-                    self.currentData?.pr = pr
-                }
-                self.checkForPRResolutionTransition(pr)
-            }
+                tabName: tabName,
+                onPRStatus: { [weak self] status in
+                    self?.prTrackingStatus = status
+                },
+                onPRData: { [weak self] pr in
+                    guard let self else { return }
+                    if self.currentData == nil {
+                        self.currentData = .empty(pr: pr)
+                    } else {
+                        self.currentData?.pr = pr
+                    }
+                    self.checkForPRResolutionTransition(pr)
+                })
         }
     }
 
@@ -393,6 +482,8 @@ final class StatusLineMonitor {
         hasConfirmedBackgroundWork = false
         pendingStopWork?.cancel()
         pendingStopWork = nil
+        cancelCodexCompletion(reason: "teardown")
+        codexLifecycleGeneration += 1
         agnosticProvider?.stop()
         if !isClaude {
             TracingService.shared.record(
@@ -401,9 +492,16 @@ final class StatusLineMonitor {
         }
         agnosticProvider = nil
         cursorLifecycle = .unknown
+        codexLifecycle = .unknown
+        codexBoundSessionID = nil
+        codexForegroundTurnID = nil
+        codexHasActiveForegroundTurn = false
         PRTrackingCoordinator.shared.unsubscribe(paneID: paneID)
         lastKnownPRState = nil
         onOpencodeStopped = nil
+        onCodexStopped = nil
+        onCodexAttention = nil
+        onCodexAttentionResolved = nil
         onOpencodePermissionReplied = nil
         hasFiredResolutionNotification = false
         try? FileManager.default.removeItem(atPath: filePath)
@@ -653,10 +751,27 @@ final class StatusLineMonitor {
         }
         merged.repo = cachedRepoIdentity
         merged.customFields = cachedCustomFieldValues
+        applyI1Enforcement(to: &merged)
+        applyI3Enforcement(to: &merged)
         currentData = merged
+        var attributes = providerTraceAttributes(providerName: providerName)
+        attributes["has_model"] = merged.model == nil ? "false" : "true"
+        attributes["has_context"] = merged.contextWindow?.usedPercentage == nil ? "false" : "true"
+        attributes["has_context_size"] = merged.contextWindow?.contextWindowSize == nil ? "false" : "true"
+        attributes["has_input_tokens"] = merged.contextWindow?.totalInputTokens == nil ? "false" : "true"
+        attributes["has_output_tokens"] = merged.contextWindow?.totalOutputTokens == nil ? "false" : "true"
+        attributes["has_tokens"] =
+            merged.contextWindow?.totalInputTokens == nil && merged.contextWindow?.totalOutputTokens == nil
+            ? "false" : "true"
+        attributes["has_rate_limits"] = merged.rateLimits == nil ? "false" : "true"
+        attributes["has_five_hour_rate_limit"] = merged.rateLimits?.fiveHour == nil ? "false" : "true"
+        attributes["has_seven_day_rate_limit"] = merged.rateLimits?.sevenDay == nil ? "false" : "true"
+        attributes["has_worktree"] = merged.worktree == nil ? "false" : "true"
+        attributes["has_repo"] = merged.repo == nil ? "false" : "true"
+        attributes["has_version"] = merged.version == nil ? "false" : "true"
         TracingService.shared.record(
             "statusline.provider.update_applied",
-            attributes: providerTraceAttributes(providerName: providerName))
+            attributes: attributes)
     }
 
     private func providerTraceAttributes(providerName: String) -> [String: String] {
@@ -836,6 +951,82 @@ final class StatusLineMonitor {
         }
         pendingStopWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + stopNotificationGracePeriod, execute: work)
+    }
+
+    func bindCodexSession(_ sessionID: String) {
+        if let previousID = codexBoundSessionID, previousID != sessionID {
+            cancelCodexCompletion(reason: "conversation_changed")
+            codexForegroundTurnID = nil
+            codexHasActiveForegroundTurn = false
+        }
+        codexBoundSessionID = sessionID
+    }
+
+    func handleCodexHookRecords(_ records: [CodexHookQueueRecord]) {
+        for record in records {
+            guard !record.isDelegated else { continue }
+            switch record.hookEventName {
+            case "UserPromptSubmit":
+                if let sessionID = record.sessionID, codexBoundSessionID != sessionID {
+                    bindCodexSession(sessionID)
+                }
+                onCodexAttentionResolved?(.codexPermissionRequest)
+                onCodexAttentionResolved?(.codexQuestion)
+                cancelCodexCompletion(reason: "new_turn")
+                codexForegroundTurnID = record.turnID
+                codexHasActiveForegroundTurn = true
+            case "Interrupt":
+                guard record.sessionID == codexBoundSessionID,
+                    record.turnID == codexForegroundTurnID
+                else { continue }
+                cancelCodexCompletion(reason: "interrupted")
+                codexForegroundTurnID = nil
+                codexHasActiveForegroundTurn = false
+            case "Stop":
+                guard record.sessionID == codexBoundSessionID,
+                    codexHasActiveForegroundTurn,
+                    record.turnID == codexForegroundTurnID
+                else { continue }
+                guard pendingCodexCompletionWork == nil else { continue }
+                codexCompletionGeneration += 1
+                let generation = codexCompletionGeneration
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self, self.codexCompletionGeneration == generation,
+                        self.pendingCodexCompletionWork != nil
+                    else { return }
+                    self.pendingCodexCompletionWork = nil
+                    self.recordCodexCompletion(phase: "delivered", reason: "foreground_stop")
+                    self.onCodexStopped?()
+                }
+                pendingCodexCompletionWork = work
+                recordCodexCompletion(phase: "scheduled", reason: "foreground_stop")
+                DispatchQueue.main.asyncAfter(deadline: .now() + stopNotificationGracePeriod, execute: work)
+                codexHasActiveForegroundTurn = false
+            default:
+                break
+            }
+        }
+    }
+
+    private func cancelCodexCompletion(reason: String) {
+        guard let work = pendingCodexCompletionWork else { return }
+        work.cancel()
+        pendingCodexCompletionWork = nil
+        codexCompletionGeneration += 1
+        recordCodexCompletion(phase: "canceled", reason: reason)
+    }
+
+    private func recordCodexCompletion(phase: String, reason: String) {
+        TracingService.shared.record(
+            "statusline.codex.completion",
+            attributes: [
+                "pane.id": paneID.uuidString,
+                "pane.name": paneName,
+                "tab.id": tabID.uuidString,
+                "tab.name": tabName,
+                "phase": phase,
+                "reason": reason,
+            ])
     }
 
     private func stopAttentionWatcher() {
@@ -1151,15 +1342,6 @@ extension StatusLineMonitor {
         cachedGitStats = stats
     }
 
-    private func startRepoIdentityFetch(cwd: String) {
-        Task { [weak self] in
-            guard let self else { return }
-            if let identity = await Self.fetchRepoIdentity(workingDirectory: cwd) {
-                await MainActor.run { self.cachedRepoIdentity = identity }
-            }
-        }
-    }
-
     static func fetchRepoIdentity(workingDirectory: String) async -> StatusLineData.Repo? {
         await withCheckedContinuation { continuation in
             let task = Process()
@@ -1337,7 +1519,7 @@ extension StatusLineMonitor {
                 "turn_id": bounded(payload.get("turn_id")),
                 "request_id": bounded(payload.get("request_id")),
                 "timestamp": time.time(),
-                "source": bounded(payload.get("source"), 64) or "hook",
+                "source": "subagent" if payload.get("agent_id") else bounded(payload.get("source"), 64) or "hook",
                 "model": bounded(payload.get("model"), 128),
                 "transcript_path": bounded(payload.get("transcript_path"), 1024),
                 "result": "interrupted" if hook_event_name == "Interrupt" else None

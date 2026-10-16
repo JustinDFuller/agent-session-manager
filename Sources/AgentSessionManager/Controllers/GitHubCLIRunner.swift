@@ -16,6 +16,20 @@ enum GitHubCLIFailure: String, Sendable, Equatable {
     case parse
 }
 
+enum PRTrackingStatus: Equatable {
+    case loading
+    case current
+    case noPullRequest
+    case unavailable
+    case disabled
+    case failed(GitHubCLIFailure)
+
+    var isStale: Bool {
+        if case .failed = self { return true }
+        return false
+    }
+}
+
 struct GitHubCLIResult: Sendable {
     let stdout: Data
     let stderrPrefix: String
@@ -32,10 +46,12 @@ final class GitHubCLIRunner: GitHubCLIRunning, @unchecked Sendable {
 
     private let environment: [String: String]
     private let fileManager: FileManager
+    private let shell: String?
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        shell: String? = nil
     ) {
         self.environment = Dictionary(
             uniqueKeysWithValues: ProcessEnvironment.sanitize(environment.map { "\($0.key)=\($0.value)" })
@@ -44,10 +60,19 @@ final class GitHubCLIRunner: GitHubCLIRunning, @unchecked Sendable {
                     return (String(entry[..<index]), String(entry[entry.index(after: index)...]))
                 })
         self.fileManager = fileManager
+        self.shell = shell
     }
 
     func run(arguments: [String], stdin: Data? = nil, timeout: TimeInterval) async -> GitHubCLIResult {
-        guard let executable = Self.resolveExecutable(environment: environment, fileManager: fileManager) else {
+        let shellEnvironment = GitHubShellEnvironmentResolver.resolve(
+            shell: shell ?? SettingsPersistence.configuredShell(),
+            baseEnvironment: environment
+        )
+        TracingService.shared.record(
+            "pr.shell.environment",
+            attributes: ["result": shellEnvironment == nil ? "inherited_fallback" : "resolved"])
+        let resolvedEnvironment = shellEnvironment ?? environment
+        guard let executable = Self.resolveExecutable(environment: resolvedEnvironment, fileManager: fileManager) else {
             return GitHubCLIResult(
                 stdout: Data(), stderrPrefix: "", exitCode: nil, failure: .missingExecutable,
                 inputFailure: nil)
@@ -55,7 +80,7 @@ final class GitHubCLIRunner: GitHubCLIRunning, @unchecked Sendable {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
-        var childEnvironment = environment
+        var childEnvironment = resolvedEnvironment
         childEnvironment["GH_PROMPT_DISABLED"] = "1"
         process.environment = childEnvironment
         let stdout = Pipe()
@@ -165,8 +190,8 @@ final class GitHubCLIRunner: GitHubCLIRunning, @unchecked Sendable {
     nonisolated static func resolveExecutable(
         environment: [String: String], fileManager: FileManager = .default
     ) -> URL? {
-        if let configured = environment["GH_PATH"], isExecutable(configured, fileManager: fileManager) {
-            return URL(filePath: configured)
+        if let configured = environment["GH_PATH"], !configured.isEmpty {
+            return isExecutable(configured, fileManager: fileManager) ? URL(filePath: configured) : nil
         }
         for directory in (environment["PATH"] ?? "").split(separator: ":") {
             let candidate = (String(directory) as NSString).appendingPathComponent("gh")
@@ -187,6 +212,7 @@ final class GitHubCLIRunner: GitHubCLIRunning, @unchecked Sendable {
         if exitCode == 4 { return .authentication }
         if exitCode == 2 { return .cancelled }
         let lower = stderr.lowercased()
+        if lower.contains("bad credentials") || lower.contains("http 401") { return .authentication }
         if [
             "no such host", "network is unreachable", "connection refused", "connection reset", "tls", "x509",
             "timeout",

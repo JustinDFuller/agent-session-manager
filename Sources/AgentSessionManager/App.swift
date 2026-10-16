@@ -363,6 +363,7 @@ struct ContentView: View {
                     appSettings.alwaysShowNotificationsSidebar = config.alwaysShowNotificationsSidebar
                     appSettings.isClaudeStopNotificationEnabled = config.isClaudeStopNotificationEnabled
                     appSettings.isOpencodeStopNotificationEnabled = config.isOpencodeStopNotificationEnabled
+                    appSettings.isCodexCompletionNotificationEnabled = config.isCodexCompletionNotificationEnabled
                 }
                 if let config = SettingsPersistence.load(RestartConfig.self, from: "restart-settings.json") {
                     appSettings.continueOnRestart = config.continueOnRestart

@@ -24,9 +24,11 @@ struct TabButtonView: View {
                                         processState: pane.terminalController?.processState,
                                         isWorking: (pane.statusLineMonitor?.isClaudeWorking ?? false)
                                             || (pane.statusLineMonitor?.isCursorWorking ?? false)
-                                            || (pane.statusLineMonitor?.isOpenCodeWorking ?? false),
+                                            || (pane.statusLineMonitor?.isOpenCodeWorking ?? false)
+                                            || (pane.statusLineMonitor?.isCodexWorking ?? false),
                                         isStopped: (pane.statusLineMonitor?.isClaudeStopped ?? false)
-                                            || (pane.statusLineMonitor?.isCursorStopped ?? false),
+                                            || (pane.statusLineMonitor?.isCursorStopped ?? false)
+                                            || (pane.statusLineMonitor?.isCodexStopped ?? false),
                                         sessionState: pane.statusLineMonitor?.currentData?.sessionStatus?.state,
                                         hasNotification: tabPaneIDs.contains(pane.id)
                                             && appState.notifications.contains {

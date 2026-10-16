@@ -173,6 +173,10 @@ struct CodexHookQueueRecord: Codable, Equatable, Sendable {
     let transcriptPath: String?
     let result: String?
 
+    var isDelegated: Bool {
+        ["delegated", "subagent"].contains(source.lowercased())
+    }
+
     enum CodingKeys: String, CodingKey {
         case paneID = "pane_id"
         case tabID = "tab_id"

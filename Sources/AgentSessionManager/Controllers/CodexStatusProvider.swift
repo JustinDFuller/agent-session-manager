@@ -11,6 +11,7 @@ struct StatusProviderContext {
     let processStartTime: Date
     let launchArgs: [String]
     let environment: [String: String]
+    let codexShell: String?
     let detectedHarnessVersion: String?
     let codexHookRecordPath: String?
     let codexHookQueuePath: String?
@@ -31,6 +32,7 @@ struct StatusProviderContext {
         processStartTime: Date,
         launchArgs: [String],
         environment: [String: String],
+        codexShell: String? = nil,
         detectedHarnessVersion: String?,
         codexHookRecordPath: String?,
         opencodePort: Int?,
@@ -50,6 +52,7 @@ struct StatusProviderContext {
         self.processStartTime = processStartTime
         self.launchArgs = launchArgs
         self.environment = environment
+        self.codexShell = codexShell
         self.detectedHarnessVersion = detectedHarnessVersion
         self.codexHookRecordPath = codexHookRecordPath
         self.codexHookQueuePath = codexHookQueuePath
@@ -86,6 +89,7 @@ struct CodexHookSessionRecord: Codable, Equatable {
 
 struct CodexThreadState: Equatable {
     let id: String
+    let cwd: String?
     let rolloutPath: String?
     let model: String?
     let cliVersion: String?
@@ -101,6 +105,30 @@ struct CodexThreadSelection: Equatable {
     let thread: CodexThreadState?
     let candidateCount: Int
     let freshCandidateCount: Int
+}
+
+enum CodexTranscriptAttentionEvent: Equatable {
+    case questionRequested(callID: String)
+    case questionResolved(callID: String)
+
+    static func parseLine(_ data: Data) -> CodexTranscriptAttentionEvent? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            object["type"] as? String == "response_item",
+            let payload = object["payload"] as? [String: Any],
+            let type = payload["type"] as? String,
+            let callID = payload["call_id"] as? String,
+            !callID.isEmpty
+        else { return nil }
+        if type == "function_call",
+            ["request_user_input", "functions.request_user_input"].contains(payload["name"] as? String ?? "")
+        {
+            return .questionRequested(callID: callID)
+        }
+        if type == "function_call_output" {
+            return .questionResolved(callID: callID)
+        }
+        return nil
+    }
 }
 
 private struct CodexThreadRank {
@@ -123,8 +151,16 @@ enum CodexVersionAdapter {
 final class CodexStateStore {
     let databaseURL: URL
 
-    init(databaseURL: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".codex/state_5.sqlite")) {
+    init(databaseURL: URL = CodexHomeResolver.databaseURL(shell: ShellResolver.detectedLoginShell())) {
         self.databaseURL = databaseURL
+    }
+
+    convenience init(context: StatusProviderContext) {
+        self.init(
+            databaseURL: CodexHomeResolver.databaseURL(
+                shell: context.codexShell ?? ShellResolver.detectedLoginShell(),
+                workingDirectory: context.workingDirectory,
+                environment: context.environment))
     }
 
     func selectThread(sessionID: String, rolloutPath: String?) throws -> CodexThreadState? {
@@ -157,6 +193,7 @@ final class CodexStateStore {
 
         let selectedColumns = [
             "id",
+            "cwd",
             columns.contains("rollout_path") ? "rollout_path" : "NULL AS rollout_path",
             columns.contains("model") ? "model" : "NULL AS model",
             columns.contains("cli_version") ? "cli_version" : "NULL AS cli_version",
@@ -190,10 +227,10 @@ final class CodexStateStore {
         }
 
         guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
-        let archivedValue = optionalInt(statement, 8) ?? 0
-        let archivedText = text(statement, 8)?.lowercased()
-        let archivedAtMs = optionalInt64(statement, 9)
-        let archivedAt = text(statement, 10)
+        let archivedValue = optionalInt(statement, 9) ?? 0
+        let archivedText = text(statement, 9)?.lowercased()
+        let archivedAtMs = optionalInt64(statement, 10)
+        let archivedAt = text(statement, 11)
         let isArchived =
             archivedValue != 0
             || archivedText == "true"
@@ -202,13 +239,14 @@ final class CodexStateStore {
             || archivedAt != nil
         return CodexThreadState(
             id: text(statement, 0) ?? "",
-            rolloutPath: text(statement, 1),
-            model: text(statement, 2),
-            cliVersion: CodexVersionAdapter.normalize(text(statement, 3)),
-            tokensUsed: optionalInt(statement, 4),
-            gitBranch: text(statement, 5),
-            createdAtMs: optionalInt64(statement, 6),
-            updatedAtMs: optionalInt64(statement, 7),
+            cwd: text(statement, 1),
+            rolloutPath: text(statement, 2),
+            model: text(statement, 3),
+            cliVersion: CodexVersionAdapter.normalize(text(statement, 4)),
+            tokensUsed: optionalInt(statement, 5),
+            gitBranch: text(statement, 6),
+            createdAtMs: optionalInt64(statement, 7),
+            updatedAtMs: optionalInt64(statement, 8),
             isArchived: isArchived,
             candidateCount: 1
         )
@@ -239,6 +277,8 @@ enum CodexStateStoreError: Error, Equatable {
 }
 
 struct CodexRolloutParser {
+    private static let baselineTokenCount = 12_000
+
     static func parseLine(
         _ data: Data,
         expectedCWD: String,
@@ -270,6 +310,30 @@ struct CodexRolloutParser {
                 sessionName: nil,
                 version: CodexVersionAdapter.normalize(
                     payload?["cli_version"] as? String ?? object["cli_version"] as? String),
+                exceeds200kTokens: nil,
+                pr: nil,
+                sessionStatus: nil
+            )
+        }
+
+        if type == "turn_context", case .current = adapter,
+            let payload = object["payload"] as? [String: Any],
+            let model = payload["model"] as? String
+        {
+            return StatusLineData(
+                model: StatusLineData.Model(id: model, displayName: model),
+                cost: nil,
+                contextWindow: nil,
+                rateLimits: nil,
+                worktree: nil,
+                workspace: nil,
+                effort: nil,
+                thinking: nil,
+                agent: nil,
+                outputStyle: nil,
+                vim: nil,
+                sessionName: nil,
+                version: nil,
                 exceeds200kTokens: nil,
                 pr: nil,
                 sessionStatus: nil
@@ -323,19 +387,23 @@ struct CodexRolloutParser {
             ?? (int(lastUsage?["input_tokens"]) ?? int(lastUsage?["total_input_tokens"])).flatMap { lastInput in
                 (int(lastUsage?["output_tokens"]) ?? int(lastUsage?["total_output_tokens"])).map { lastInput + $0 }
             }
-        let usedPct = contextWindow.flatMap { window -> Int? in
-            guard window > 0, let contextTokens else { return nil }
-            let raw = Int((Double(contextTokens) / Double(window)) * 100)
-            return min(100, max(0, raw))
+        let remainingPct = contextWindow.flatMap { window -> Int? in
+            guard let contextTokens else { return nil }
+            guard window > baselineTokenCount else { return 0 }
+            let effectiveWindow = window - baselineTokenCount
+            let used = contextTokens > baselineTokenCount ? contextTokens - baselineTokenCount : 0
+            let remaining = effectiveWindow > used ? effectiveWindow - used : 0
+            return Int((Double(remaining) / Double(effectiveWindow) * 100).rounded(.toNearestOrAwayFromZero))
         }
-        let remainingPct = usedPct.map { min(100, max(0, 100 - $0)) }
+        let usedPct = remainingPct.map { 100 - $0 }
         let model = payload["model"] as? String ?? info?["model"] as? String
 
         let rawRateLimits = payload["rate_limits"] as? [String: Any]
         let rateLimits = rawRateLimits.map {
             StatusLineData.RateLimits(
                 fiveHour: rate($0["primary"] as? [String: Any], expectedWindowMinutes: 300),
-                sevenDay: rate($0["secondary"] as? [String: Any], expectedWindowMinutes: 10_080))
+                sevenDay: rate($0["secondary"] as? [String: Any], expectedWindowMinutes: 10_080),
+                bucketID: $0["limit_id"] as? String ?? "codex")
         }
 
         return StatusLineData(
@@ -392,6 +460,8 @@ final class CodexRolloutTailer {
     let expectedCWD: String
     let adapter: CodexCompatibilityAdapter
     var onUpdate: ((StatusLineData) -> Void)?
+    var onAttention: ((CodexTranscriptAttentionEvent) -> Void)?
+    var onUnavailable: (() -> Void)?
     var onTrace: ((String, [String: String]) -> Void)?
     private var watcher: FileSystemEventWatcher?
     private var offset: UInt64 = 0
@@ -432,6 +502,7 @@ final class CodexRolloutTailer {
                     onTrace?(
                         "statusline.codex.tailer_attachment",
                         ["result": "waiting", "errno": String(openError)])
+                    onUnavailable?()
                 case .recovered:
                     onTrace?("statusline.codex.tailer_attachment", ["result": "recovered"])
                 case .stopped:
@@ -448,7 +519,11 @@ final class CodexRolloutTailer {
     }
 
     private func readNewLines(catchUp: Bool) {
-        guard let handle = FileHandle(forReadingAtPath: rolloutPath) else { return }
+        guard let handle = FileHandle(forReadingAtPath: rolloutPath) else {
+            onTrace?("statusline.codex.tailer_read", ["result": "unreadable"])
+            onUnavailable?()
+            return
+        }
         defer { try? handle.close() }
         do {
             let fileSize = try handle.seekToEnd()
@@ -483,11 +558,19 @@ final class CodexRolloutTailer {
             for line in lines {
                 lineCount += 1
                 guard line.count <= 64 * 1024 else { continue }
+                guard (try? JSONSerialization.jsonObject(with: Data(line))) != nil else {
+                    onTrace?("statusline.codex.tailer_read", ["result": "malformed_record"])
+                    onUnavailable?()
+                    continue
+                }
                 if let update = CodexRolloutParser.parseLine(
                     Data(line), expectedCWD: expectedCWD, adapter: adapter)
                 {
                     updateCount += 1
                     onUpdate?(update)
+                }
+                if let attention = CodexTranscriptAttentionEvent.parseLine(Data(line)) {
+                    onAttention?(attention)
                 }
             }
             onTrace?(
@@ -497,7 +580,10 @@ final class CodexRolloutTailer {
                     "update_count": "\(updateCount)",
                     "catch_up": catchUp ? "true" : "false",
                 ])
-        } catch {}
+        } catch {
+            onTrace?("statusline.codex.tailer_read", ["result": "unreadable"])
+            onUnavailable?()
+        }
     }
 }
 
@@ -505,33 +591,45 @@ final class CodexRolloutTailer {
 final class CodexStatusProvider: StatusLineDataProvider {
     var onUpdate: ((StatusLineData) -> Void)?
     var onAttention: ((PaneAttentionEvent) -> Void)?
+    var onAttentionResolved: ((NotificationKind) -> Void)?
     var onHookRecords: (([CodexHookQueueRecord]) -> Void)?
+    var onHookFailure: (() -> Void)?
+    var onActivityChanged: ((Bool) -> Void)?
+    var onSessionBound: ((String, String?) -> Void)?
     private(set) var pendingHookRecords: [CodexHookQueueRecord] = []
 
     private let context: StatusProviderContext
     private let adapter: CodexCompatibilityAdapter
+    var supportsForegroundLifecycle: Bool {
+        adapter.hookEvents.contains("UserPromptSubmit") && adapter.hookEvents.contains("Stop")
+    }
     private let stateStore: CodexStateStore
     private let startupRetryInterval: TimeInterval
     private let startupTimeout: TimeInterval
     private let baseline: ToolAgnosticDataProvider
     private var tailer: CodexRolloutTailer?
+    private var tailerSessionID: String?
     private var stateTask: Task<Void, Never>?
+    private var enrichmentTask: Task<Void, Never>?
     private var hookDiagnosticTask: Task<Void, Never>?
     private var latestHarnessData: StatusLineData?
     private var latestBaselineData: StatusLineData?
+    private var quotaSnapshotsByBucket: [String: StatusLineData.RateLimits] = [:]
     private var boundSessionID: String?
     private var boundTranscriptPath: String?
-    private var lastHookWriterDiagnostic: String?
+    private var hasTranscriptUpdateForBoundSession = false
+    private var foregroundTurnIsWorking: Bool?
+    private var pendingQuestionCallIDs = Set<String>()
 
     init(
         context: StatusProviderContext,
-        stateStore: CodexStateStore = CodexStateStore(),
+        stateStore: CodexStateStore? = nil,
         startupRetryInterval: TimeInterval = 0.5,
         startupTimeout: TimeInterval = 15
     ) {
         self.context = context
         self.adapter = context.codexAdapter ?? CodexCompatibilityAdapter.select(context.detectedHarnessVersion)
-        self.stateStore = stateStore
+        self.stateStore = stateStore ?? CodexStateStore(context: context)
         self.startupRetryInterval = startupRetryInterval
         self.startupTimeout = startupTimeout
         self.baseline = ToolAgnosticDataProvider(
@@ -630,11 +728,37 @@ final class CodexStatusProvider: StatusLineDataProvider {
                         && $0.tabID == context.tabID.uuidString
                         && (context.codexLaunchGeneration == nil
                             || $0.launchGeneration == context.codexLaunchGeneration)
+                        && !$0.isDelegated
                         && adapter.hookEvents.contains($0.hookEventName)
                 }
                 if !validRecords.isEmpty {
                     pendingHookRecords.append(contentsOf: validRecords)
                     onHookRecords?(validRecords)
+                    for record in validRecords {
+                        if record.hookEventName == "UserPromptSubmit" {
+                            pendingQuestionCallIDs.removeAll()
+                        }
+                        let nextWorkingState: Bool?
+                        switch record.hookEventName {
+                        case "UserPromptSubmit": nextWorkingState = true
+                        case "Stop", "Interrupt": nextWorkingState = false
+                        default: nextWorkingState = nil
+                        }
+                        if let nextWorkingState, foregroundTurnIsWorking != nextWorkingState {
+                            foregroundTurnIsWorking = nextWorkingState
+                            trace(
+                                "statusline.codex.activity.changed",
+                                attributes: [
+                                    "pane.id": context.paneID.uuidString,
+                                    "pane.name": context.paneName,
+                                    "tab.id": context.tabID.uuidString,
+                                    "tab.name": context.tabName,
+                                    "state": nextWorkingState ? "working" : "stopped",
+                                    "hook_event_name": record.hookEventName,
+                                ])
+                            onActivityChanged?(nextWorkingState)
+                        }
+                    }
                 }
                 for queuedRecord in candidateRecords where !validRecords.contains(queuedRecord) {
                     trace(
@@ -642,7 +766,9 @@ final class CodexStatusProvider: StatusLineDataProvider {
                         attributes: [
                             "reason": queuedRecord.paneID != context.paneID.uuidString
                                 || queuedRecord.tabID != context.tabID.uuidString
-                                ? "pane_tab_mismatch" : "generation_or_event_mismatch",
+                                ? "pane_tab_mismatch"
+                                : queuedRecord.isDelegated
+                                    ? "delegated_source" : "generation_or_event_mismatch",
                             "hook_event_name": queuedRecord.hookEventName,
                         ])
                 }
@@ -659,12 +785,10 @@ final class CodexStatusProvider: StatusLineDataProvider {
                         transcriptPath: queuedRecord.transcriptPath,
                         hookEventName: queuedRecord.hookEventName,
                         timestamp: queuedRecord.timestamp)
-                    await bind(record: record, attempt: attempt, lateBound: lateBound)
-                    await startBoundTailerOrEnrichment(
-                        record: record, deadline: Date().addingTimeInterval(startupTimeout))
-                    return
-                }
-                if let hookRecordPath = context.codexHookRecordPath, let record = readHookRecord(path: hookRecordPath) {
+                    bind(record: record, attempt: attempt, lateBound: lateBound)
+                } else if let hookRecordPath = context.codexHookRecordPath,
+                    let record = readHookRecord(path: hookRecordPath)
+                {
                     guard record.paneID == context.paneID.uuidString, record.tabID == context.tabID.uuidString else {
                         if attempt == 1 || attempt.isMultiple(of: 20) {
                             trace(
@@ -691,10 +815,16 @@ final class CodexStatusProvider: StatusLineDataProvider {
                         _ = await sleepUntilNextRetry(deadline: nil)
                         continue
                     }
-                    await bind(record: record, attempt: attempt, lateBound: lateBound)
-                    await startBoundTailerOrEnrichment(
-                        record: record, deadline: Date().addingTimeInterval(startupTimeout))
-                    return
+                    bind(record: record, attempt: attempt, lateBound: lateBound)
+                }
+
+                for record in validRecords where record.hookEventName == "PermissionRequest" {
+                    guard record.sessionID == boundSessionID else {
+                        trace("statusline.codex.permission.ignored", attributes: ["reason": "session_mismatch"])
+                        continue
+                    }
+                    onAttention?(.codexPermissionRequest)
+                    trace("statusline.codex.permission.attention", attributes: ["result": "requested"])
                 }
 
                 if attempt == 1 || attempt.isMultiple(of: 20) || (lateBound && !didTraceLateWaiting) {
@@ -724,11 +854,14 @@ final class CodexStatusProvider: StatusLineDataProvider {
     func stop() {
         stateTask?.cancel()
         stateTask = nil
+        enrichmentTask?.cancel()
+        enrichmentTask = nil
         hookDiagnosticTask?.cancel()
         hookDiagnosticTask = nil
         baseline.stop()
         tailer?.stop()
         tailer = nil
+        tailerSessionID = nil
     }
 
     private func readAndRecordHookWriterDiagnostic() {
@@ -744,6 +877,7 @@ final class CodexStatusProvider: StatusLineDataProvider {
                     trace(
                         "statusline.codex.hook_queue.write_failed",
                         attributes: ["hook_event_name": record.eventName, "result": record.result])
+                    onHookFailure?()
                 }
             }
         } catch {
@@ -760,68 +894,162 @@ final class CodexStatusProvider: StatusLineDataProvider {
         }
     }
 
-    private func bind(record: CodexHookSessionRecord, attempt: Int, lateBound: Bool) async {
-        boundSessionID = record.sessionID
-        boundTranscriptPath = record.transcriptPath
+    private func bind(record: CodexHookSessionRecord, attempt: Int, lateBound: Bool) {
+        let sessionChanged = boundSessionID != record.sessionID
+        let nextTranscriptPath = record.transcriptPath ?? boundTranscriptPath
+        let transcriptChanged = boundTranscriptPath != nextTranscriptPath
+        if !sessionChanged && !transcriptChanged {
+            if !hasTranscriptUpdateForBoundSession,
+                let model = record.model,
+                latestHarnessData?.model?.id != model
+            {
+                latestHarnessData = mergeHarnessData(
+                    StatusLineData(
+                        model: StatusLineData.Model(id: model, displayName: model),
+                        cost: nil,
+                        contextWindow: nil,
+                        rateLimits: nil,
+                        worktree: nil,
+                        workspace: nil,
+                        effort: nil,
+                        thinking: nil,
+                        agent: nil,
+                        outputStyle: nil,
+                        vim: nil,
+                        sessionName: nil,
+                        version: nil,
+                        exceeds200kTokens: nil,
+                        pr: nil,
+                        sessionStatus: nil))
+                emitMerged()
+            }
+            if attempt == 1 || attempt.isMultiple(of: 20) {
+                trace(
+                    "statusline.codex.binding.unchanged",
+                    attributes: [
+                        "hook_event_name": record.hookEventName,
+                        "session_id_prefix": String(record.sessionID.prefix(12)),
+                        "retry_attempt": "\(attempt)",
+                    ])
+            }
+            return
+        }
+
+        if sessionChanged {
+            enrichmentTask?.cancel()
+            enrichmentTask = nil
+            if tailer != nil {
+                tailer?.stop()
+                tailer = nil
+                tailerSessionID = nil
+                trace("statusline.codex.tailer_detached", attributes: ["reason": "session_changed"])
+            }
+            boundSessionID = record.sessionID
+            boundTranscriptPath = record.transcriptPath
+            hasTranscriptUpdateForBoundSession = false
+            latestHarnessData = nil
+            quotaSnapshotsByBucket = [:]
+            trace(
+                "statusline.codex.binding.facts_cleared",
+                attributes: [
+                    "session_id_prefix": String(record.sessionID.prefix(12)),
+                    "reason": "session_changed",
+                ])
+            onSessionBound?(record.sessionID, record.transcriptPath)
+            trace(
+                "statusline.codex.binding.callback",
+                attributes: [
+                    "session_id_prefix": String(record.sessionID.prefix(12))
+                ])
+        } else {
+            let previousTranscriptPath = boundTranscriptPath
+            boundTranscriptPath = nextTranscriptPath
+            if previousTranscriptPath != nextTranscriptPath, let nextTranscriptPath {
+                onSessionBound?(record.sessionID, nextTranscriptPath)
+            }
+        }
+
+        if let model = record.model {
+            latestHarnessData = mergeHarnessData(
+                StatusLineData(
+                    model: StatusLineData.Model(id: model, displayName: model),
+                    cost: nil,
+                    contextWindow: nil,
+                    rateLimits: nil,
+                    worktree: nil,
+                    workspace: nil,
+                    effort: nil,
+                    thinking: nil,
+                    agent: nil,
+                    outputStyle: nil,
+                    vim: nil,
+                    sessionName: nil,
+                    version: nil,
+                    exceeds200kTokens: nil,
+                    pr: nil,
+                    sessionStatus: nil))
+        }
+        latestHarnessData = mergeHarnessData(
+            StatusLineData(
+                model: nil,
+                cost: nil,
+                contextWindow: nil,
+                rateLimits: nil,
+                worktree: nil,
+                workspace: nil,
+                effort: nil,
+                thinking: nil,
+                agent: nil,
+                outputStyle: nil,
+                vim: nil,
+                sessionName: nil,
+                version: adapter.version,
+                exceeds200kTokens: nil,
+                pr: nil,
+                sessionStatus: nil))
         trace(
-            "statusline.codex.hook_bound",
+            sessionChanged ? "statusline.codex.binding.changed" : "statusline.codex.binding.transcript_updated",
             attributes: [
                 "hook_event_name": record.hookEventName,
                 "retry_attempt": "\(attempt)",
                 "late_bound": String(lateBound),
                 "session_id_prefix": String(record.sessionID.prefix(12)),
-                "transcript_available": record.transcriptPath.map {
+                "transcript_available": boundTranscriptPath.map {
                     FileManager.default.fileExists(atPath: $0) ? "true" : "false"
                 } ?? "false",
             ])
-        let stateData = StatusLineData(
-            model: record.model.map { StatusLineData.Model(id: $0, displayName: $0) },
-            cost: nil,
-            contextWindow: nil,
-            rateLimits: nil,
-            worktree: nil,
-            workspace: nil,
-            effort: nil,
-            thinking: nil,
-            agent: nil,
-            outputStyle: nil,
-            vim: nil,
-            sessionName: nil,
-            version: adapter.version,
-            exceeds200kTokens: nil,
-            pr: nil,
-            sessionStatus: nil)
-        await MainActor.run {
-            self.latestHarnessData = stateData
-            self.emitMerged()
-        }
-    }
+        emitMerged()
 
-    private func startBoundTailerOrEnrichment(record: CodexHookSessionRecord, deadline: Date) async {
-        if let path = record.transcriptPath, FileManager.default.fileExists(atPath: path) {
-            await MainActor.run { self.startTailer(path: path) }
+        if let path = boundTranscriptPath,
+            tailerSessionID != record.sessionID || tailer?.rolloutPath != path
+        {
+            startTailer(path: path, sessionID: record.sessionID)
         }
 
-        var attempt = 0
-        while !Task.isCancelled {
-            attempt += 1
-            do {
-                let thread = try stateStore.selectThread(
-                    sessionID: record.sessionID, rolloutPath: record.transcriptPath)
-                trace(
-                    "statusline.codex.sqlite_enrichment",
-                    attributes: [
-                        "result": thread == nil ? "no_match" : "matched",
-                        "retry_attempt": "\(attempt)",
-                        "session_id_prefix": String(record.sessionID.prefix(12)),
-                        "rollout_path_matched": thread?.rolloutPath == record.transcriptPath ? "true" : "false",
-                    ])
-                if let thread {
-                    let tailerPath = thread.rolloutPath ?? record.transcriptPath
-                    await MainActor.run {
-                        self.latestHarnessData = self.mergeHarnessData(
+        enrichmentTask?.cancel()
+        enrichmentTask = Task { [weak self] in
+            guard let self else { return }
+            let deadline = Date().addingTimeInterval(startupTimeout)
+            var attempt = 0
+            while !Task.isCancelled {
+                attempt += 1
+                do {
+                    let thread = try stateStore.selectThread(
+                        sessionID: record.sessionID, rolloutPath: record.transcriptPath)
+                    trace(
+                        "statusline.codex.sqlite_enrichment",
+                        attributes: [
+                            "result": thread == nil ? "no_match" : "matched",
+                            "retry_attempt": "\(attempt)",
+                            "session_id_prefix": String(record.sessionID.prefix(12)),
+                            "rollout_path_matched": thread?.rolloutPath == record.transcriptPath ? "true" : "false",
+                        ])
+                    guard boundSessionID == record.sessionID else { return }
+                    if let thread {
+                        latestHarnessData = mergeHarnessData(
                             StatusLineData(
-                                model: thread.model.map { StatusLineData.Model(id: $0, displayName: $0) },
+                                model: hasTranscriptUpdateForBoundSession
+                                    ? nil : thread.model.map { StatusLineData.Model(id: $0, displayName: $0) },
                                 cost: nil,
                                 contextWindow: nil,
                                 rateLimits: nil,
@@ -836,26 +1064,26 @@ final class CodexStatusProvider: StatusLineDataProvider {
                                 version: thread.cliVersion,
                                 exceeds200kTokens: nil,
                                 pr: nil,
-                                sessionStatus: nil
-                            ))
-                        self.emitMerged()
-                        if self.tailer == nil, let tailerPath, FileManager.default.fileExists(atPath: tailerPath) {
-                            self.startTailer(path: tailerPath)
+                                sessionStatus: nil))
+                        emitMerged()
+                        if boundTranscriptPath == nil, let tailerPath = thread.rolloutPath {
+                            boundTranscriptPath = tailerPath
+                            startTailer(path: tailerPath, sessionID: record.sessionID)
                         }
+                        return
                     }
-                    if tailer != nil || tailerPath == nil { return }
+                } catch let error as CodexStateStoreError {
+                    trace(
+                        "statusline.codex.sqlite_enrichment",
+                        attributes: ["result": sqliteResult(for: error), "retry_attempt": "\(attempt)"])
+                } catch {
+                    trace(
+                        "statusline.codex.sqlite_enrichment",
+                        attributes: ["result": "unknown", "retry_attempt": "\(attempt)"])
                 }
-            } catch let error as CodexStateStoreError {
-                trace(
-                    "statusline.codex.sqlite_enrichment",
-                    attributes: ["result": sqliteResult(for: error), "retry_attempt": "\(attempt)"])
-            } catch {
-                trace(
-                    "statusline.codex.sqlite_enrichment",
-                    attributes: ["result": "unknown", "retry_attempt": "\(attempt)"])
+                if await sleepUntilNextRetry(deadline: deadline) { continue }
+                return
             }
-            if await sleepUntilNextRetry(deadline: deadline) { continue }
-            return
         }
     }
 
@@ -912,15 +1140,45 @@ final class CodexStatusProvider: StatusLineDataProvider {
         return true
     }
 
-    private func startTailer(path: String) {
+    private func startTailer(path: String, sessionID: String) {
         tailer?.stop()
         let next = CodexRolloutTailer(
             rolloutPath: path, expectedCWD: context.workingDirectory, adapter: adapter)
         next.onTrace = { [weak self] name, attributes in
             self?.trace(name, attributes: attributes)
         }
+        next.onAttention = { [weak self] event in
+            guard let self, self.boundSessionID == sessionID,
+                self.boundTranscriptPath == path, self.tailerSessionID == sessionID,
+                self.tailer?.rolloutPath == path
+            else { return }
+            switch event {
+            case .questionRequested(let callID):
+                guard pendingQuestionCallIDs.insert(callID).inserted else { return }
+                onAttention?(.codexQuestion)
+                trace("statusline.codex.question.attention", attributes: ["result": "requested"])
+            case .questionResolved(let callID):
+                guard pendingQuestionCallIDs.remove(callID) != nil else { return }
+                onAttentionResolved?(.codexQuestion)
+                trace("statusline.codex.question.attention", attributes: ["result": "resolved"])
+            }
+        }
+        next.onUnavailable = { [weak self] in
+            guard let self, self.boundSessionID == sessionID,
+                self.boundTranscriptPath == path, self.tailerSessionID == sessionID,
+                self.tailer?.rolloutPath == path
+            else { return }
+            self.latestHarnessData?.model = nil
+            self.latestHarnessData?.contextWindow = nil
+            self.latestHarnessData?.rateLimits = nil
+            self.quotaSnapshotsByBucket = [:]
+            self.emitMerged()
+        }
         next.onUpdate = { [weak self] data in
-            guard let self else { return }
+            guard let self, self.boundSessionID == sessionID,
+                self.boundTranscriptPath == path, self.tailerSessionID == sessionID,
+                self.tailer?.rolloutPath == path
+            else { return }
             self.trace(
                 "statusline.codex.parsed_update",
                 attributes: [
@@ -930,10 +1188,12 @@ final class CodexStatusProvider: StatusLineDataProvider {
                     "has_context": data.contextWindow?.usedPercentage == nil ? "false" : "true",
                     "has_rate_limits": data.rateLimits == nil ? "false" : "true",
                 ])
+            self.hasTranscriptUpdateForBoundSession = true
             self.latestHarnessData = self.mergeHarnessData(data)
             self.emitMerged()
         }
         tailer = next
+        tailerSessionID = sessionID
         next.start()
     }
 
@@ -941,7 +1201,29 @@ final class CodexStatusProvider: StatusLineDataProvider {
         var merged = latestHarnessData ?? update
         if let model = update.model { merged.model = model }
         if let contextWindow = update.contextWindow { merged.contextWindow = contextWindow }
-        if let rateLimits = update.rateLimits { merged.rateLimits = rateLimits }
+        if let rateLimits = update.rateLimits {
+            let bucketID = rateLimits.bucketID ?? "codex"
+            let previous = quotaSnapshotsByBucket[bucketID]
+            let fiveHour =
+                rateLimits.fiveHour.map {
+                    StatusLineData.RateLimit(
+                        usedPercentage: $0.usedPercentage ?? previous?.fiveHour?.usedPercentage,
+                        resetsAt: $0.resetsAt ?? previous?.fiveHour?.resetsAt)
+                } ?? previous?.fiveHour
+            let sevenDay =
+                rateLimits.sevenDay.map {
+                    StatusLineData.RateLimit(
+                        usedPercentage: $0.usedPercentage ?? previous?.sevenDay?.usedPercentage,
+                        resetsAt: $0.resetsAt ?? previous?.sevenDay?.resetsAt)
+                } ?? previous?.sevenDay
+            quotaSnapshotsByBucket[bucketID] = StatusLineData.RateLimits(
+                fiveHour: fiveHour,
+                sevenDay: sevenDay,
+                bucketID: bucketID)
+            if bucketID == "codex" {
+                merged.rateLimits = quotaSnapshotsByBucket[bucketID]
+            }
+        }
         if let version = update.version { merged.version = version }
         return merged
     }

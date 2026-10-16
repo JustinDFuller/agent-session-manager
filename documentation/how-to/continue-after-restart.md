@@ -25,7 +25,9 @@ Keep the Git worktrees used by your panes on disk. If you delete a worktree, the
 3. In the **Cleanup** section, enable or disable **Continue on Restart**.
 4. Quit and reopen Agent Session Manager.
 
-The app restores tabs and panes whose working copies still exist. With **Continue on Restart** enabled, Claude Code and Cursor use `--continue`, while OpenCode uses its available session-resume behavior. Codex panes reopen in their working copies without an added continuation option.
+The app restores tabs and panes whose working copies still exist. With **Continue on Restart** enabled, Claude Code and Cursor use `--continue`, OpenCode uses its available session-resume behavior, and Codex attempts to resume the exact foreground conversation recorded for each pane. Codex panes without a recorded conversation start fresh; if a saved conversation is unavailable, the pane offers **Retry** or **Start New Conversation**.
+
+For a Codex pane, **Refresh and Continue** resumes that pane's exact foreground conversation when it is available. **Refresh with New Settings…** starts a fresh Codex conversation. If continuation is unavailable, choose **Retry** to check again or **Start New Conversation** to continue in a new session.
 
 ## What you should see
 

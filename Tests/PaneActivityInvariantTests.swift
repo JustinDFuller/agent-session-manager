@@ -890,6 +890,335 @@ final class PaneActivityInvariantTests: XCTestCase {
         }
     }
 
+    func testCodexLifecycleDrivesPaneAndTabActivityAcrossMonitorReplacement() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "agent-session-manager-codex-activity-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let tab = Tab(name: "Codex Activity", directory: directory)
+        let pane = Pane(name: "codex-activity", tab: tab, harness: .codex)
+        tab.panes = [pane]
+        let previous = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: directory.path,
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"))
+        let replacement = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: directory.path,
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"))
+        defer {
+            pane.removeStatusLineMonitor()
+            previous.stop()
+            replacement.stop()
+        }
+
+        pane.installStatusLineMonitor(previous)
+        try appendCodexActivityRecord(previous, event: "UserPromptSubmit", paneID: pane.id, tabID: tab.id)
+        let previousBecameActive = await waitForCodexActivity(previous, working: true, stopped: false)
+        XCTAssertTrue(previousBecameActive)
+        XCTAssertEqual(paneState(pane), .working)
+        XCTAssertEqual(tabActivityState([paneState(pane)]), .working)
+
+        pane.installStatusLineMonitor(replacement)
+        try appendCodexActivityRecord(previous, event: "Stop", paneID: pane.id, tabID: tab.id)
+        try appendCodexActivityRecord(replacement, event: "UserPromptSubmit", paneID: pane.id, tabID: tab.id)
+        let replacementBecameActive = await waitForCodexActivity(replacement, working: true, stopped: false)
+        XCTAssertTrue(replacementBecameActive)
+        XCTAssertEqual(paneState(pane), .working)
+        XCTAssertEqual(tabActivityState([paneState(pane)]), .working)
+        XCTAssertEqual(
+            paneActivityState(
+                processState: .running(pid: 1),
+                isWorking: replacement.isCodexWorking,
+                isStopped: replacement.isCodexStopped,
+                sessionState: nil,
+                hasNotification: true),
+            .waiting)
+
+        try appendCodexActivityRecord(replacement, event: "Stop", paneID: pane.id, tabID: tab.id)
+        let replacementStopped = await waitForCodexActivity(replacement, working: false, stopped: true)
+        XCTAssertTrue(replacementStopped)
+        XCTAssertEqual(paneState(pane), .stopped)
+        XCTAssertEqual(
+            paneActivityState(
+                processState: .exited(code: 0),
+                isWorking: replacement.isCodexWorking,
+                isStopped: replacement.isCodexStopped,
+                sessionState: nil,
+                hasNotification: false),
+            .idle)
+        XCTAssertEqual(tabActivityState([.stopped, .waiting]), .waiting)
+    }
+
+    private func appendCodexActivityRecord(
+        _ monitor: StatusLineMonitor,
+        event: String,
+        paneID: UUID,
+        tabID: UUID
+    ) throws {
+        let record = CodexHookQueueRecord(
+            paneID: paneID.uuidString,
+            tabID: tabID.uuidString,
+            launchGeneration: monitor.codexLaunchGeneration,
+            hookEventName: event,
+            sessionID: "activity-test-session",
+            turnID: nil,
+            requestID: nil,
+            timestamp: Date().timeIntervalSince1970,
+            source: "hook",
+            model: nil,
+            transcriptPath: nil,
+            result: nil)
+        var data = try JSONEncoder().encode(record)
+        data.append(UInt8(ascii: "\n"))
+        let queueURL = URL(filePath: monitor.codexHookQueueFilePath)
+        if FileManager.default.fileExists(atPath: queueURL.path) {
+            let handle = try FileHandle(forWritingTo: queueURL)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+        } else {
+            try data.write(to: queueURL)
+        }
+    }
+
+    private func waitForCodexActivity(
+        _ monitor: StatusLineMonitor,
+        working: Bool,
+        stopped: Bool
+    ) async -> Bool {
+        for _ in 0..<200 {
+            if monitor.isCodexWorking == working, monitor.isCodexStopped == stopped { return true }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return false
+    }
+
+    private func paneState(_ pane: Pane) -> PaneActivityState {
+        paneActivityState(
+            processState: .running(pid: 1),
+            isWorking: pane.statusLineMonitor?.isCodexWorking ?? false,
+            isStopped: pane.statusLineMonitor?.isCodexStopped ?? false,
+            sessionState: nil,
+            hasNotification: false)
+    }
+
+    func testCodexCompletionDeliversOnceAfterGraceWithPaneDiagnostics() async {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        let paneID = UUID()
+        let monitor = StatusLineMonitor(paneID: paneID, paneName: "codex-pane", harness: .codex)
+        monitor.stopNotificationGracePeriod = 0.05
+        var delivered = 0
+        monitor.onCodexStopped = { delivered += 1 }
+
+        monitor.handleCodexHookRecords([codexLifecycleRecord("UserPromptSubmit", monitor: monitor)])
+        monitor.handleCodexHookRecords([
+            codexLifecycleRecord("Stop", monitor: monitor),
+            codexLifecycleRecord("Stop", monitor: monitor),
+        ])
+        XCTAssertEqual(delivered, 0)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(delivered, 1)
+        let phases = TracingService.shared.recordedEventsForTesting.filter {
+            $0.name == "statusline.codex.completion"
+        }
+        XCTAssertEqual(phases.map { $0.attributes["phase"] }, ["scheduled", "delivered"])
+        XCTAssertTrue(
+            phases.allSatisfy {
+                $0.attributes["pane.id"] == paneID.uuidString
+                    && $0.attributes["tab.id"] != nil
+                    && $0.attributes["pane.name"] == "codex-pane"
+            })
+        monitor.stop()
+    }
+
+    func testCodexCompletionCancelsForNewTurnRebindInterruptionAndTeardown() async {
+        let cancelCases: [(String, (StatusLineMonitor) -> Void)] = [
+            ("new_turn", { $0.handleCodexHookRecords([self.codexLifecycleRecord("UserPromptSubmit", monitor: $0)]) }),
+            ("conversation_changed", { $0.bindCodexSession("next-session") }),
+            ("interrupted", { $0.handleCodexHookRecords([self.codexLifecycleRecord("Interrupt", monitor: $0)]) }),
+            ("teardown", { $0.stop() }),
+        ]
+
+        for (expectedReason, cancel) in cancelCases {
+            TracingService.shared.resetForTesting()
+            TracingService.shared.enableTestCapture()
+            let monitor = StatusLineMonitor(paneID: UUID(), harness: .codex)
+            monitor.stopNotificationGracePeriod = 0.05
+            var delivered = 0
+            monitor.onCodexStopped = { delivered += 1 }
+            monitor.bindCodexSession("current-session")
+            monitor.handleCodexHookRecords([codexLifecycleRecord("UserPromptSubmit", monitor: monitor)])
+            monitor.handleCodexHookRecords([codexLifecycleRecord("Stop", monitor: monitor)])
+
+            cancel(monitor)
+            try? await Task.sleep(nanoseconds: 100_000_000)
+
+            XCTAssertEqual(delivered, 0, expectedReason)
+            let phases = TracingService.shared.recordedEventsForTesting.filter {
+                $0.name == "statusline.codex.completion"
+            }
+            XCTAssertEqual(phases.last?.attributes["phase"], "canceled", expectedReason)
+            XCTAssertEqual(phases.last?.attributes["reason"], expectedReason, expectedReason)
+            monitor.stop()
+        }
+    }
+
+    func testCodexHookWriterFailureCancelsPendingCompletion() async throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        let monitor = StatusLineMonitor(
+            paneID: UUID(),
+            workingDirectory: NSTemporaryDirectory(),
+            harness: .codex,
+            codexAdapter: .current(version: "0.162.1"))
+        monitor.stopNotificationGracePeriod = 1.5
+        var delivered = 0
+        monitor.onCodexStopped = { delivered += 1 }
+        monitor.start()
+        monitor.handleCodexHookRecords([codexLifecycleRecord("UserPromptSubmit", monitor: monitor)])
+        monitor.handleCodexHookRecords([codexLifecycleRecord("Stop", monitor: monitor)])
+        try Data("failed|unknown|hook_write_failed\n".utf8)
+            .write(to: URL(filePath: monitor.codexHookDiagnosticFilePath))
+        try? await Task.sleep(nanoseconds: 700_000_000)
+
+        XCTAssertEqual(delivered, 0)
+        var completion = TracingService.shared.recordedEventsForTesting.filter {
+            $0.name == "statusline.codex.completion"
+        }
+        XCTAssertEqual(completion.last?.attributes["phase"], "canceled")
+        XCTAssertEqual(completion.last?.attributes["reason"], "hook_failure")
+
+        monitor.handleCodexHookRecords([codexLifecycleRecord("UserPromptSubmit", turnID: "next-turn", monitor: monitor)]
+        )
+        monitor.handleCodexHookRecords([codexLifecycleRecord("Stop", turnID: "next-turn", monitor: monitor)])
+        try Data("failed|unknown|hook_write_failed\n".utf8)
+            .write(to: URL(filePath: monitor.codexHookDiagnosticFilePath))
+        try? await Task.sleep(nanoseconds: 700_000_000)
+
+        XCTAssertEqual(delivered, 0)
+        completion = TracingService.shared.recordedEventsForTesting.filter {
+            $0.name == "statusline.codex.completion"
+        }
+        XCTAssertEqual(completion.last?.attributes["phase"], "canceled")
+        XCTAssertEqual(completion.last?.attributes["reason"], "hook_failure")
+        monitor.stop()
+    }
+
+    func testCodexDelegatedCompletionDoesNotScheduleForegroundAlert() {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        let monitor = StatusLineMonitor(paneID: UUID(), harness: .codex)
+        monitor.stopNotificationGracePeriod = 0.01
+        var delivered = 0
+        monitor.onCodexStopped = { delivered += 1 }
+        monitor.handleCodexHookRecords([codexLifecycleRecord("UserPromptSubmit", monitor: monitor)])
+
+        monitor.handleCodexHookRecords([codexLifecycleRecord("SubagentStop", monitor: monitor)])
+
+        XCTAssertEqual(delivered, 0)
+        XCTAssertFalse(
+            TracingService.shared.recordedEventsForTesting.contains {
+                $0.name == "statusline.codex.completion"
+            })
+        monitor.stop()
+    }
+
+    func testDelegatedTurnHooksDoNotClearAttentionOrScheduleForegroundAlert() {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        let monitor = StatusLineMonitor(paneID: UUID(), harness: .codex)
+        var delivered = 0
+        var clearedKinds: [NotificationKind] = []
+        monitor.onCodexStopped = { delivered += 1 }
+        monitor.onCodexAttentionResolved = { clearedKinds.append($0) }
+
+        monitor.handleCodexHookRecords([
+            codexLifecycleRecord("UserPromptSubmit", source: "subagent", monitor: monitor),
+            codexLifecycleRecord("Stop", source: "subagent", monitor: monitor),
+        ])
+
+        XCTAssertEqual(delivered, 0)
+        XCTAssertTrue(clearedKinds.isEmpty)
+        XCTAssertFalse(
+            TracingService.shared.recordedEventsForTesting.contains {
+                $0.name == "statusline.codex.completion"
+            })
+        monitor.stop()
+    }
+
+    func testCodexCompletionRequiresCurrentForegroundTurnIdentity() async {
+        let monitor = StatusLineMonitor(paneID: UUID(), harness: .codex)
+        monitor.stopNotificationGracePeriod = 0.02
+        var delivered = 0
+        monitor.onCodexStopped = { delivered += 1 }
+        monitor.handleCodexHookRecords([codexLifecycleRecord("UserPromptSubmit", turnID: "current", monitor: monitor)])
+        monitor.handleCodexHookRecords([codexLifecycleRecord("Stop", turnID: "stale", monitor: monitor)])
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertEqual(delivered, 0)
+
+        monitor.handleCodexHookRecords([codexLifecycleRecord("Stop", turnID: "current", monitor: monitor)])
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertEqual(delivered, 1)
+        monitor.stop()
+    }
+
+    func testCodexCompletionSupportsLegacyHooksWithoutTurnID() async {
+        let monitor = StatusLineMonitor(paneID: UUID(), harness: .codex)
+        monitor.stopNotificationGracePeriod = 0.02
+        var delivered = 0
+        monitor.onCodexStopped = { delivered += 1 }
+        monitor.handleCodexHookRecords([codexLifecycleRecord("UserPromptSubmit", turnID: nil, monitor: monitor)])
+        monitor.handleCodexHookRecords([codexLifecycleRecord("Stop", turnID: nil, monitor: monitor)])
+        try? await Task.sleep(nanoseconds: 60_000_000)
+
+        XCTAssertEqual(delivered, 1)
+        monitor.stop()
+    }
+
+    func testNewCodexForegroundTurnClearsPermissionAndQuestionAttention() {
+        let monitor = StatusLineMonitor(paneID: UUID(), harness: .codex)
+        var clearedKinds: [NotificationKind] = []
+        monitor.onCodexAttentionResolved = { kind in clearedKinds.append(kind) }
+
+        monitor.handleCodexHookRecords([codexLifecycleRecord("UserPromptSubmit", monitor: monitor)])
+
+        XCTAssertEqual(clearedKinds, [.codexPermissionRequest, .codexQuestion])
+        monitor.stop()
+    }
+
+    private func codexLifecycleRecord(
+        _ event: String,
+        turnID: String? = "test-turn",
+        source: String = "hook",
+        monitor: StatusLineMonitor
+    ) -> CodexHookQueueRecord {
+        CodexHookQueueRecord(
+            paneID: UUID().uuidString,
+            tabID: UUID().uuidString,
+            launchGeneration: monitor.codexLaunchGeneration,
+            hookEventName: event,
+            sessionID: "test-session",
+            turnID: turnID,
+            requestID: nil,
+            timestamp: Date().timeIntervalSince1970,
+            source: source,
+            model: nil,
+            transcriptPath: nil,
+            result: nil)
+    }
+
     func testUnrelatedPreToolUseDoesNotProduceAttention() {
         let monitor = makeWorkingMonitorWithRunningSubagent()
         var events: [PaneAttentionEvent] = []
