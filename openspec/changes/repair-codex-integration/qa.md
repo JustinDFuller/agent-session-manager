@@ -190,3 +190,9 @@ This read-only collection changed no pane, authentication, file, or task status.
 A fresh full `swift test` run passed 1,446 XCTest tests with 0 failures in 180.545 seconds, followed by a separate Swift Testing run with 123 tests in 11 suites passing. The complete output is retained at `/tmp/agent-session-manager-codex-final-swift-test-20261016.log`. The commit hook passed the unit tests and SwiftLint.
 
 The latest pre-push Dev UI run failed before executing test cases: `.build/TestResults.xcresult` reports a runner initialization timeout while enabling automation mode, 1 runner failure, 0 tests passed, and no skipped tests; `test-ui-dev-launch` exited 65. The push did not update the remote, and no bypass or retry was made. A current `git ls-remote` confirms `repair-codex-compatibility` still points to `cf489e77681ad6d2ecf02a2bd79352519ad99382`. All seven runtime-evidence tasks (3.5, 4.4, 4.5, 5.5, 6.1, 6.2, and 6.3) remain open.
+
+## Dev runtime audit (2026-10-16)
+
+With Debug Mode enabled, a fresh read-only audit of the current Dev pane `fix-broken-codex-features` (`DDCF27B8-B91D-4FFA-B268-5B8A05B5D2C8`) in tab `Codex Status Acceptance` returned 69 pane spans with no truncation. It contained 23 empty `statusline.codex.hook_queue.drained` events (`record_count=0`), paired with 23 `statusline.codex.hook_waiting` events (`hook_record_available=false`, `late_bound=true`). All 15 `statusline.provider.update_applied` events lacked model, context, token, and rate-limit fields while repository, version, and worktree fields were present. Eight successful PR poll/query results reported `pr_count=1` with six subscribers, and the audit found zero invariant violations.
+
+This confirms the resumed-status gap persists in the current pane, but a read-only trace audit does not replace a real interactive Dev flow or its required captures. All seven runtime-evidence tasks (3.5, 4.4, 4.5, 5.5, 6.1, 6.2, and 6.3) remain unchecked.
