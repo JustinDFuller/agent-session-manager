@@ -268,6 +268,8 @@ final class CodexCompatibilityAdapterTests: XCTestCase {
 
     @MainActor
     func testGeneratedHookScriptQueuesOnlyAllowedMetadata() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
         let tab = Tab(name: "metadata-tab", directory: tempDir)
         let pane = Pane(name: "metadata-test", tab: tab, harness: .codex)
         let paneID = pane.id
