@@ -27,7 +27,7 @@ Shell panes remain idle unless an explicit attention notification exists. Codex 
 
 ## Waiting and notifications
 
-A pane is `waiting` whenever `AppState.notifications` contains an entry for that pane — regardless of notification kind, including Codex completion, permission, and question attention. Focusing the pane clears its notification (`AppState.setActivePane` → `clearNotification`), reverting the indicator to its current `working`, `stopped`, or `idle` state.
+A pane is `waiting` whenever `AppState.notifications` contains an entry for that pane, regardless of kind: terminal attention (`terminalBell`), pull-request changes (`prMerged`, `prClosed`), harness completion (`claudeStop`, `cursorStop`, `opencodeStop`, `codexStop`), or approval/question attention (`opencodePermissionRequest`, `codexPermissionRequest`, `codexQuestion`). Focusing the pane clears its notification (`AppState.setActivePane` → `clearNotification`), reverting the indicator to its current `working`, `stopped`, or `idle` state.
 
 This means the activity indicator and the notification are the same signal. There is no separate notification dot in the pane header. Focusing acknowledges the current notification; a new attention event can put the active pane into `waiting` again.
 
