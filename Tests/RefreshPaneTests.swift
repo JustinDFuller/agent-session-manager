@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import XCTest
 
 @testable import AgentSessionManager
@@ -237,6 +238,17 @@ final class RefreshPaneTests: XCTestCase {
         try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        let sessionID = "restored-exact-session"
+        let codexHome = root.appending(path: "codex-home", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        let rollout = repository.appending(path: "restored.jsonl")
+        try Data().write(to: rollout)
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(codexHome.appending(path: "state_5.sqlite").path, &database), SQLITE_OK)
+        defer { sqlite3_close(database) }
+        let sql =
+            "CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT); INSERT INTO threads VALUES ('\(sessionID)', '\(repository.path)', '\(rollout.path)');"
+        XCTAssertEqual(sqlite3_exec(database, sql, nil, nil, nil), SQLITE_OK)
         let codexExecutable = bin.appending(path: "codex")
         try "#!/bin/sh\nprintf '%s\\n' 'codex 0.162.1'\n".write(
             to: codexExecutable, atomically: true, encoding: .utf8)
@@ -246,14 +258,13 @@ final class RefreshPaneTests: XCTestCase {
         settings.preferredShell = "/bin/sh"
         settings.agentControlInjectionPolicy = .never
         let tab = Tab(name: "repo", directory: repository)
-        let sessionID = "restored-exact-session"
         let pane = tab.addPane(
             name: "codex-pane",
             harness: .codex,
             worktreeDirectory: repository,
             extraEnvVars: [
                 "PATH": "\(bin.path):\(ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")",
-                "CODEX_HOME": root.appending(path: "codex-home").path,
+                "CODEX_HOME": codexHome.path,
             ],
             agentControlInjectionEnabled: false,
             resumeCodexSessionID: sessionID,

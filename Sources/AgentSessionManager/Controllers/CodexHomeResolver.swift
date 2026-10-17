@@ -14,6 +14,9 @@ struct CodexHomeResolver {
         if let configuredHome, !configuredHome.isEmpty {
             return URL(filePath: configuredHome).standardizedFileURL
         }
+        if let home = environment["HOME"], !home.isEmpty {
+            return URL(filePath: home).appending(path: ".codex", directoryHint: .isDirectory)
+        }
         return FileManager.default.homeDirectoryForCurrentUser.appending(path: ".codex", directoryHint: .isDirectory)
     }
 

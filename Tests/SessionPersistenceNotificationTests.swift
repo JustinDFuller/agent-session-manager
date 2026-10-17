@@ -427,7 +427,7 @@ final class SessionPersistenceNotificationTests: XCTestCase {
         XCTAssertEqual(restoredPane.id, paneID)
         XCTAssertNil(restoredPane.codexSessionID)
         XCTAssertNil(restoredPane.codexTranscriptPath)
-        XCTAssertTrue(restoredPane.codexFreshStartNotice)
+        XCTAssertNotNil(restoredPane.codexContinuationNotice)
     }
 
     func testRestoreCodexUsesExactConversationWhenEnabledAndStartsFreshWhenDisabled() throws {
@@ -441,6 +441,8 @@ final class SessionPersistenceNotificationTests: XCTestCase {
         try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: fakeBin, withIntermediateDirectories: true)
+        let savedRollout = worktree.appending(path: "saved.jsonl")
+        try Data().write(to: savedRollout)
         let databaseURL = codexHome.appending(path: "state_5.sqlite")
         var database: OpaquePointer?
         XCTAssertEqual(sqlite3_open(databaseURL.path, &database), SQLITE_OK)
@@ -670,7 +672,7 @@ final class SessionPersistenceNotificationTests: XCTestCase {
         XCTAssertFalse(pane.opencodeRaceLossRestarted)
     }
 
-    func testCodexBindingMismatchReportsInvariantAndUpdatesSavedForegroundIdentity() async throws {
+    func testCodexBindingMismatchPreservesRequestedIdentityAndDoesNotPersist() async throws {
         InvariantReporter.shared.resetForTesting()
         InvariantReporter.shared.enableTestCapture()
         defer { InvariantReporter.shared.resetForTesting() }
@@ -709,7 +711,7 @@ final class SessionPersistenceNotificationTests: XCTestCase {
                 kind: .terminalBell,
                 reason: "Existing notification")
         ]
-        pane.codexExpectedResumeSessionID = "requested-session"
+        pane.codexLaunchResumeSessionID = "requested-session"
         let monitor = StatusLineMonitor(
             paneID: pane.id,
             paneName: pane.name,
@@ -725,23 +727,10 @@ final class SessionPersistenceNotificationTests: XCTestCase {
         monitor.onCodexSessionBound?("bound-session", "/tmp/rollout.jsonl")
         try await Task.sleep(for: .milliseconds(50))
 
-        XCTAssertEqual(pane.codexSessionID, "bound-session")
-        XCTAssertEqual(pane.codexTranscriptPath, "/tmp/rollout.jsonl")
-        XCTAssertNil(pane.codexExpectedResumeSessionID)
-        let sessionData = try XCTUnwrap(
-            try? Data(contentsOf: support.appending(path: "sessions.json")))
-        let savedSession = try JSONDecoder().decode(PersistedSession.self, from: sessionData)
-        let savedPane = try XCTUnwrap(savedSession.tabs.first?.panes.first)
-        XCTAssertEqual(savedPane.codexSessionID, "bound-session")
-        XCTAssertEqual(savedPane.codexTranscriptPath, "/tmp/rollout.jsonl")
-        XCTAssertEqual(savedPane.worktreeDirectory, "/tmp/codex-worktree")
-        XCTAssertTrue(savedPane.worktreeIsManaged)
-        XCTAssertEqual(savedPane.profileID, profileID)
-        XCTAssertEqual(savedPane.extraArgs, ["--model", "gpt-5.1"])
-        XCTAssertEqual(savedPane.agentControlInjectionEnabled, true)
-        XCTAssertEqual(savedSession.pendingNotifications.first?.notificationID, notificationID)
-        XCTAssertEqual(savedSession.pendingNotifications.first?.reason, "Existing notification")
-        XCTAssertFalse(String(decoding: sessionData, as: UTF8.self).contains("runtime-only-secret"))
+        XCTAssertNil(pane.codexSessionID)
+        XCTAssertNil(pane.codexTranscriptPath)
+        XCTAssertEqual(pane.codexLaunchResumeSessionID, "requested-session")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: support.appending(path: "sessions.json").path))
         XCTAssertTrue(
             InvariantReporter.shared.violationsForTesting.contains {
                 $0.invariantID == "codex.continuation.identity"

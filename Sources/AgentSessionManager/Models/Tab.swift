@@ -593,7 +593,8 @@ final class Tab: Identifiable {
             guard
                 configureCodexLaunch(
                     for: pane, monitor: monitor, controller: new,
-                    extraArgs: pane.extraArgs, appSettings: launchSettings)
+                    extraArgs: pane.extraArgs, appSettings: launchSettings,
+                    resumeSessionID: pane.codexSessionID)
             else { return }
         } else {
             new.pendingCommandArgs = old.pendingCommandArgs.map {
