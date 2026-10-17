@@ -4,7 +4,7 @@
 
 ### Requirement: Terminal panes receive Control-Return
 
-While a terminal pane has keyboard focus, pressing Control-Return MUST deliver that key to the program running in the pane and MUST NOT open the pane's context menu. When the program has enabled extended keyboard reporting, the key MUST be reported as Return with the Control modifier. Otherwise it MUST be delivered as an ordinary Return.
+On macOS 26 and later, while a terminal pane has keyboard focus, pressing Control-Return MUST deliver that key to the program running in the pane and MUST NOT open the pane's context menu. When the program has enabled extended keyboard reporting, the key MUST be reported as Return with the Control modifier. Otherwise it MUST be delivered as an ordinary Return. This requirement does not apply on earlier versions of macOS.
 
 #### Scenario: Program has enabled extended keyboard reporting
 

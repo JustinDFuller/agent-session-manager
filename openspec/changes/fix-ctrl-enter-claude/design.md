@@ -24,6 +24,7 @@ The second case is why delegating everything to `keyDown` is not enough.
 
 - A new keyboard route to the pane menu.
 - Reworking the key monitors in `App.swift` or `TerminalController.swift`.
+- Delivering Control-Return on macOS 25 and earlier, which is out of scope because only macOS 26 and later are supported for this behavior.
 
 ## Decisions
 

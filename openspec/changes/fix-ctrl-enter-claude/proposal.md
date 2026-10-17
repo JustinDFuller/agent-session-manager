@@ -32,3 +32,4 @@ None.
 - Changes to the existing Shift+Return handling or any other key binding.
 - Changes to Claude Code's own key bindings or to how other harnesses interpret Control+Enter.
 - Changing the system-wide context-menu shortcut in macOS settings, and its behavior outside terminal panes.
+- Delivering Control-Return to terminal panes on macOS 25 and earlier. Only macOS 26 and later are supported for this behavior.
