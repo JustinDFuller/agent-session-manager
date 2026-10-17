@@ -38,8 +38,8 @@
 - [x] 5.1 Start repository identity discovery for all harnesses and merge it independently of rich status/authentication; test HTTPS/SSH remotes, unavailable remotes, and Codex/Cursor/OpenCode/shared-shell snapshots while preserving other baseline facts.
 - [x] 5.2 Resolve the GitHub executable and missing authentication context through the configured interactive shell while honoring explicit overrides; test executable wrappers, PATH precedence, environment precedence, shell timeout/noise, bounded output, and secret redaction.
 - [x] 5.3 Add visible PR loading/current/absent/failed state, stale retained data, and authentication Retry guidance; test failure after success, recovery, confirmed no-PR results, and suppression of merge/close notifications from failed queries.
-- [ ] 5.4 Preserve existing GraphQL stdin/timeout behavior and shared resolution notification callbacks; exercise real Dev PR status through the configured authenticated wrapper and report any unavailable GitHub prerequisites distinctly.
-- [ ] 5.5 Update PR tracking, shared status, feature-matrix, public authentication-recovery, and diagnostic documentation; confirm the reviewed copy and screenshots distinguish authentication errors from successful no-PR results without changing accounts.
+- [x] 5.4 Preserve existing GraphQL stdin/timeout behavior and shared resolution notification callbacks; exercise real Dev PR status through the configured authenticated wrapper and report any unavailable GitHub prerequisites distinctly.
+- [x] 5.5 Update PR tracking, shared status, feature-matrix, public authentication-recovery, and diagnostic documentation; confirm the reviewed copy and screenshots distinguish authentication errors from successful no-PR results without changing accounts.
 
 ## 6. Runtime integration acceptance
 

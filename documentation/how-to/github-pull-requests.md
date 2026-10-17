@@ -44,7 +44,7 @@ The **PR** item can show **Checking…**, a current pull request, **No PR**, or 
 
 ## If it does not work
 
-- If the PR item reports an error, click it and choose **Retry** after resolving the cause. The authentication message reads **GitHub CLI authentication failed. Authenticate the configured `gh`, then retry.** Restore authentication for the account you already use in that shell, then retry. Selecting **Retry** refreshes the shell context and query without restarting the pane.
+- If the PR item reports an error, click it to read the cause and choose **Retry** after resolving it. An authentication failure is labeled **GitHub authentication required** and explains that the GitHub CLI selected by the configured shell needs authentication. Restore authentication for the account you already use in that shell, then retry. Selecting **Retry** refreshes the shell context and query without restarting the pane; the app does not switch accounts or change credentials.
 - Confirm that `gh` is installed and authenticated in the configured shell. Running `gh auth status` there reports the current CLI authentication without switching accounts.
 - Confirm that **Track pull requests** is enabled and that **PR** is in a status-line row.
 - Confirm that the pane's current branch has a GitHub pull request.
