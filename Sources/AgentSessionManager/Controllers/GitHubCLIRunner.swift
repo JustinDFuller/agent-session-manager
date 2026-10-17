@@ -204,7 +204,8 @@ final class GitHubCLIRunner: GitHubCLIRunning, @unchecked Sendable {
         if exitCode == 4 { return .authentication }
         if exitCode == 2 { return .cancelled }
         let lower = "\(stderr)\n\(stdout)".lowercased()
-        if lower.contains("bad credentials") || lower.contains("http 401") || lower.contains("http/2.0 401 unauthorized")
+        if lower.contains("bad credentials") || lower.contains("http 401")
+            || lower.contains("http/2.0 401 unauthorized")
             || lower.contains("http/1.1 401 unauthorized")
         {
             return .authentication
