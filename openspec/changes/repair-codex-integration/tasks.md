@@ -10,7 +10,7 @@
 
 ## 2. Foreground conversation tracking and status metrics
 
-- [x] 2.1 Keep observing foreground session changes after initial binding, detach prior tailers, clear conversation facts, and publish a session-bound callback; test new/resume transitions, repeated binding, delayed files, and two panes sharing a checkout without cross-binding.
+- [x] 2.1 Keep observing foreground session changes after initial binding, detach prior tailers, clear conversation facts, and publish a session-bound callback; test new/resume transitions, repeated binding, delayed files, and rejection of cross-pane hook records by pane/tab/generation identity. Multi-pane runtime acceptance uses distinct worktrees supported by New Pane.
 - [x] 2.2 Retain optional exact-identity SQLite enrichment and resolve the effective CODEX_HOME from configured-shell exports, launch environment, or the default home; test exported and explicit nondefault homes, unavailable enrichment, wrong same-cwd rows, source failure, and recovery without recency-based session selection.
 - [x] 2.3 Parse actual top-level model metadata and separate cumulative token totals from current occupancy; cover real sanitized 0.162 record shapes, legacy shapes, model changes, absent fields, and unreadable current sources.
 - [x] 2.4 Match the upstream normalized and rounded context calculation; test the 236085/475000 snapshot gives 48/52, small windows, baseline occupancy, rounding boundaries, overflow occupancy, and missing data.
@@ -44,7 +44,7 @@
 ## 6. Runtime integration acceptance
 
 - [ ] 6.1 Add a real Dev Codex integration flow combining native new/resume, model change, context/token comparison, background-pane activity, attention acknowledgement, and exact refresh/relaunch continuation; run through real sheets and the installed authenticated CLI using Luna where suitable, recording versions and screenshots/video without fabricated state.
-- [ ] 6.2 Exercise cross-feature isolation with two Codex panes on one checkout and ordinary Claude/Cursor/OpenCode or shell panes; record that Codex session changes and shared status repairs preserve other panes' lifecycle, configuration, notifications, and Agent Control access.
+- [ ] 6.2 Exercise cross-feature isolation with two Codex panes on distinct UI-supported worktrees and ordinary Claude/Cursor/OpenCode or shell panes; record that Codex session changes and shared status repairs preserve other panes' lifecycle, configuration, notifications, and Agent Control access. Concurrent panes sharing one checkout are unsupported by New Pane and are out of scope.
 - [ ] 6.3 Exercise real authentication failure/retry and available banner prerequisites in Dev, and deliver an acceptance record linking each capability's scenarios to runtime captures and bounded diagnostics; separate source/unit evidence, executed runtime evidence, skips, and unresolved blockers before declaring acceptance complete.
 
 Each implementation PR owns one complete top-level group and its subtasks. All tasks are pending in this proposal. Review, OpenSpec validation, CI monitoring, and the later archive-only transition are workflow steps rather than completed implementation tasks.

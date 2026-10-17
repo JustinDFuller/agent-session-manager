@@ -38,6 +38,7 @@ The saved tabs reappear when their project directories can be restored, with eac
 - If a tab or pane is missing, confirm that its project directory and Git worktree still exist.
 - If the project path contains spaces and the tab does not return, update to a build containing the current session-restore fix or recreate the tab.
 - If the pane reopens but the conversation does not resume, check **Settings → Panes → Continue on Restart** and the selected tool's own session behavior.
+- If Codex offers recovery for a saved conversation, confirm that the configured shell's exported `CODEX_HOME` points to the Codex data containing that conversation. The app checks this shell value first, then the launch environment's `CODEX_HOME`, then `~/.codex`.
 - If you intentionally deleted the worktree, create a new pane from the relevant branch or worktree.
 
 ## Related tasks

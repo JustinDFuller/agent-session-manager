@@ -16,7 +16,7 @@ When enabled, `SessionPersistence.restore` adds `--continue` to Claude and Curso
 
 **Refresh and Continue** uses the current foreground Codex session ID after an exact availability check. **Refresh with New Settings…** starts a fresh Codex conversation.
 
-Refresh observations with Codex 0.162.1 are inconsistent. A separate owned Dev run reported status and completion after Refresh, but its telemetry had no pane selected and no screenshot artifact was retained. In `codex-hooks-runtime-check-2`, a distinct pre-Refresh generation recorded four one-record queue drains, rich status facts, and completion/attention events; the later 19:11:20 UTC Refresh generation restored conversation history but produced no hook records, rich status facts, or new completion notification. App-relaunch continuation has not been runtime verified, and resumed-session runtime integration remains under acceptance.
+Codex 0.162.1 runtime observations confirm that Refresh and app relaunch can restore the exact conversation and complete a follow-up turn. In the retained 2026-10-17 Dev capture, Refresh telemetry recorded a matching continuation preflight and foreground binding, hook invocations, populated status facts, and a completion notification; after a full app relaunch, the panes restored their conversations and another turn completed. The app-owned Codex status lines nevertheless remained blank after Refresh and relaunch, and the post-relaunch collection showed no new hook invocations. Earlier Dev runs also showed missing hooks, status facts, and completion after Refresh, so resumed-session status and notification delivery remain under acceptance.
 
 ## Persistence
 

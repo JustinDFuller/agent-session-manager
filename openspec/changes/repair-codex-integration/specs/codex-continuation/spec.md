@@ -10,10 +10,10 @@ Codex continuation preserves the specific conversation a user was working on whe
 
 Refresh and Continue on a Codex pane MUST resume its current foreground conversation with the same checkout, profile, CLI options, and control-injection decision. The app MUST NOT select a conversation by latest activity or shared working directory. The sheet MUST describe continuation without promising an unsupported `--continue` flag.
 
-#### Scenario: Two panes use the same checkout
+#### Scenario: Two Codex panes use distinct checkouts
 
-- **WHEN** the user refreshes one Codex pane while another conversation has newer activity in that checkout
-- **THEN** the refreshed pane resumes its own conversation and retains its configuration
+- **WHEN** the user refreshes one Codex pane while another Codex pane on a distinct checkout has newer conversation activity
+- **THEN** the refreshed pane resumes its own conversation and retains its configuration while the other pane remains bound to its conversation
 
 #### Scenario: A user changes conversations before refreshing
 
