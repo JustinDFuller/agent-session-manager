@@ -389,6 +389,17 @@ final class CodexStatusProviderTests: XCTestCase {
         XCTAssertEqual(data?.rateLimits?.sevenDay?.resetsAt, 2_000_003_600)
     }
 
+    func testCurrentAdapterRejectsQuotaUpdateWithoutBucketID() {
+        let line = Data(
+            #"{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"window_minutes":300,"used_percent":15,"resets_at":2000007200},"secondary":{"window_minutes":10080,"used_percent":65,"resets_at":2000003600}}}}"#
+                .utf8)
+
+        let data = CodexRolloutParser.parseLine(
+            line, expectedCWD: "/repo", adapter: .current(version: "0.162.1"))
+
+        XCTAssertNil(data?.rateLimits)
+    }
+
     func testRolloutParserIgnoresOutOfRangeNumericValues() {
         let line = Data(
             CodexCompatibilityFixtures.currentTokenCount
@@ -683,6 +694,7 @@ final class CodexStatusProviderTests: XCTestCase {
         XCTAssertEqual(data?.contextWindow?.remainingPercentage, 69)
         XCTAssertEqual(data?.rateLimits?.fiveHour?.usedPercentage, 12.5)
         XCTAssertEqual(data?.rateLimits?.sevenDay?.usedPercentage, 44)
+        XCTAssertEqual(data?.rateLimits?.bucketID, "codex")
     }
 
     func testRolloutParserUsesLastTokenUsageForContextAndTotalUsageForTokenTotals() throws {

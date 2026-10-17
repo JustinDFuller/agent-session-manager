@@ -399,11 +399,15 @@ struct CodexRolloutParser {
         let model = payload["model"] as? String ?? info?["model"] as? String
 
         let rawRateLimits = payload["rate_limits"] as? [String: Any]
-        let rateLimits = rawRateLimits.map {
-            StatusLineData.RateLimits(
-                fiveHour: rate($0["primary"] as? [String: Any], expectedWindowMinutes: 300),
-                sevenDay: rate($0["secondary"] as? [String: Any], expectedWindowMinutes: 10_080),
-                bucketID: $0["limit_id"] as? String ?? "codex")
+        let rateLimits = rawRateLimits.flatMap { raw -> StatusLineData.RateLimits? in
+            let bucketID = raw["limit_id"] as? String
+            if case .current = adapter {
+                guard let bucketID, !bucketID.isEmpty else { return nil }
+            }
+            return StatusLineData.RateLimits(
+                fiveHour: rate(raw["primary"] as? [String: Any], expectedWindowMinutes: 300),
+                sevenDay: rate(raw["secondary"] as? [String: Any], expectedWindowMinutes: 10_080),
+                bucketID: bucketID ?? "codex")
         }
 
         return StatusLineData(
