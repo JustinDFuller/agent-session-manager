@@ -1578,6 +1578,49 @@ final class CodexStatusProviderTests: XCTestCase {
 
 extension CodexStatusProviderTests {
     @MainActor
+    func testContinuationSeedsStatusFromExactSavedTranscriptWithoutHookRecord() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+
+        let transcript = tempDir.appending(path: "saved-continuation.jsonl")
+        try codexTokenLine(model: "saved-model", input: 120, output: 30, contextTokens: 450, window: 950)
+            .write(to: transcript, atomically: true, encoding: .utf8)
+        let queue = tempDir.appending(path: "saved-continuation-hooks.jsonl")
+        let context = makeContext(
+            processStartTime: Date(),
+            queuePath: queue.path,
+            launchGeneration: UUID().uuidString,
+            adapter: .current(version: "0.162.1"),
+            initialSessionID: "saved-exact-session",
+            initialTranscriptPath: transcript.path)
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-state.sqlite")),
+            startupRetryInterval: 0.02,
+            startupTimeout: 0.1)
+        let populated = expectation(description: "saved transcript supplies conversation facts")
+        provider.onUpdate = { data in
+            if data.model?.id == "saved-model",
+                data.contextWindow?.totalInputTokens == 120,
+                data.contextWindow?.totalOutputTokens == 30
+            {
+                populated.fulfill()
+            }
+        }
+
+        provider.start()
+        defer { provider.stop() }
+        wait(for: [populated], timeout: 2)
+
+        XCTAssertTrue(
+            TracingService.shared.recordedEventsForTesting.contains {
+                $0.name == "statusline.codex.continuation.binding_seeded"
+                    && $0.attributes["session_id_prefix"] == "saved-exact-"
+            })
+    }
+
+    @MainActor
     func testContinuationDiagnosticsMatchRequestedAndBoundSessionIdentity() throws {
         TracingService.shared.resetForTesting()
         TracingService.shared.enableTestCapture()
@@ -1630,7 +1673,9 @@ extension CodexStatusProviderTests {
         let previousCallback = monitor.onCodexSessionBound
         monitor.onCodexSessionBound = { id, path in
             previousCallback?(id, path)
-            bound.fulfill()
+            if id == boundSessionID {
+                bound.fulfill()
+            }
         }
         try appendQueueRecord(
             to: URL(filePath: monitor.codexHookQueueFilePath),
@@ -1644,14 +1689,17 @@ extension CodexStatusProviderTests {
         let events = TracingService.shared.recordedEventsForTesting
         let requested = try XCTUnwrap(
             events.first { $0.name == "statusline.codex.continuation.preflight" })
-        let boundSession = try XCTUnwrap(
-            events.first { $0.name == "statusline.codex.binding.changed" })
+        let rejectedBinding = try XCTUnwrap(
+            events.first { $0.name == "statusline.codex.continuation.binding_rejected" })
         XCTAssertEqual(requested.attributes["requested_session_id_prefix"], String(requestedSessionID.prefix(12)))
         XCTAssertEqual(requested.attributes["result"], "available")
-        XCTAssertEqual(boundSession.attributes["session_id_prefix"], String(boundSessionID.prefix(12)))
+        XCTAssertEqual(
+            rejectedBinding.attributes["requested_session_id_prefix"], String(requestedSessionID.prefix(12)))
+        XCTAssertEqual(
+            rejectedBinding.attributes["bound_session_id_prefix"], String(boundSessionID.prefix(12)))
         XCTAssertNotEqual(
-            requested.attributes["requested_session_id_prefix"],
-            boundSession.attributes["session_id_prefix"])
+            rejectedBinding.attributes["requested_session_id_prefix"],
+            rejectedBinding.attributes["bound_session_id_prefix"])
         XCTAssertFalse(
             events.contains { event in
                 event.attributes.values.contains { $0.contains(requestedSessionID) || $0.contains(boundSessionID) }
@@ -2701,6 +2749,8 @@ extension CodexStatusProviderTests {
         launchGeneration: String? = nil,
         adapter: CodexCompatibilityAdapter? = nil,
         codexShell: String? = nil,
+        initialSessionID: String? = nil,
+        initialTranscriptPath: String? = nil,
         environment: [String: String] = [:],
         workingDirectory: String? = nil,
         paneID: UUID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
@@ -2724,7 +2774,9 @@ extension CodexStatusProviderTests {
             codexHookQueuePath: queuePath,
             codexHookDiagnosticPath: diagnosticPath,
             codexLaunchGeneration: launchGeneration,
-            codexAdapter: adapter
+            codexAdapter: adapter,
+            codexInitialSessionID: initialSessionID,
+            codexInitialTranscriptPath: initialTranscriptPath
         )
     }
 

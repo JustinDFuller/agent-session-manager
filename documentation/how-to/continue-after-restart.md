@@ -29,7 +29,7 @@ The app restores tabs and panes whose working copies still exist. With **Continu
 
 For a Codex pane, **Refresh and Continue** resumes that pane's exact foreground conversation when it is available. **Refresh with New Settings…** starts a fresh Codex conversation. If continuation is unavailable, choose **Retry** to check again or **Start New Conversation** to continue in a new session.
 
-To restart a Codex pane, open its context menu and choose **Refresh Pane…**. Choose **Refresh and Continue** to resume its current conversation, or **Refresh with New Settings…** to apply updated options and start a fresh conversation.
+To restart a Codex pane, open its context menu and choose **Refresh Pane…**. Choose **Refresh and Continue** to resume its current conversation, or **Refresh with New Settings…** to apply updated options and start a fresh conversation. The refresh sheet summarizes this choice as continuing the current Codex conversation or starting fresh with new settings.
 
 ## What you should see
 

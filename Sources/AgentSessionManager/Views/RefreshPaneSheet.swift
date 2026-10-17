@@ -26,6 +26,12 @@ struct RefreshPaneSheet: View {
             : "Reconfigure CLI options before restarting"
     }
 
+    var summaryDescription: String {
+        pane.harness == .codex
+            ? "Continue this Codex conversation or start fresh with new settings."
+            : "Restart \"\(pane.name)\" with a fresh environment."
+    }
+
     var isContinuationDisabled: Bool {
         pane.harness == .codex
             && (pane.codexSessionID == nil || pane.codexContinuationRecovery != nil)
@@ -36,7 +42,7 @@ struct RefreshPaneSheet: View {
             Text("Refresh Pane")
                 .font(.headline)
 
-            Text("Restart \"\(pane.name)\" with a fresh environment.")
+            Text(summaryDescription)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 

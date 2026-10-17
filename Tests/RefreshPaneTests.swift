@@ -199,8 +199,16 @@ final class RefreshPaneTests: XCTestCase {
         let sheet = RefreshPaneSheet(pane: pane, onQuickRefresh: { _ in }, onRefreshWithSettings: { _ in })
 
         XCTAssertTrue(sheet.isContinuationDisabled)
+        XCTAssertEqual(
+            sheet.summaryDescription,
+            "Continue this Codex conversation or start fresh with new settings.")
         XCTAssertEqual(sheet.continuationDescription, "Codex has not reported a conversation to continue.")
         XCTAssertEqual(sheet.settingsDescription, "Start a fresh Codex conversation with reconfigured options.")
+
+        let claudePane = Pane(name: "claude-pane", tab: tab, harness: .claude)
+        let claudeSheet = RefreshPaneSheet(
+            pane: claudePane, onQuickRefresh: { _ in }, onRefreshWithSettings: { _ in })
+        XCTAssertEqual(claudeSheet.summaryDescription, "Restart \"claude-pane\" with a fresh environment.")
 
         pane.codexSessionID = "exact-session"
         XCTAssertFalse(sheet.isContinuationDisabled)

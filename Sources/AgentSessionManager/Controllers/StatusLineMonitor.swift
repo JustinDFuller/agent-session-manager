@@ -63,6 +63,8 @@ final class StatusLineMonitor {
     private(set) var codexHookScriptFilePath: String
     let codexLaunchGeneration: String
     let codexAdapter: CodexCompatibilityAdapter?
+    private let codexInitialSessionID: String?
+    private var hasConfirmedCodexInitialSession = false
     private let workingDirectory: String?
     let harness: Harness
     private let isClaude: Bool
@@ -136,6 +138,8 @@ final class StatusLineMonitor {
         codexAdapter: CodexCompatibilityAdapter? = nil,
         codexShell: String? = nil,
         codexEnvironment: [String: String] = [:],
+        codexInitialSessionID: String? = nil,
+        codexInitialTranscriptPath: String? = nil,
         customFieldEnvironment: [String: String] = [:]
     ) {
         self.paneID = paneID
@@ -160,6 +164,7 @@ final class StatusLineMonitor {
         let resolvedCodexLaunchGeneration = UUID().uuidString
         codexLaunchGeneration = resolvedCodexLaunchGeneration
         self.codexAdapter = codexAdapter
+        self.codexInitialSessionID = codexInitialSessionID
         let resolvedCodexHookQueueFilePath =
             NSTemporaryDirectory()
             + "agent-session-manager-codex-hooks-\(paneID.uuidString)-\(resolvedCodexLaunchGeneration).jsonl"
@@ -192,6 +197,8 @@ final class StatusLineMonitor {
                 codexHookDiagnosticPath: harness == .codex ? resolvedCodexHookDiagnosticFilePath : nil,
                 codexLaunchGeneration: harness == .codex ? resolvedCodexLaunchGeneration : nil,
                 codexAdapter: harness == .codex ? codexAdapter : nil,
+                codexInitialSessionID: harness == .codex ? codexInitialSessionID : nil,
+                codexInitialTranscriptPath: harness == .codex ? codexInitialTranscriptPath : nil,
                 opencodeEnvironment: opencodeEnvironment
             )
         }
@@ -236,8 +243,16 @@ final class StatusLineMonitor {
                     }
                 }
                 codexProvider.onSessionBound = { [weak self] id, transcriptPath in
-                    self?.bindCodexSession(id)
                     guard let self else { return }
+                    if let requestedSessionID = self.codexInitialSessionID {
+                        if requestedSessionID == id {
+                            self.hasConfirmedCodexInitialSession = true
+                        } else if !self.hasConfirmedCodexInitialSession {
+                            self.onCodexSessionBound?(id, transcriptPath)
+                            return
+                        }
+                    }
+                    self.bindCodexSession(id)
                     TracingService.shared.record(
                         "statusline.codex.session.bound.received",
                         attributes: [

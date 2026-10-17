@@ -449,6 +449,7 @@ struct SessionPersistence {
                     agentControlInjectionEnabled: agentControlInjectionEnabled,
                     resumeOpencodeSessionID: resumeOpencodeSessionID,
                     resumeCodexSessionID: codexRecovery == nil ? codexResumeSessionID : nil,
+                    codexTranscriptPath: persistedPane.codexTranscriptPath,
                     codexContinuationRecovery: codexRecovery,
                     codexContinuationNotice: Tab.codexRestoreNotice(
                         harness: persistedPane.harness,

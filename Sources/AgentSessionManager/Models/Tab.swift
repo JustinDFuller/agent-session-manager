@@ -405,6 +405,7 @@ final class Tab: Identifiable {
         agentControlInjectionEnabled: Bool = true,
         resumeOpencodeSessionID: String? = nil,
         resumeCodexSessionID: String? = nil,
+        codexTranscriptPath: String? = nil,
         codexContinuationRecovery: CodexContinuationRecovery? = nil,
         codexContinuationNotice: String? = nil,
         statusLineConfigOverride: StatusLineConfig? = nil,
@@ -447,6 +448,8 @@ final class Tab: Identifiable {
         pane.extraArgs = extraArgs
         pane.extraEnvVars = extraEnvVars
         pane.opencodeSessionID = resumeOpencodeSessionID
+        pane.codexSessionID = resumeCodexSessionID
+        pane.codexTranscriptPath = codexTranscriptPath
         pane.codexContinuationRecovery = codexContinuationRecovery
         pane.codexContinuationNotice = codexContinuationNotice
         if harness == .codex, codexContinuationRecovery == .exactSessionUnavailable {
@@ -492,6 +495,8 @@ final class Tab: Identifiable {
                 codexAdapter: codexAdapter,
                 codexShell: appSettings.map { ShellResolver.resolved($0) } ?? ShellResolver.detectedLoginShell(),
                 codexEnvironment: ProcessEnvironment.dictionary(from: codexEnvironment),
+                codexInitialSessionID: resumeCodexSessionID,
+                codexInitialTranscriptPath: codexTranscriptPath,
                 customFieldEnvironment: extraEnvVars)
             pane.installStatusLineMonitor(monitor)
         }
@@ -778,6 +783,8 @@ final class Tab: Identifiable {
                 codexAdapter: codexAdapter,
                 codexShell: new.pendingShell ?? ShellResolver.detectedLoginShell(),
                 codexEnvironment: ProcessEnvironment.dictionary(from: new.pendingEnvironment ?? []),
+                codexInitialSessionID: pane.codexSessionID,
+                codexInitialTranscriptPath: pane.codexTranscriptPath,
                 customFieldEnvironment: pane.extraEnvVars)
         }
         if let monitor {

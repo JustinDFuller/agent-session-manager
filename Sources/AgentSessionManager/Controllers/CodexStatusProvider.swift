@@ -18,6 +18,8 @@ struct StatusProviderContext {
     let codexHookDiagnosticPath: String?
     let codexLaunchGeneration: String?
     let codexAdapter: CodexCompatibilityAdapter?
+    let codexInitialSessionID: String?
+    let codexInitialTranscriptPath: String?
     let opencodePort: Int?
     let opencodeSessionID: String?
     let opencodeEnvironment: [String: String]
@@ -41,6 +43,8 @@ struct StatusProviderContext {
         codexHookDiagnosticPath: String? = nil,
         codexLaunchGeneration: String? = nil,
         codexAdapter: CodexCompatibilityAdapter? = nil,
+        codexInitialSessionID: String? = nil,
+        codexInitialTranscriptPath: String? = nil,
         opencodeEnvironment: [String: String] = [:]
     ) {
         self.paneID = paneID
@@ -59,6 +63,8 @@ struct StatusProviderContext {
         self.codexHookDiagnosticPath = codexHookDiagnosticPath
         self.codexLaunchGeneration = codexLaunchGeneration
         self.codexAdapter = codexAdapter
+        self.codexInitialSessionID = codexInitialSessionID
+        self.codexInitialTranscriptPath = codexInitialTranscriptPath
         self.opencodePort = opencodePort
         self.opencodeSessionID = opencodeSessionID
         self.opencodeEnvironment = opencodeEnvironment
@@ -735,6 +741,26 @@ final class CodexStatusProvider: StatusLineDataProvider {
                     reason: "missing_hook_path", retryReason: "missing_hook_path", attempt: 1)
                 return
             }
+            if let sessionID = context.codexInitialSessionID {
+                trace(
+                    "statusline.codex.continuation.binding_seeded",
+                    attributes: [
+                        "session_id_prefix": String(sessionID.prefix(12)),
+                        "transcript_available": context.codexInitialTranscriptPath == nil ? "false" : "true",
+                    ])
+                bind(
+                    record: CodexHookSessionRecord(
+                        paneID: context.paneID.uuidString,
+                        tabID: context.tabID.uuidString,
+                        sessionID: sessionID,
+                        cwd: context.workingDirectory,
+                        model: nil,
+                        transcriptPath: context.codexInitialTranscriptPath,
+                        hookEventName: "saved_exact_identity",
+                        timestamp: Date().timeIntervalSince1970),
+                    attempt: 0,
+                    lateBound: false)
+            }
             let queue = context.codexHookQueuePath.map { CodexHookQueue(fileURL: URL(filePath: $0)) }
             let deadline = Date().addingTimeInterval(startupTimeout)
             var attempt = 0
@@ -971,6 +997,21 @@ final class CodexStatusProvider: StatusLineDataProvider {
     }
 
     private func bind(record: CodexHookSessionRecord, attempt: Int, lateBound: Bool) {
+        if record.hookEventName != "saved_exact_identity",
+            let requestedSessionID = context.codexInitialSessionID,
+            boundSessionID == requestedSessionID,
+            record.sessionID != requestedSessionID
+        {
+            trace(
+                "statusline.codex.continuation.binding_rejected",
+                attributes: [
+                    "requested_session_id_prefix": String(requestedSessionID.prefix(12)),
+                    "bound_session_id_prefix": String(record.sessionID.prefix(12)),
+                    "hook_event_name": record.hookEventName,
+                ])
+            onSessionBound?(record.sessionID, record.transcriptPath)
+            return
+        }
         let sessionChanged = boundSessionID != record.sessionID
         let nextTranscriptPath = record.transcriptPath ?? boundTranscriptPath
         let transcriptChanged = boundTranscriptPath != nextTranscriptPath
