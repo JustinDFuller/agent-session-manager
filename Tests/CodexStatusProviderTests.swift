@@ -2471,6 +2471,84 @@ extension CodexStatusProviderTests {
     }
 
     @MainActor
+    func testCodexRestartSeedsSavedTranscriptStatusBeforeHookRecord() throws {
+        let binDirectory = tempDir.appending(path: "codex-restart-bin", directoryHint: .isDirectory)
+        let codexHome = tempDir.appending(path: "codex-restart-home", directoryHint: .isDirectory)
+        let repository = tempDir.appending(path: "restart-repo", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        let codexExecutable = binDirectory.appending(path: "codex")
+        try "#!/bin/sh\nprintf 'codex-cli 0.162.1\\n'\n"
+            .write(to: codexExecutable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: codexExecutable.path)
+        try "export PATH='\(binDirectory.path)':\"$PATH\"\n"
+            .write(to: tempDir.appending(path: ".bashrc"), atomically: true, encoding: .utf8)
+        let transcript = repository.appending(path: "restart.jsonl")
+        try codexTokenLine(model: "restart-model", input: 120, output: 30, contextTokens: 450, window: 950)
+            .appending("\n")
+            .write(to: transcript, atomically: true, encoding: .utf8)
+        try executeSQL(
+            "CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT); INSERT INTO threads VALUES ('restart-session', '\(repository.path)', '\(transcript.path)');",
+            at: codexHome.appending(path: "state_5.sqlite"))
+
+        let settings = AppSettings()
+        settings.preferredShell = "/bin/bash"
+        let tab = Tab(name: "repo", directory: repository)
+        let pane = Pane(
+            name: "codex", tab: tab, harness: .codex, agentControlInjectionEnabled: false,
+            appSettings: settings)
+        pane.codexSessionID = "restart-session"
+        pane.codexTranscriptPath = transcript.path
+        pane.extraEnvVars = ["HOME": tempDir.path, "CODEX_HOME": codexHome.path]
+        let oldMonitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: repository.path,
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"),
+            codexEnvironment: ["CODEX_HOME": codexHome.path])
+        pane.installStatusLineMonitor(oldMonitor)
+        let oldController = TerminalController()
+        oldController.pendingDirectory = repository.path
+        oldController.pendingShell = "/bin/bash"
+        oldController.pendingEnvironment = ["PATH=/usr/bin:/bin", "HOME=\(tempDir.path)"]
+        pane.installTerminalController(oldController)
+        tab.panes.append(pane)
+        defer {
+            pane.removeStatusLineMonitor()
+            pane.terminalController?.terminate()
+        }
+
+        tab.restartPane(pane)
+
+        let restartedMonitor = try XCTUnwrap(pane.statusLineMonitor)
+        XCTAssertFalse(restartedMonitor === oldMonitor)
+        XCTAssertEqual(
+            Array(pane.terminalController?.pendingCommandArgs?.suffix(2) ?? []), ["resume", "restart-session"])
+        let bound = expectation(description: "replacement monitor seeds the saved session identity")
+        let previousCallback = restartedMonitor.onCodexSessionBound
+        restartedMonitor.onCodexSessionBound = { id, path in
+            previousCallback?(id, path)
+            if id == "restart-session", path == transcript.path {
+                bound.fulfill()
+            }
+        }
+        wait(for: [bound], timeout: 2)
+
+        let deadline = Date().addingTimeInterval(2)
+        while restartedMonitor.currentData?.model?.id != "restart-model", Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
+        XCTAssertEqual(restartedMonitor.currentData?.model?.id, "restart-model")
+        XCTAssertEqual(restartedMonitor.currentData?.contextWindow?.totalInputTokens, 120)
+        XCTAssertEqual(restartedMonitor.currentData?.contextWindow?.totalOutputTokens, 30)
+        XCTAssertEqual(try Data(contentsOf: URL(filePath: restartedMonitor.codexHookQueueFilePath)).count, 0)
+    }
+
+    @MainActor
     func testCodexContinuationPreflightRejectsTranscriptPathForDifferentSession() throws {
         let codexHome = tempDir.appending(path: "codex-home-path-mismatch", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)

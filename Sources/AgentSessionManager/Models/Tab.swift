@@ -593,6 +593,8 @@ final class Tab: Identifiable {
                 codexAdapter: adapter,
                 codexShell: launchSettings.map { ShellResolver.resolved($0) } ?? ShellResolver.detectedLoginShell(),
                 codexEnvironment: ProcessEnvironment.dictionary(from: new.pendingEnvironment ?? []),
+                codexInitialSessionID: pane.codexSessionID,
+                codexInitialTranscriptPath: pane.codexTranscriptPath,
                 customFieldEnvironment: pane.extraEnvVars)
             replacementCodexMonitor = monitor
             guard
