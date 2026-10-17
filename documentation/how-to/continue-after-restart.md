@@ -29,6 +29,8 @@ The app restores tabs and panes whose working copies still exist. With **Continu
 
 For a Codex pane, **Refresh and Continue** resumes that pane's exact foreground conversation when it is available. **Refresh with New Settings…** starts a fresh Codex conversation. If continuation is unavailable, choose **Retry** to check again or **Start New Conversation** to continue in a new session.
 
+To restart a Codex pane, open its context menu and choose **Refresh Pane…**. Choose **Refresh and Continue** to resume its current conversation, or **Refresh with New Settings…** to apply updated options and start a fresh conversation.
+
 ## What you should see
 
 The saved tabs reappear when their project directories can be restored, with each restorable pane starting in its saved Git worktree. Panes whose project directory or worktree is missing are left out of the restored session.

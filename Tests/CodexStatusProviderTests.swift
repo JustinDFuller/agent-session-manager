@@ -2359,6 +2359,73 @@ extension CodexStatusProviderTests {
     }
 
     @MainActor
+    func testQuickRefreshResumesExactCodexSessionWithFreshHooks() throws {
+        let binDirectory = tempDir.appending(path: "codex-refresh-bin", directoryHint: .isDirectory)
+        let codexHome = tempDir.appending(path: "codex-refresh-home", directoryHint: .isDirectory)
+        let repository = tempDir.appending(path: "repo", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        let codexExecutable = binDirectory.appending(path: "codex")
+        try "#!/bin/sh\nprintf 'codex-cli 0.162.1\\n'\n"
+            .write(to: codexExecutable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: codexExecutable.path)
+        try "export PATH='\(binDirectory.path)':\"$PATH\"\n"
+            .write(to: tempDir.appending(path: ".bashrc"), atomically: true, encoding: .utf8)
+        try executeSQL(
+            "CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT); INSERT INTO threads VALUES ('refresh-session', '\(repository.path)', '\(repository.path)/refresh.jsonl');",
+            at: codexHome.appending(path: "state_5.sqlite"))
+
+        let tab = Tab(name: "repo", directory: repository)
+        let pane = Pane(
+            name: "codex", tab: tab, harness: .codex, agentControlInjectionEnabled: false)
+        pane.codexSessionID = "refresh-session"
+        pane.codexTranscriptPath = "\(repository.path)/refresh.jsonl"
+        pane.extraArgs = ["--model", "gpt-5.1"]
+        pane.extraEnvVars = ["HOME": tempDir.path, "CODEX_HOME": codexHome.path]
+        let oldMonitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: repository.path,
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"),
+            codexLaunchEnvironment: ["CODEX_HOME": codexHome.path])
+        pane.installStatusLineMonitor(oldMonitor)
+        let oldController = TerminalController()
+        oldController.pendingDirectory = repository.path
+        oldController.pendingShell = "/bin/bash"
+        oldController.pendingEnvironment = ["PATH=/usr/bin:/bin", "HOME=\(tempDir.path)"]
+        pane.installTerminalController(oldController)
+        tab.panes.append(pane)
+        defer {
+            pane.removeStatusLineMonitor()
+            pane.terminalController?.terminate()
+        }
+
+        tab.refreshPane(pane)
+
+        XCTAssertNil(pane.setupState)
+        let refreshedMonitor = try XCTUnwrap(pane.statusLineMonitor)
+        let arguments = try XCTUnwrap(pane.terminalController?.pendingCommandArgs)
+        let expectedEvents = CodexCompatibilityAdapter.select("0.162.1").hookEvents
+        let configuredHooks = arguments.compactMap { argument -> String? in
+            guard argument.hasPrefix("hooks.") else { return nil }
+            return String(argument.split(separator: "=", maxSplits: 1)[0])
+        }
+        XCTAssertEqual(Array(arguments.suffix(4)), ["--model", "gpt-5.1", "resume", "refresh-session"])
+        XCTAssertEqual(configuredHooks, expectedEvents.map { "hooks.\($0)" })
+        XCTAssertEqual(refreshedMonitor.codexHookScriptFilePath, oldMonitor.codexHookScriptFilePath)
+        XCTAssertNotEqual(refreshedMonitor.codexLaunchGeneration, oldMonitor.codexLaunchGeneration)
+        XCTAssertNotEqual(refreshedMonitor.codexHookQueueFilePath, oldMonitor.codexHookQueueFilePath)
+        XCTAssertTrue(
+            pane.terminalController?.pendingEnvironment?.contains(
+                "AGENT_SESSION_MANAGER_CODEX_LAUNCH_GENERATION=\(refreshedMonitor.codexLaunchGeneration)")
+                == true)
+    }
+
+    @MainActor
     func testCodexContinuationPreflightRejectsTranscriptPathForDifferentSession() throws {
         let codexHome = tempDir.appending(path: "codex-home-path-mismatch", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
