@@ -22,7 +22,7 @@ Keyboard shortcuts open, close, and move through tabs and panes without leaving 
 
 ## Control-Return in a pane
 
-On macOS 15 and later, while a terminal pane has keyboard focus, ⌃Return is sent to the program running in the pane instead of opening the pane's context menu. A program that has enabled extended keyboard reporting, such as Claude Code, receives it as a distinct Control+Enter, which Claude Code uses to send a queued message immediately. Other programs receive an ordinary Return. Right-click or Control-click a pane to open its context menu.
+On macOS 15 and later, while a terminal pane has keyboard focus, ⌃Return is sent to the program running in the pane instead of opening the pane's context menu. A program that has enabled extended keyboard reporting, such as Claude Code, receives it as a distinct Control+Enter, which Claude Code uses to send a queued message immediately. Other programs receive an ordinary Return. Right-click a pane to open its context menu.
 
 ## Shortcut configuration
 
