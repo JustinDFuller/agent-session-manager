@@ -11,24 +11,24 @@ Facts show their SF Symbol and label by default. Explicit `labelOnly` and `symbo
 | ID | Label | Availability | Source |
 |----|-------|-------------|--------|
 | `agentName` | Agent | Claude only | Claude hook JSON `agent.name` |
-| `context` | Context Used | Claude, Codex | Claude hook JSON; Codex rollout token usage |
-| `contextRemaining` | Context Remaining | Claude, Codex | Claude hook JSON; Codex 0.136.x rollout context percentage remainder |
+| `context` | Context Used | Claude, Codex | Claude hook JSON; version-gated Codex rollout data while foreground metric repair is in progress |
+| `contextRemaining` | Context Remaining | Claude, Codex | Claude hook JSON; legacy Codex 0.136.x rollout data, with current-version accuracy pending acceptance |
 | `cost` | Cost | Claude, OpenCode | Claude hook JSON; OpenCode provider |
 | `duration` | Duration | All | App-computed from process start time |
 | `effort` | Effort | Claude only | Claude hook JSON `effort.level` |
 | `exceeds200k` | Exceeds 200k | Claude only | Claude hook JSON `exceeds_200k_tokens` |
-| `inputTokens` | Input Tokens | Claude, Codex, OpenCode | Harness provider token usage |
+| `inputTokens` | Input Tokens | Claude, Codex, OpenCode | Harness provider token usage; Codex values require a supported adapter and current foreground record |
 | `linesAdded` | Lines Added | All | `git diff --shortstat HEAD` (polled every 15s) |
 | `linesRemoved` | Lines Removed | All | `git diff --shortstat HEAD` (polled every 15s) |
 | `model` | Model | All | Harness provider model data |
 | `outputStyle` | Output Style | Claude only | Claude hook JSON `output_style.name` |
-| `outputTokens` | Output Tokens | Claude, Codex, OpenCode | Harness provider token usage |
+| `outputTokens` | Output Tokens | Claude, Codex, OpenCode | Harness provider token usage; Codex values require a supported adapter and current foreground record |
 | `pr` | PR | All | GitHub CLI (`gh pr view`) via PRTrackingCoordinator |
 | `profileName` | Profile | All | App state (selected profile) |
-| `rate5h` | 5h Rate | Claude, Codex | Claude hook JSON; Codex 300-minute primary rate window |
-| `rate5hReset` | 5h Resets At | Claude, Codex | Claude hook JSON; Codex 300-minute primary rate window |
-| `rate7d` | 7d Rate | Claude, Codex | Claude hook JSON; Codex 10,080-minute secondary rate window |
-| `rate7dReset` | 7d Resets At | Claude, Codex | Claude hook JSON; Codex 10,080-minute secondary rate window |
+| `rate5h` | 5h Rate | Claude, Codex | Claude hook JSON; supported Codex adapter's 300-minute primary window |
+| `rate5hReset` | 5h Resets At | Claude, Codex | Claude hook JSON; supported Codex adapter's 300-minute primary window |
+| `rate7d` | 7d Rate | Claude, Codex | Claude hook JSON; supported Codex adapter's 10,080-minute secondary window |
+| `rate7dReset` | 7d Resets At | Claude, Codex | Claude hook JSON; supported Codex adapter's 10,080-minute secondary window |
 | `sessionName` | Session Name | Claude, OpenCode | Harness provider session metadata |
 | `thinking` | Thinking | Claude only | Claude hook JSON `thinking.enabled` |
 | `version` | Version | All | Claude hook JSON / Cursor and Codex CLI `--version` |
@@ -46,9 +46,9 @@ Facts show their SF Symbol and label by default. Explicit `labelOnly` and `symbo
 
 - Claude panes use the Claude `statusLine` hook payload and preserve the existing I1/I3 enforcement.
 - Cursor panes combine app-owned baseline facts with Cursor hook model data.
-- Codex panes combine app-owned baseline facts with a hook-bound Codex session. Codex lifecycle hooks write the actual `session_id`, `cwd`, model, and `transcript_path` for the pane. The provider starts baseline polling immediately and keeps watching the pane-scoped hook record path until the first valid pane/tab record arrives, even if that happens after the startup window. Once bound, it pins the session id/transcript path for the pane lifetime, tails only that transcript, and uses `~/.codex/state_5.sqlite` only as optional enrichment by exact session id or exact transcript/rollout path. It never selects by latest same-working-directory row.
+- Codex panes combine app-owned baseline facts with adapters selected from the installed CLI version. The `codex_0_162` adapter installs only its supported lifecycle events and drains a locked pane-scoped metadata queue; bounded hook-write retries can still exhaust, in which case redacted diagnostics report the failure and event delivery is not guaranteed. The retained `codex_0_136` adapter uses its legacy hook contract and has no `Interrupt` event. Unrecognized versions use baseline facts without guessed Codex lifecycle hooks or rich parsing. The provider is being updated to follow foreground conversation changes and exact current metrics; until real Dev acceptance is recorded, those repaired facts remain unverified.
 
-Codex rollout parsing is intentionally bounded and content-avoiding. It accepts `session_meta.payload`, `turn_context`, and token-count `event_msg.payload.info` records, maps model/version/token/context/rate facts, and ignores message-content records. Startup catch-up reads only the latest 200 complete rollout lines and buffers partial JSONL writes until the newline arrives. Cost remains unsupported for Codex until Codex exposes a stable source.
+Codex rollout parsing is intended to remain bounded and content-avoiding. It uses metadata and token-count records, ignores message-content records, and treats SQLite as optional enrichment only for an exact known identity. Prompt text, commands, questions, tool input/output, and credentials are excluded from the hook queue and diagnostics. Cost remains unsupported for Codex until Codex exposes a stable source.
 
 ## Invariants
 
@@ -144,6 +144,13 @@ Other status-line events remain trace events:
 | `statusline.codex.hook_record_ignored` | Codex hook record was present but rejected, usually because the pane/tab ids did not match |
 | `statusline.codex.sqlite_enrichment` | Optional Codex SQLite enrichment result; includes exact-match outcome, retry attempt, selected session id prefix, and rollout path match |
 | `statusline.codex.selection_failed` | Codex hook binding failed or was still waiting; retryable startup failures include retry reason/attempt |
+| `statusline.codex.compatibility.selected` | Records a bounded adapter identifier, detected version, result, and hook count; baseline-only selection is an expected degraded mode |
+| `statusline.codex.compatibility.rejected_option` | A saved built-in Codex option value is rejected before launch; includes the adapter, option name, and bounded reason without changing the value |
+| `statusline.codex.hook_setup.failed` | App-owned Codex hook preparation failed and is surfaced through the pane setup UI |
+| `statusline.codex.hook_queue.write_failed` | Bounded Codex hook queue lock/write retries were exhausted; reports the failure through diagnostics without exposing hook payloads |
+| `statusline.codex.hook_queue.drained` | Records bounded queue, malformed-record, partial-record, and retry counts |
+| `statusline.codex.hook_queue.read_failed` | Records a bounded queue read error code and retry attempt |
+| `statusline.codex.hook_queue.record_ignored` | Records rejection of a queue record whose pane, tab, launch generation, or event identity does not match |
 | `statusline.codex.tailer_started` | Codex transcript/rollout tailer starts for the hook-bound session |
 | `statusline.codex.tailer_attachment` | Codex rollout watcher waits for its file or recovers after replacement |
 | `statusline.codex.tailer_stopped` | Codex rollout watcher stops |

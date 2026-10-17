@@ -34,7 +34,7 @@ Codex-specific flags can be enabled or disabled in **Settings → Harnesses → 
 
 | Flag | Type | Description |
 |------|------|-------------|
-| `--ask-for-approval` | string | Control approval timing: `untrusted`, `on-request`, or `never` |
+| `--ask-for-approval` | string | For Codex 0.162.x, use `on-request` or `never`; saved `untrusted` values are rejected before launch and require a user correction |
 | `--config` | string | Override configuration values (`key=value`, JSON-parsed if possible) |
 | `--dangerously-bypass-approvals-and-sandbox` | boolean | Skip all approval prompts and sandbox restrictions (dangerous) |
 | `--disable` | string | Force-disable a named feature flag |
@@ -47,13 +47,17 @@ Codex-specific flags can be enabled or disabled in **Settings → Harnesses → 
 | `--sandbox` | string | Sandbox policy: `read-only`, `workspace-write`, or `danger-full-access` |
 | `--search` | boolean | Enable live web search during the session |
 
+## Compatibility
+
+Codex integration is selected from the installed CLI version before lifecycle hooks are prepared. The `codex_0_162` adapter supports `SessionStart`, `UserPromptSubmit`, `Stop`, `PermissionRequest`, `PostToolUse`, and `Interrupt`; it does not inject `StopFailure`. The retained `codex_0_136` adapter uses its documented legacy hook contract and does not support `Interrupt`. An unrecognized version starts with app-owned baseline status and no guessed Codex lifecycle hooks or rich status parsing. Agent Control setup remains independent of this compatibility selection.
+
+Codex 0.162.x accepts `on-request` and `never` for the built-in `--ask-for-approval` option. If a saved pane or profile still contains `untrusted`, the app shows a correction message before starting Codex and preserves the saved value and custom options until the user changes them. Correct the global Codex setting or the affected profile in Settings → Harnesses → Codex or Settings → Profiles, then use Refresh with New Settings for an existing pane so its saved option snapshot is replaced. A setup-failed pane exposes removal and its pane context menu, not an inline Retry button. Custom CLI flags remain available for user-defined integrations.
+
+Adapter selection and option validation have source and unit-test coverage. The installed Codex 0.162.1 Dev launch and hook-queue behavior have not yet received real-runtime acceptance in this change, and foreground conversation tracking, rich metric accuracy, attention, and continuation remain pending their implementation and runtime review.
+
 ## Status Line
 
-Codex uses app-owned baseline status plus a version-gated local Codex provider.
-
-Baseline facts populate from the app side: worktree, branch, duration, changed lines, version, profile, and PR data. Codex panes launch with app-owned lifecycle hooks that write a pane-scoped session record containing the Codex `session_id`, `cwd`, model, and `transcript_path`. The provider starts baseline polling immediately and keeps watching the hook record path until the first valid pane/tab record arrives, even after the startup window. It then pins the session id/transcript path for the pane lifetime and tails only that transcript for model, token, context, and rate-limit facts. Unsupported facts, such as cost, are omitted for Codex panes.
-
-For Codex `0.136.x`, `~/.codex/state_5.sqlite` is optional enrichment by exact session id or exact transcript/rollout path only. The provider never selects a session by latest same-cwd row. Unknown Codex versions degrade to baseline facts plus hook model/version when available. Rollout parsing is treated as an internal, versioned integration and ignores content-bearing records. Input/output token chips use cumulative `total_token_usage`; context chips use `last_token_usage.total_tokens` divided by `model_context_window`. Provider traces record bounded hook binding, SQLite enrichment, transcript tailing, and field-presence diagnostics without logging prompts, transcript lines, auth data, or environment values.
+Codex combines app-owned baseline status with a version-gated local provider. Baseline facts include worktree, branch, duration, changed lines, version, profile, and PR data. Rich session facts are limited to recognized adapters and must describe only data available for that exact conversation; unsupported facts, such as cost, remain unavailable. See [Status Line](status-line.md) for the current fact catalog and [Agent Harness Feature Matrix](agent-harness-feature-matrix.md) for cross-harness coverage.
 
 ## Session Persistence
 

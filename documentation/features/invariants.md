@@ -28,6 +28,8 @@ Open **Settings → Debug** and enable **Enable Debug Mode**. Violations are alw
 
 Each occurrence has its own UUID. Repeated violations of the same invariant remain separate dashboard rows.
 
+An unrecognized Codex version falling back to baseline-only integration and a saved Codex option requiring user correction are expected compatibility outcomes, not invariant violations. Compatibility spans record those decisions without turning unsupported versions or preserved user settings into false invariant failures.
+
 `AuxiliaryWindowRegistry.checkOpenWindows()` records `app.launch.auxiliary_windows_checked` (observed window titles and requested ids) every time it runs, regardless of outcome, so a quiet launch is distinguishable from a check that never executed.
 
 ## File

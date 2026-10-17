@@ -1,0 +1,6 @@
+enum CodexCompatibilityFixtures {
+    static let currentTokenCount =
+        #"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":30,"cached_input_tokens":4,"cache_write_input_tokens":2,"output_tokens":10,"reasoning_output_tokens":1,"total_tokens":40},"last_token_usage":{"input_tokens":30,"cached_input_tokens":4,"cache_write_input_tokens":2,"output_tokens":10,"reasoning_output_tokens":1,"total_tokens":40},"model_context_window":100},"rate_limits":{"primary":{"used_percent":25.0,"window_minutes":300,"resets_at":2000000000},"secondary":{"used_percent":50.0,"window_minutes":10080,"resets_at":2000003600}}}}"#
+    static let legacyTokenCount =
+        #"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"cached_input_tokens":3,"output_tokens":5,"reasoning_output_tokens":1,"total_tokens":25},"last_token_usage":{"input_tokens":20,"cached_input_tokens":3,"output_tokens":5,"reasoning_output_tokens":1,"total_tokens":25},"model_context_window":80},"rate_limits":{"primary":{"used_percent":12.5,"window_minutes":300,"resets_at":2000000000},"secondary":{"used_percent":44.0,"window_minutes":10080,"resets_at":2000003600}}}}"#
+}
