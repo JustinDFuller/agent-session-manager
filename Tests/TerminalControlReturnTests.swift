@@ -21,6 +21,14 @@ final class TerminalControlReturnTests: XCTestCase {
         func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
     }
 
+    private final class SpyResponder: NSResponder {
+        var contextMenuEvents = 0
+
+        override func contextMenuKeyDown(_ event: NSEvent) {
+            contextMenuEvents += 1
+        }
+    }
+
     private struct KeyCase {
         let name: String
         let keyCode: UInt16
@@ -123,6 +131,36 @@ final class TerminalControlReturnTests: XCTestCase {
 
                 XCTAssertEqual(
                     delegate.sent, [], "\(keyCase.name) must reach super and send nothing (flags: \(withFlags))")
+            }
+        }
+    }
+
+    func testControlReturnDoesNotReachTheResponderChainButOtherKeysDo() throws {
+        guard #available(macOS 15.0, *) else { throw XCTSkip("Requires macOS 15") }
+        let cases = [
+            KeyCase(name: "Control-Return", keyCode: 36, characters: "\r", modifiers: .control),
+            KeyCase(name: "Return", keyCode: 36, characters: "\r", modifiers: []),
+            KeyCase(
+                name: "Control-Shift-Return", keyCode: 36, characters: "\r",
+                modifiers: [.control, .shift]),
+            KeyCase(name: "Control-A", keyCode: 0, characters: "a", modifiers: .control),
+        ]
+        for withFlags in [false, true] {
+            for keyCase in cases {
+                let (view, _) = makeView()
+                let spy = SpyResponder()
+                view.nextResponder = spy
+                if withFlags { view.feed(text: "\u{1b}[>1u") }
+                let event = try keyDownEvent(
+                    keyCode: keyCase.keyCode, characters: keyCase.characters,
+                    modifiers: keyCase.modifiers)
+
+                view.contextMenuKeyDown(event)
+
+                let expected = keyCase.name == "Control-Return" ? 0 : 1
+                XCTAssertEqual(
+                    spy.contextMenuEvents, expected,
+                    "\(keyCase.name) responder-chain delivery (flags: \(withFlags))")
             }
         }
     }
