@@ -41,6 +41,11 @@ final class StatusLineMonitor {
     var isCursorStopped: Bool { cursorLifecycle == .stopped }
     var isCodexWorking: Bool { codexLifecycle == .working }
     var isCodexStopped: Bool { codexLifecycle == .stopped }
+    private(set) var isCodexPermissionAttentionActive = false
+    private var activeCodexTurnID: String?
+    private var canceledCodexTurnIDs = Set<String>()
+    private var pendingCodexCompletionTurnID: String?
+    private var activeCodexQuestionCallIDs = Set<String>()
     private(set) var isOpenCodeWorking = false
 
     private let paneID: UUID
@@ -102,6 +107,8 @@ final class StatusLineMonitor {
     var onCodexStopped: (() -> Void)?
     var onCodexAttention: ((PaneAttentionEvent) -> Void)?
     var onCodexAttentionResolved: ((NotificationKind) -> Void)?
+    var onCodexAttentionCleared: (() -> Void)?
+    var onCodexQuestionCleared: (() -> Void)?
     var onOpencodeStopped: (() -> Void)?
     var onOpencodeActivityChanged: ((Bool) -> Void)?
     var onOpencodeSessionBound: ((String) -> Void)?
@@ -205,6 +212,12 @@ final class StatusLineMonitor {
                             self.codexLifecycle = isWorking ? .working : .stopped
                         }
                     }
+                    codexProvider.onCodexEvent = { [weak self] event, isCatchUp in
+                        Task { @MainActor in
+                            guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
+                            self.applyCodexEvent(event, isCatchUp: isCatchUp)
+                        }
+                    }
                     codexProvider.onHookRecords = { [weak self] records in
                         Task { @MainActor in
                             self?.handleCodexHookRecords(records)
@@ -216,10 +229,10 @@ final class StatusLineMonitor {
                         }
                     }
                     codexProvider.onAttention = { [weak self] event in
-                        self?.onCodexAttention?(event)
+                        self?.handleCodexAttention(event)
                     }
                     codexProvider.onAttentionResolved = { [weak self] kind in
-                        self?.onCodexAttentionResolved?(kind)
+                        self?.resolveCodexAttention(kind: kind)
                     }
                 }
                 codexProvider.onSessionBound = { [weak self] id, transcriptPath in
@@ -484,6 +497,12 @@ final class StatusLineMonitor {
         pendingStopWork = nil
         cancelCodexCompletion(reason: "teardown")
         codexLifecycleGeneration += 1
+        if isCodexPermissionAttentionActive || !activeCodexQuestionCallIDs.isEmpty {
+            traceCodexActivity("attention_cleared", reason: "teardown")
+            onCodexAttentionResolved?(.codexPermissionRequest)
+            onCodexAttentionResolved?(.codexQuestion)
+            onCodexAttentionCleared?()
+        }
         agnosticProvider?.stop()
         if !isClaude {
             TracingService.shared.record(
@@ -493,6 +512,11 @@ final class StatusLineMonitor {
         agnosticProvider = nil
         cursorLifecycle = .unknown
         codexLifecycle = .unknown
+        activeCodexTurnID = nil
+        canceledCodexTurnIDs.removeAll()
+        pendingCodexCompletionTurnID = nil
+        activeCodexQuestionCallIDs.removeAll()
+        isCodexPermissionAttentionActive = false
         codexBoundSessionID = nil
         codexForegroundTurnID = nil
         codexHasActiveForegroundTurn = false
@@ -502,6 +526,8 @@ final class StatusLineMonitor {
         onCodexStopped = nil
         onCodexAttention = nil
         onCodexAttentionResolved = nil
+        onCodexAttentionCleared = nil
+        onCodexQuestionCleared = nil
         onOpencodePermissionReplied = nil
         hasFiredResolutionNotification = false
         try? FileManager.default.removeItem(atPath: filePath)
@@ -953,6 +979,194 @@ final class StatusLineMonitor {
         DispatchQueue.main.asyncAfter(deadline: .now() + stopNotificationGracePeriod, execute: work)
     }
 
+    func handleCodexAttention(_ event: PaneAttentionEvent) {
+        if event.source == .codexPermissionRequest {
+            isCodexPermissionAttentionActive = true
+        }
+        onCodexAttention?(event)
+    }
+
+    func resolveCodexAttention(kind: NotificationKind) {
+        if kind == .codexPermissionRequest {
+            isCodexPermissionAttentionActive = false
+        }
+        if kind == .codexQuestion {
+            onCodexQuestionCleared?()
+        }
+        onCodexAttentionResolved?(kind)
+    }
+
+    func acknowledgeCodexAttention() {
+        isCodexPermissionAttentionActive = false
+        activeCodexQuestionCallIDs.removeAll()
+    }
+
+    func acknowledgeCodexAttention(kind: NotificationKind) {
+        if kind == .codexPermissionRequest {
+            isCodexPermissionAttentionActive = false
+        } else if kind == .codexQuestion {
+            activeCodexQuestionCallIDs.removeAll()
+        }
+    }
+
+    func applyCodexEvent(_ event: CodexProviderEvent, isCatchUp: Bool = false) {
+        switch event {
+        case .foregroundTurnStarted(let turnID, let isForeground):
+            guard isForeground else { return }
+            if pendingCodexCompletionWork != nil {
+                traceCodexActivity("completion_canceled", reason: "new_foreground_turn")
+            }
+            cancelCodexCompletion(reason: "new_foreground_turn")
+            pendingCodexCompletionTurnID = nil
+            if codexLifecycle != .working {
+                codexLifecycle = .working
+                traceCodexActivity("working", reason: "turn_started")
+            }
+            activeCodexTurnID = turnID
+            canceledCodexTurnIDs.remove(turnID)
+            if isCodexPermissionAttentionActive || !activeCodexQuestionCallIDs.isEmpty {
+                traceCodexActivity("attention_cleared", reason: "next_foreground_turn")
+            }
+            activeCodexQuestionCallIDs.removeAll()
+            isCodexPermissionAttentionActive = false
+            onCodexAttentionResolved?(.codexPermissionRequest)
+            onCodexAttentionResolved?(.codexQuestion)
+            onCodexAttentionCleared?()
+        case .foregroundTurnCompleted(let turnID, let isForeground, let succeeded):
+            guard isForeground, activeCodexTurnID == nil || activeCodexTurnID == turnID else { return }
+            codexLifecycle = .stopped
+            if !succeeded {
+                if activeCodexTurnID == turnID { activeCodexTurnID = nil }
+                if codexForegroundTurnID == turnID { codexHasActiveForegroundTurn = false }
+                rememberCanceledCodexTurn(turnID)
+                if pendingCodexCompletionTurnID == turnID
+                    || (pendingCodexCompletionWork != nil && codexForegroundTurnID == turnID)
+                {
+                    cancelCodexCompletion(reason: "turn_failed")
+                    pendingCodexCompletionTurnID = nil
+                    traceCodexActivity("completion_canceled", reason: "turn_failed")
+                }
+            }
+            traceCodexActivity("stopped", reason: succeeded ? "turn_completed" : "turn_failed")
+        case .foregroundCompletionCandidate(let turnID):
+            guard !canceledCodexTurnIDs.contains(turnID), activeCodexTurnID == turnID else { return }
+            codexLifecycle = .stopped
+            activeCodexTurnID = nil
+            if pendingCodexCompletionWork != nil {
+                pendingCodexCompletionTurnID = nil
+                return
+            }
+            cancelCodexCompletion(reason: "superseded_completion")
+            pendingCodexCompletionTurnID = nil
+            guard !isCatchUp else { return }
+            pendingCodexCompletionTurnID = turnID
+            if stopNotificationGracePeriod <= 0 {
+                pendingCodexCompletionTurnID = nil
+                traceCodexActivity("completion_ready", reason: "grace_elapsed")
+                onCodexStopped?()
+            } else {
+                codexCompletionGeneration += 1
+                let generation = codexCompletionGeneration
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self,
+                        self.codexCompletionGeneration == generation,
+                        self.codexLifecycle == .stopped,
+                        self.pendingCodexCompletionTurnID == turnID,
+                        !self.canceledCodexTurnIDs.contains(turnID)
+                    else { return }
+                    self.pendingCodexCompletionWork = nil
+                    self.pendingCodexCompletionTurnID = nil
+                    self.recordCodexCompletion(phase: "delivered", reason: "foreground_stop")
+                    self.traceCodexActivity("completion_ready", reason: "grace_elapsed")
+                    self.onCodexStopped?()
+                }
+                pendingCodexCompletionWork = work
+                recordCodexCompletion(phase: "scheduled", reason: "foreground_stop")
+                traceCodexActivity("completion_scheduled", reason: "grace_period")
+                DispatchQueue.main.asyncAfter(deadline: .now() + stopNotificationGracePeriod, execute: work)
+            }
+        case .foregroundTurnInterrupted(let turnID, let isForeground):
+            guard isForeground,
+                turnID == nil || activeCodexTurnID == turnID || pendingCodexCompletionTurnID == turnID
+            else { return }
+            cancelCodexCompletion(reason: turnID == nil ? "session_rebound" : "interrupted")
+            if let turnID { rememberCanceledCodexTurn(turnID) }
+            pendingCodexCompletionTurnID = nil
+            codexLifecycle = .stopped
+            activeCodexTurnID = nil
+            traceCodexActivity("stopped", reason: turnID == nil ? "session_rebound" : "turn_interrupted")
+            traceCodexActivity("completion_canceled", reason: turnID == nil ? "session_rebound" : "turn_interrupted")
+            if turnID == nil {
+                if isCodexPermissionAttentionActive || !activeCodexQuestionCallIDs.isEmpty {
+                    traceCodexActivity("attention_cleared", reason: "session_rebound")
+                }
+                activeCodexQuestionCallIDs.removeAll()
+                canceledCodexTurnIDs.removeAll()
+                isCodexPermissionAttentionActive = false
+                onCodexAttentionResolved?(.codexPermissionRequest)
+                onCodexAttentionResolved?(.codexQuestion)
+                onCodexAttentionCleared?()
+            }
+        case .permissionRequested(let turnID):
+            guard activeCodexTurnID == nil || turnID == nil || activeCodexTurnID == turnID,
+                !isCodexPermissionAttentionActive
+            else { return }
+            isCodexPermissionAttentionActive = true
+            onCodexAttention?(PaneAttentionEvent.codexPermissionRequest)
+            traceCodexActivity("attention_requested", reason: "permission")
+        case .questionRequested(let callID):
+            guard !activeCodexQuestionCallIDs.contains(callID) else { return }
+            activeCodexQuestionCallIDs.insert(callID)
+            onCodexAttention?(PaneAttentionEvent.codexQuestion)
+            traceCodexActivity("attention_requested", reason: "question")
+        case .questionResolved(let callID):
+            guard activeCodexQuestionCallIDs.remove(callID) != nil else { return }
+            if activeCodexQuestionCallIDs.isEmpty {
+                onCodexQuestionCleared?()
+                onCodexAttentionResolved?(.codexQuestion)
+            }
+            traceCodexActivity("attention_cleared", reason: "matching_question_output")
+        }
+    }
+
+    func codexProcessExited() {
+        cancelCodexCompletion(reason: "process_exit")
+        activeCodexTurnID = nil
+        pendingCodexCompletionTurnID = nil
+        canceledCodexTurnIDs.removeAll()
+        if isCodexPermissionAttentionActive || !activeCodexQuestionCallIDs.isEmpty {
+            traceCodexActivity("attention_cleared", reason: "process_exit")
+        }
+        activeCodexQuestionCallIDs.removeAll()
+        isCodexPermissionAttentionActive = false
+        onCodexAttentionResolved?(.codexPermissionRequest)
+        onCodexAttentionResolved?(.codexQuestion)
+        onCodexAttentionCleared?()
+        codexLifecycle = .unknown
+        traceCodexActivity("stopped", reason: "process_exit")
+        traceCodexActivity("completion_canceled", reason: "process_exit")
+    }
+
+    private func rememberCanceledCodexTurn(_ turnID: String) {
+        canceledCodexTurnIDs.insert(turnID)
+        if canceledCodexTurnIDs.count > 64, let oldest = canceledCodexTurnIDs.first {
+            canceledCodexTurnIDs.remove(oldest)
+        }
+    }
+
+    private func traceCodexActivity(_ state: String, reason: String) {
+        TracingService.shared.record(
+            "statusline.codex.activity.changed",
+            attributes: [
+                "pane.name": paneName,
+                "pane.id": paneID.uuidString,
+                "tab.id": tabID.uuidString,
+                "tab.name": tabName,
+                "state": state,
+                "reason": reason,
+            ])
+    }
+
     func bindCodexSession(_ sessionID: String) {
         if let previousID = codexBoundSessionID, previousID != sessionID {
             cancelCodexCompletion(reason: "conversation_changed")
@@ -985,7 +1199,8 @@ final class StatusLineMonitor {
             case "Stop":
                 guard record.sessionID == codexBoundSessionID,
                     codexHasActiveForegroundTurn,
-                    record.turnID == codexForegroundTurnID
+                    record.turnID == codexForegroundTurnID,
+                    !canceledCodexTurnIDs.contains(record.turnID ?? "")
                 else { continue }
                 guard pendingCodexCompletionWork == nil else { continue }
                 codexCompletionGeneration += 1

@@ -361,6 +361,55 @@ final class CodexStatusProviderTests: XCTestCase {
         }
     }
 
+    func testRolloutParserRecognizesForegroundLifecycleAndExcludesDelegatedTurns() {
+        let started = CodexRolloutParser.parseActivityEvent(
+            Data(
+                #"{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-a","root_turn_id":"turn-a"}}"#
+                    .utf8))
+        XCTAssertEqual(started, .foregroundTurnStarted(turnID: "turn-a", isForeground: true))
+
+        let delegated = CodexRolloutParser.parseActivityEvent(
+            Data(
+                #"{"type":"event_msg","payload":{"type":"task_complete","turn_id":"subagent-turn","root_turn_id":"turn-a"}}"#
+                    .utf8))
+        XCTAssertNil(delegated)
+
+        let completed = CodexRolloutParser.parseActivityEvent(
+            Data(
+                #"{"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-a","root_turn_id":"turn-a","error":null,"last_agent_message":"private answer"}}"#
+                    .utf8))
+        XCTAssertEqual(completed, .foregroundTurnCompleted(turnID: "turn-a", isForeground: true, succeeded: true))
+        XCTAssertFalse(String(describing: completed).contains("private answer"))
+
+        let failed = CodexRolloutParser.parseActivityEvent(
+            Data(
+                #"{"type":"event_msg","payload":{"type":"turn_complete","turn_id":"turn-a","root_turn_id":"turn-a","error":{"message":"private failure"}}}"#
+                    .utf8))
+        XCTAssertEqual(failed, .foregroundTurnCompleted(turnID: "turn-a", isForeground: true, succeeded: false))
+
+        let interrupted = CodexRolloutParser.parseActivityEvent(
+            Data(
+                #"{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-a","root_turn_id":"turn-a","reason":"interrupted"}}"#
+                    .utf8))
+        XCTAssertEqual(interrupted, .foregroundTurnInterrupted(turnID: "turn-a", isForeground: true))
+    }
+
+    func testRolloutParserKeepsQuestionCallIdentityWithoutContent() {
+        let request = CodexRolloutParser.parseActivityEvent(
+            Data(
+                #"{"type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"question-42","arguments":"private question text"}}"#
+                    .utf8))
+        XCTAssertEqual(request, .questionRequested(callID: "question-42"))
+        XCTAssertFalse(String(describing: request).contains("private question text"))
+
+        let output = CodexRolloutParser.parseActivityEvent(
+            Data(
+                #"{"type":"response_item","payload":{"type":"function_call_output","call_id":"question-42","output":"private answer"}}"#
+                    .utf8))
+        XCTAssertEqual(output, .questionResolved(callID: "question-42"))
+        XCTAssertFalse(String(describing: output).contains("private answer"))
+    }
+
     func testRolloutParserMapsTokenCountAndRateLimits() throws {
         let line = Data(CodexCompatibilityFixtures.currentTokenCount.utf8)
 
@@ -1719,6 +1768,61 @@ extension CodexStatusProviderTests {
 }
 
 extension CodexStatusProviderTests {
+    @MainActor
+    func testCurrentProviderEmitsValidatedTurnEventsForCompletionCandidate() throws {
+        let queueURL = tempDir.appending(path: "turn-events.jsonl")
+        let context = makeContext(
+            processStartTime: Date(),
+            queuePath: queueURL.path,
+            launchGeneration: "turn-events-generation",
+            adapter: .current(version: "0.162.1"))
+        let records = [
+            ("SessionStart", Optional<String>.none),
+            ("UserPromptSubmit", Optional("turn-current")),
+            ("Stop", Optional("turn-current")),
+        ].map { event, turnID in
+            CodexHookQueueRecord(
+                paneID: context.paneID.uuidString,
+                tabID: context.tabID.uuidString,
+                launchGeneration: context.codexLaunchGeneration ?? "",
+                hookEventName: event,
+                sessionID: "session-current",
+                turnID: turnID,
+                requestID: nil,
+                timestamp: Date().timeIntervalSince1970,
+                source: "hook",
+                model: nil,
+                transcriptPath: nil,
+                result: nil)
+        }
+        let queueData = try records.reduce(into: Data()) { data, record in
+            data.append(try JSONEncoder().encode(record))
+            data.append(0x0A)
+        }
+        try queueData.write(to: queueURL)
+
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-turn-events.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.2)
+        let candidateReceived = expectation(description: "completion candidate follows the bound foreground start")
+        var events: [CodexProviderEvent] = []
+        provider.onCodexEvent = { event, _ in
+            events.append(event)
+            if event == .foregroundCompletionCandidate(turnID: "turn-current") {
+                candidateReceived.fulfill()
+            }
+        }
+
+        provider.start()
+        wait(for: [candidateReceived], timeout: 2)
+        provider.stop()
+
+        XCTAssertTrue(events.contains(.foregroundTurnStarted(turnID: "turn-current", isForeground: true)))
+        XCTAssertEqual(events.filter { $0 == .foregroundCompletionCandidate(turnID: "turn-current") }.count, 1)
+    }
+
     @MainActor
     func testCurrentAdapterReportsForegroundWorkingAndStoppedTransitions() throws {
         TracingService.shared.resetForTesting()

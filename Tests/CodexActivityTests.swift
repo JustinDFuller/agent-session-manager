@@ -93,12 +93,63 @@ final class CodexActivityTests: XCTestCase {
         XCTAssertEqual(stoppedCount, 0)
     }
 
+    func testFailedRolloutCancelsAnExactSessionHookCompletion() async throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+        let monitor = StatusLineMonitor(paneID: UUID(), harness: .codex)
+        monitor.stopNotificationGracePeriod = 0.05
+        var stoppedCount = 0
+        monitor.onCodexStopped = { stoppedCount += 1 }
+        let prompt = CodexHookQueueRecord(
+            paneID: "pane",
+            tabID: "tab",
+            launchGeneration: "generation",
+            hookEventName: "UserPromptSubmit",
+            sessionID: "session-current",
+            turnID: "turn-current",
+            requestID: nil,
+            timestamp: 1,
+            source: "hook",
+            model: nil,
+            transcriptPath: nil,
+            result: nil)
+        let stop = CodexHookQueueRecord(
+            paneID: "pane",
+            tabID: "tab",
+            launchGeneration: "generation",
+            hookEventName: "Stop",
+            sessionID: "session-current",
+            turnID: "turn-current",
+            requestID: nil,
+            timestamp: 2,
+            source: "hook",
+            model: nil,
+            transcriptPath: nil,
+            result: nil)
+
+        monitor.handleCodexHookRecords([prompt])
+        monitor.handleCodexHookRecords([stop])
+        monitor.applyCodexEvent(
+            .foregroundTurnCompleted(turnID: "turn-current", isForeground: true, succeeded: false))
+        try await Task.sleep(for: .milliseconds(100))
+
+        XCTAssertEqual(stoppedCount, 0)
+        XCTAssertTrue(
+            TracingService.shared.recordedEventsForTesting.contains {
+                $0.name == "statusline.codex.completion"
+                    && $0.attributes["phase"] == "canceled"
+                    && $0.attributes["reason"] == "turn_failed"
+            })
+        monitor.stop()
+    }
+
     func testPermissionAndQuestionAttentionUseFixedCopyAndExactQuestionCallIdentity() {
         let monitor = StatusLineMonitor(paneID: UUID(), harness: .codex)
         var attentions: [PaneAttentionEvent] = []
         var attentionClears = 0
         var questionClears = 0
-        monitor.onClaudeHookAttention = { attentions.append($0) }
+        monitor.onCodexAttention = { attentions.append($0) }
         monitor.onCodexAttentionCleared = { attentionClears += 1 }
         monitor.onCodexQuestionCleared = { questionClears += 1 }
 

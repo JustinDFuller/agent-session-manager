@@ -107,6 +107,16 @@ struct CodexThreadSelection: Equatable {
     let freshCandidateCount: Int
 }
 
+enum CodexProviderEvent: Equatable {
+    case foregroundTurnStarted(turnID: String, isForeground: Bool)
+    case foregroundTurnCompleted(turnID: String, isForeground: Bool, succeeded: Bool)
+    case foregroundCompletionCandidate(turnID: String)
+    case foregroundTurnInterrupted(turnID: String?, isForeground: Bool)
+    case permissionRequested(turnID: String?)
+    case questionRequested(callID: String)
+    case questionResolved(callID: String)
+}
+
 enum CodexTranscriptAttentionEvent: Equatable {
     case questionRequested(callID: String)
     case questionResolved(callID: String)
@@ -278,6 +288,41 @@ enum CodexStateStoreError: Error, Equatable {
 
 struct CodexRolloutParser {
     private static let baselineTokenCount = 12_000
+
+    static func parseActivityEvent(_ data: Data) -> CodexProviderEvent? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let type = object["type"] as? String
+        else { return nil }
+        if type == "response_item", let attention = CodexTranscriptAttentionEvent.parseLine(data) {
+            switch attention {
+            case .questionRequested(let callID): return .questionRequested(callID: callID)
+            case .questionResolved(let callID): return .questionResolved(callID: callID)
+            }
+        }
+        guard type == "event_msg",
+            let payload = object["payload"] as? [String: Any],
+            let eventType = payload["type"] as? String
+        else { return nil }
+        let turnID = payload["turn_id"] as? String
+        let rootTurnID = payload["root_turn_id"] as? String
+        let isForeground = rootTurnID == nil || rootTurnID == turnID
+        switch eventType {
+        case "task_started", "turn_started":
+            guard isForeground, let turnID, !turnID.isEmpty, turnID.count <= 128 else { return nil }
+            return .foregroundTurnStarted(turnID: turnID, isForeground: true)
+        case "task_complete", "turn_complete":
+            guard isForeground, let turnID, !turnID.isEmpty, turnID.count <= 128 else { return nil }
+            return .foregroundTurnCompleted(
+                turnID: turnID,
+                isForeground: true,
+                succeeded: payload["error"] == nil || payload["error"] is NSNull)
+        case "turn_aborted":
+            guard isForeground, turnID?.count ?? 0 <= 128 else { return nil }
+            return .foregroundTurnInterrupted(turnID: turnID, isForeground: true)
+        default:
+            return nil
+        }
+    }
 
     static func parseLine(
         _ data: Data,
@@ -465,6 +510,7 @@ final class CodexRolloutTailer {
     let adapter: CodexCompatibilityAdapter
     var onUpdate: ((StatusLineData) -> Void)?
     var onAttention: ((CodexTranscriptAttentionEvent) -> Void)?
+    var onActivity: ((CodexProviderEvent, Bool) -> Void)?
     var onUnavailable: (() -> Void)?
     var onTrace: ((String, [String: String]) -> Void)?
     private var watcher: FileSystemEventWatcher?
@@ -562,13 +608,17 @@ final class CodexRolloutTailer {
             for line in lines {
                 lineCount += 1
                 guard line.count <= 64 * 1024 else { continue }
-                guard (try? JSONSerialization.jsonObject(with: Data(line))) != nil else {
+                let lineData = Data(line)
+                guard (try? JSONSerialization.jsonObject(with: lineData)) != nil else {
                     onTrace?("statusline.codex.tailer_read", ["result": "malformed_record"])
                     onUnavailable?()
                     continue
                 }
+                if let activity = CodexRolloutParser.parseActivityEvent(lineData) {
+                    onActivity?(activity, catchUp)
+                }
                 if let update = CodexRolloutParser.parseLine(
-                    Data(line), expectedCWD: expectedCWD, adapter: adapter)
+                    lineData, expectedCWD: expectedCWD, adapter: adapter)
                 {
                     updateCount += 1
                     onUpdate?(update)
@@ -597,6 +647,7 @@ final class CodexStatusProvider: StatusLineDataProvider {
     var onAttention: ((PaneAttentionEvent) -> Void)?
     var onAttentionResolved: ((NotificationKind) -> Void)?
     var onHookRecords: (([CodexHookQueueRecord]) -> Void)?
+    var onCodexEvent: ((CodexProviderEvent, Bool) -> Void)?
     var onHookFailure: (() -> Void)?
     var onActivityChanged: ((Bool) -> Void)?
     var onSessionBound: ((String, String?) -> Void)?
@@ -821,6 +872,28 @@ final class CodexStatusProvider: StatusLineDataProvider {
                         continue
                     }
                     bind(record: record, attempt: attempt, lateBound: lateBound)
+                }
+
+                for record in validRecords where record.sessionID == boundSessionID {
+                    switch record.hookEventName {
+                    case "UserPromptSubmit":
+                        if let turnID = record.turnID, !turnID.isEmpty, turnID.count <= 128 {
+                            onCodexEvent?(.foregroundTurnStarted(turnID: turnID, isForeground: true), false)
+                        }
+                    case "Stop":
+                        if case .current = adapter, let turnID = record.turnID,
+                            !turnID.isEmpty, turnID.count <= 128
+                        {
+                            onCodexEvent?(.foregroundCompletionCandidate(turnID: turnID), false)
+                        }
+                    case "Interrupt":
+                        if case .current = adapter, (record.turnID?.count ?? 0) <= 128 {
+                            onCodexEvent?(
+                                .foregroundTurnInterrupted(turnID: record.turnID, isForeground: true), false)
+                        }
+                    default:
+                        break
+                    }
                 }
 
                 for record in validRecords where record.hookEventName == "PermissionRequest" {
@@ -1148,6 +1221,23 @@ final class CodexStatusProvider: StatusLineDataProvider {
             rolloutPath: path, expectedCWD: context.workingDirectory, adapter: adapter)
         next.onTrace = { [weak self] name, attributes in
             self?.trace(name, attributes: attributes)
+        }
+        next.onActivity = { [weak self] event, isCatchUp in
+            guard let self else { return }
+            guard self.tailerGeneration == generation else {
+                self.trace("statusline.codex.tailer_update_ignored", attributes: ["result": "stale_generation"])
+                return
+            }
+            guard self.boundSessionID == sessionID,
+                self.boundTranscriptPath == path, self.tailerSessionID == sessionID,
+                self.tailer?.rolloutPath == path
+            else { return }
+            switch event {
+            case .questionRequested, .questionResolved:
+                break
+            default:
+                onCodexEvent?(event, isCatchUp)
+            }
         }
         next.onAttention = { [weak self] event in
             guard let self else { return }

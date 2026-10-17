@@ -1198,6 +1198,21 @@ final class PaneActivityInvariantTests: XCTestCase {
         monitor.stop()
     }
 
+    func testCodexPermissionAcknowledgementTracksIndependentQuestionAttention() {
+        let monitor = StatusLineMonitor(paneID: UUID(), harness: .codex)
+
+        monitor.handleCodexAttention(.codexPermissionRequest)
+
+        XCTAssertTrue(monitor.isCodexPermissionAttentionActive)
+        monitor.acknowledgeCodexAttention(kind: .codexQuestion)
+        XCTAssertTrue(monitor.isCodexPermissionAttentionActive)
+        monitor.acknowledgeCodexAttention(kind: .codexPermissionRequest)
+        XCTAssertFalse(monitor.isCodexPermissionAttentionActive)
+        monitor.resolveCodexAttention(kind: .codexQuestion)
+        XCTAssertFalse(monitor.isCodexPermissionAttentionActive)
+        monitor.stop()
+    }
+
     private func codexLifecycleRecord(
         _ event: String,
         turnID: String? = "test-turn",
