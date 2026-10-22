@@ -19,7 +19,7 @@ MCP is the preferred agent-facing protocol. Claude Code, Cursor, Codex, and Open
 
 Use one app-owned Streamable HTTP MCP server bound to `127.0.0.1`, rather than one stdio server per pane. The app can then remain the single authority over live `@MainActor` state and can issue per-pane credentials. Native XPC is a possible future integration for other local clients, but the harnesses do not speak XPC and would still require custom adapters.
 
-The official [Swift MCP SDK](https://github.com/modelcontextprotocol/swift-sdk) is the first implementation candidate. The repository uses Swift tools 6.1, matching the SDK's current manifest requirement. The app source remains in its existing Swift 5 language mode until its separate concurrency migration is complete; it is still compiled by the installed Swift 6 toolchain. The control domain must remain independent of that transport decision.
+The official [Swift MCP SDK](https://github.com/modelcontextprotocol/swift-sdk) is the first implementation candidate. The repository uses Swift tools 6.2, which satisfies the SDK's manifest requirement. The app source remains in its existing Swift 5 language mode until its separate concurrency migration is complete; it is still compiled by the installed Swift 6 toolchain. The control domain must remain independent of that transport decision.
 
 ## Configuration
 
