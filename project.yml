@@ -2,7 +2,7 @@ name: AgentSessionManager
 options:
   bundleIdPrefix: com.justinfuller
   deploymentTarget:
-    macOS: "14.0"
+    macOS: "26.0"
   generateEmptyDirectories: true
 
 configs:
@@ -46,7 +46,7 @@ targets:
     settings:
       base:
         SWIFT_VERSION: "6.0"
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
         ENABLE_HARDENED_RUNTIME: YES
         OTHER_LDFLAGS:
           - "$(inherited)"
@@ -111,7 +111,7 @@ targets:
     settings:
       base:
         SWIFT_VERSION: "6.0"
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
     dependencies:
       - package: swift-sdk
         product: MCP
@@ -129,7 +129,7 @@ targets:
       base:
         PRODUCT_NAME: AgentSessionManagerMCPBridge
         SWIFT_VERSION: "6.0"
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
     dependencies:
       - target: AgentSessionManagerMCPBridgeCore
       - package: swift-sdk
@@ -148,7 +148,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.justinfuller.agent-session-manager.uitests
         SWIFT_VERSION: "6.0"
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: ""
         BUNDLE_LOADER: ""

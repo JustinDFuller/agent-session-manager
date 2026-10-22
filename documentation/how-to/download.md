@@ -12,7 +12,7 @@ The release DMG is the packaged version of Agent Session Manager for macOS. It i
 
 ## Before you start
 
-- Use a Mac running macOS 14 or later.
+- Use a Mac running macOS 26 or later.
 - Have at least one supported agent tool installed if you want to create an agent pane immediately.
 
 ## Download it

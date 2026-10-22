@@ -1,3 +1,4 @@
+import CoreGraphics
 import XCTest
 
 final class EmptyStateFlowTests: BaseTestCase {
@@ -10,6 +11,40 @@ final class EmptyStateFlowTests: BaseTestCase {
         waitFor(app.windows[mainWindowTitle])
         XCTAssertFalse(app.windows["Trace Dashboard"].exists)
         XCTAssertFalse(app.windows["Invariant Dashboard"].exists)
+    }
+
+    @MainActor
+    func testLaunchServicesLaunchShowsOnlyTheMainWindow() async throws {
+        let running = NSRunningApplication.runningApplications(
+            withBundleIdentifier: "com.justinfuller.agent-session-manager.xcode-dev"
+        )
+        let bundleURL = try XCTUnwrap(running.first?.bundleURL)
+        app.terminate()
+        _ = app.wait(for: .notRunning, timeout: 10)
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.arguments = ["--uitesting", "--uitesting-skip-restore"]
+        configuration.environment = ["DISABLE_AUTO_UPDATE": "true"]
+        configuration.createsNewApplicationInstance = true
+        let launched = try await NSWorkspace.shared.openApplication(at: bundleURL, configuration: configuration)
+        try await Task.sleep(for: .seconds(6))
+
+        let sizes = onscreenWindowSizes(processIdentifier: launched.processIdentifier)
+        launched.terminate()
+        XCTAssertEqual(sizes.count, 1, "Expected only the main window after launch, found windows sized \(sizes)")
+    }
+
+    private func onscreenWindowSizes(processIdentifier: pid_t) -> [CGSize] {
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        return windows.compactMap { window in
+            guard
+                window[kCGWindowOwnerPID as String] as? pid_t == processIdentifier,
+                window[kCGWindowLayer as String] as? Int == 0,
+                let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+                let rect = CGRect(dictionaryRepresentation: bounds)
+            else { return nil }
+            return rect.size
+        }
     }
 
     func testEmptyStateFlow() {

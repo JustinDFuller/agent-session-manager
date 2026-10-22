@@ -49,7 +49,7 @@ app-prd: build
 	xcrun actool AppIcons/Assets.xcassets --compile $(APP_BUNDLE)/Contents/Resources \
 		--app-icon AppIcon --standalone-icon-behavior all \
 		--output-partial-info-plist $(ICON_PARTIAL_PRD) \
-		--platform macosx --minimum-deployment-target 14.0
+		--platform macosx --minimum-deployment-target 26.0
 	/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $(APP_NAME)" $(APP_BUNDLE)/Contents/Info.plist
 	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(BUNDLE_ID)" $(APP_BUNDLE)/Contents/Info.plist
 	/usr/libexec/PlistBuddy -c "Set :CFBundleName $(APP_NAME)" $(APP_BUNDLE)/Contents/Info.plist
@@ -123,7 +123,7 @@ app-dev: build-dev
 		xcrun actool AppIcons/Assets.xcassets --compile $(APP_BUNDLE_DEV)/Contents/Resources \
 			--app-icon AppIcon-Dev --standalone-icon-behavior all \
 			--output-partial-info-plist $(ICON_PARTIAL_DEV) \
-			--platform macosx --minimum-deployment-target 14.0; \
+			--platform macosx --minimum-deployment-target 26.0; \
 		touch .build/dev-assets-compiled; \
 	fi
 	/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $(APP_NAME_DEV)" $(APP_BUNDLE_DEV)/Contents/Info.plist
