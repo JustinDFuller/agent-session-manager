@@ -154,7 +154,7 @@ final class CodexActivityTests: XCTestCase {
         monitor.onCodexQuestionCleared = { questionClears += 1 }
 
         monitor.applyCodexEvent(.foregroundTurnStarted(turnID: "turn-a", isForeground: true))
-        XCTAssertEqual(attentionClears, 1)
+        XCTAssertEqual(attentionClears, 0)
         monitor.applyCodexEvent(.permissionRequested(turnID: "turn-a"))
         monitor.applyCodexEvent(.permissionRequested(turnID: "turn-a"))
         monitor.applyCodexEvent(.questionRequested(callID: "question-a"))
@@ -163,14 +163,14 @@ final class CodexActivityTests: XCTestCase {
 
         monitor.applyCodexEvent(.questionResolved(callID: "other-question"))
         XCTAssertEqual(questionClears, 0)
-        XCTAssertEqual(attentionClears, 1)
+        XCTAssertEqual(attentionClears, 0)
         monitor.applyCodexEvent(.questionResolved(callID: "question-a"))
         XCTAssertEqual(questionClears, 1)
         monitor.applyCodexEvent(.questionResolved(callID: "question-a"))
         XCTAssertEqual(questionClears, 1)
 
         monitor.applyCodexEvent(.foregroundTurnStarted(turnID: "turn-b", isForeground: true))
-        XCTAssertEqual(attentionClears, 2)
+        XCTAssertEqual(attentionClears, 1)
         monitor.applyCodexEvent(.permissionRequested(turnID: "turn-b"))
         XCTAssertEqual(attentions.last?.reason, "Codex needs your approval")
         monitor.acknowledgeCodexAttention(kind: .codexQuestion)

@@ -817,9 +817,6 @@ final class CodexStatusProvider: StatusLineDataProvider {
                     pendingHookRecords.append(contentsOf: validRecords)
                     onHookRecords?(validRecords)
                     for record in validRecords {
-                        if record.hookEventName == "UserPromptSubmit" {
-                            pendingQuestionCallIDs.removeAll()
-                        }
                         let nextWorkingState: Bool?
                         switch record.hookEventName {
                         case "UserPromptSubmit": nextWorkingState = true
@@ -962,6 +959,7 @@ final class CodexStatusProvider: StatusLineDataProvider {
         enrichmentTask = nil
         hookDiagnosticTask?.cancel()
         hookDiagnosticTask = nil
+        clearPendingQuestionCallIDs(reason: "provider_stopped")
         baseline.stop()
         stopTailer()
     }
@@ -1053,6 +1051,7 @@ final class CodexStatusProvider: StatusLineDataProvider {
         }
 
         if sessionChanged {
+            clearPendingQuestionCallIDs(reason: "session_changed")
             enrichmentTask?.cancel()
             enrichmentTask = nil
             if tailer != nil {
@@ -1297,8 +1296,12 @@ final class CodexStatusProvider: StatusLineDataProvider {
                 trace("statusline.codex.question.attention", attributes: ["result": "requested"])
             case .questionResolved(let callID):
                 guard pendingQuestionCallIDs.remove(callID) != nil else { return }
-                onAttentionResolved?(.codexQuestion)
-                trace("statusline.codex.question.attention", attributes: ["result": "resolved"])
+                if pendingQuestionCallIDs.isEmpty {
+                    onAttentionResolved?(.codexQuestion)
+                }
+                trace(
+                    "statusline.codex.question.attention",
+                    attributes: ["result": pendingQuestionCallIDs.isEmpty ? "resolved" : "call_resolved"])
             }
         }
         next.onUnavailable = { [weak self] in
@@ -1350,6 +1353,13 @@ final class CodexStatusProvider: StatusLineDataProvider {
         tailer?.stop()
         tailer = nil
         tailerSessionID = nil
+    }
+
+    private func clearPendingQuestionCallIDs(reason: String) {
+        guard !pendingQuestionCallIDs.isEmpty else { return }
+        pendingQuestionCallIDs.removeAll()
+        onAttentionResolved?(.codexQuestion)
+        trace("statusline.codex.question.attention", attributes: ["result": "cleared", "reason": reason])
     }
 
     private func mergeHarnessData(_ update: StatusLineData) -> StatusLineData {

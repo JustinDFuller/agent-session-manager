@@ -1040,14 +1040,15 @@ final class StatusLineMonitor {
             }
             activeCodexTurnID = turnID
             canceledCodexTurnIDs.remove(turnID)
-            if isCodexPermissionAttentionActive || !activeCodexQuestionCallIDs.isEmpty {
+            let hadPermissionAttention = isCodexPermissionAttentionActive
+            if hadPermissionAttention {
                 traceCodexActivity("attention_cleared", reason: "next_foreground_turn")
             }
-            activeCodexQuestionCallIDs.removeAll()
             isCodexPermissionAttentionActive = false
             onCodexAttentionResolved?(.codexPermissionRequest)
-            onCodexAttentionResolved?(.codexQuestion)
-            onCodexAttentionCleared?()
+            if hadPermissionAttention {
+                onCodexAttentionCleared?()
+            }
         case .foregroundTurnCompleted(let turnID, let isForeground, let succeeded):
             guard isForeground, activeCodexTurnID == nil || activeCodexTurnID == turnID else { return }
             codexLifecycle = .stopped
@@ -1188,6 +1189,14 @@ final class StatusLineMonitor {
             cancelCodexCompletion(reason: "conversation_changed")
             codexForegroundTurnID = nil
             codexHasActiveForegroundTurn = false
+            if isCodexPermissionAttentionActive || !activeCodexQuestionCallIDs.isEmpty {
+                traceCodexActivity("attention_cleared", reason: "conversation_changed")
+            }
+            isCodexPermissionAttentionActive = false
+            activeCodexQuestionCallIDs.removeAll()
+            onCodexAttentionResolved?(.codexPermissionRequest)
+            onCodexAttentionResolved?(.codexQuestion)
+            onCodexAttentionCleared?()
         }
         codexBoundSessionID = sessionID
     }
@@ -1201,7 +1210,6 @@ final class StatusLineMonitor {
                     bindCodexSession(sessionID)
                 }
                 onCodexAttentionResolved?(.codexPermissionRequest)
-                onCodexAttentionResolved?(.codexQuestion)
                 cancelCodexCompletion(reason: "new_turn")
                 codexForegroundTurnID = record.turnID
                 codexHasActiveForegroundTurn = true

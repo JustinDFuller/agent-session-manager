@@ -233,6 +233,109 @@ final class CodexStatusProviderTests: XCTestCase {
     }
 
     @MainActor
+    func testProviderKeepsNativeQuestionPendingAcrossForegroundTurnUntilMatchingResult() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+        let rolloutURL = tempDir.appending(path: "question-across-turns.jsonl")
+        let questionRequests =
+            [
+                #"{"type":"response_item","payload":{"type":"function_call","name":"functions.request_user_input","call_id":"question-call-one","arguments":"PRIVATE QUESTION ONE"}}"#,
+                #"{"type":"response_item","payload":{"type":"function_call","name":"functions.request_user_input","call_id":"question-call-two","arguments":"PRIVATE QUESTION TWO"}}"#,
+            ].joined(separator: "\n") + "\n"
+        try questionRequests.write(to: rolloutURL, atomically: true, encoding: .utf8)
+        let hookRecordURL = tempDir.appending(path: "question-across-turns-hook-record.json")
+        try writeHookRecord(to: hookRecordURL, sessionID: "question-session", transcriptPath: rolloutURL.path)
+        let queueURL = tempDir.appending(path: "question-across-turns-queue.jsonl")
+        let context = makeContext(
+            processStartTime: Date(),
+            hookRecordPath: hookRecordURL.path,
+            queuePath: queueURL.path,
+            launchGeneration: "question-generation",
+            adapter: .current(version: "0.162.1"))
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "question-generation",
+            sessionID: "question-session",
+            transcriptPath: rolloutURL.path,
+            hookEventName: "SessionStart")
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-question.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.5)
+        let requested = expectation(description: "native questions request attention")
+        requested.expectedFulfillmentCount = 2
+        let turnStarted = expectation(description: "foreground turn starts")
+        let resolved = expectation(description: "all matching results resolve the questions")
+        var resolvedKinds: [NotificationKind] = []
+        provider.onAttention = { event in
+            if event.source == .codexQuestion { requested.fulfill() }
+        }
+        provider.onCodexEvent = { event, _ in
+            if case .foregroundTurnStarted = event { turnStarted.fulfill() }
+        }
+        provider.onAttentionResolved = { kind in
+            resolvedKinds.append(kind)
+            if kind == .codexQuestion { resolved.fulfill() }
+        }
+
+        provider.start()
+        wait(for: [requested], timeout: 2)
+        let prompt = CodexHookQueueRecord(
+            paneID: context.paneID.uuidString,
+            tabID: context.tabID.uuidString,
+            launchGeneration: "question-generation",
+            hookEventName: "UserPromptSubmit",
+            sessionID: "question-session",
+            turnID: "turn-next",
+            requestID: nil,
+            timestamp: Date().timeIntervalSince1970,
+            source: "hook",
+            model: nil,
+            transcriptPath: nil,
+            result: nil)
+        var promptData = try JSONEncoder().encode(prompt)
+        promptData.append(UInt8(ascii: "\n"))
+        let queueHandle = try FileHandle(forWritingTo: queueURL)
+        try queueHandle.seekToEnd()
+        try queueHandle.write(contentsOf: promptData)
+        try queueHandle.close()
+        wait(for: [turnStarted], timeout: 2)
+
+        let wrongResult =
+            #"{"type":"response_item","payload":{"type":"function_call_output","call_id":"other-call","output":"PRIVATE RESULT"}}"#
+        let firstMatchingResult =
+            #"{"type":"response_item","payload":{"type":"function_call_output","call_id":"question-call-one","output":"PRIVATE ANSWER ONE"}}"#
+        let transcriptHandle = try FileHandle(forWritingTo: rolloutURL)
+        try transcriptHandle.seekToEnd()
+        try transcriptHandle.write(contentsOf: Data((wrongResult + "\n" + firstMatchingResult + "\n").utf8))
+        try transcriptHandle.close()
+        let firstCallResolved = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                TracingService.shared.recordedEventsForTesting.contains {
+                    $0.name == "statusline.codex.question.attention"
+                        && $0.attributes["result"] == "call_resolved"
+                }
+            },
+            object: nil)
+        wait(for: [firstCallResolved], timeout: 2)
+        XCTAssertTrue(resolvedKinds.isEmpty)
+
+        let secondMatchingResult =
+            #"{"type":"response_item","payload":{"type":"function_call_output","call_id":"question-call-two","output":"PRIVATE ANSWER TWO"}}"#
+        let secondMatchingHandle = try FileHandle(forWritingTo: rolloutURL)
+        try secondMatchingHandle.seekToEnd()
+        try secondMatchingHandle.write(contentsOf: Data((secondMatchingResult + "\n").utf8))
+        try secondMatchingHandle.close()
+        wait(for: [resolved], timeout: 2)
+        XCTAssertEqual(resolvedKinds, [.codexQuestion])
+        provider.stop()
+    }
+
+    @MainActor
     func testProviderRoutesBoundPermissionHooksWithFixedCopyAndNoRequestData() throws {
         let context = makeContext(
             processStartTime: Date(),

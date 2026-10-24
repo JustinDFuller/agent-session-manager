@@ -1187,14 +1187,24 @@ final class PaneActivityInvariantTests: XCTestCase {
         monitor.stop()
     }
 
-    func testNewCodexForegroundTurnClearsPermissionAndQuestionAttention() {
+    func testNewCodexForegroundTurnClearsPermissionButWaitsForMatchingQuestionResult() {
         let monitor = StatusLineMonitor(paneID: UUID(), harness: .codex)
         var clearedKinds: [NotificationKind] = []
         monitor.onCodexAttentionResolved = { kind in clearedKinds.append(kind) }
+        monitor.applyCodexEvent(.permissionRequested(turnID: "turn-one"))
+        monitor.applyCodexEvent(.questionRequested(callID: "question-call"))
 
-        monitor.handleCodexHookRecords([codexLifecycleRecord("UserPromptSubmit", monitor: monitor)])
+        monitor.handleCodexHookRecords([
+            codexLifecycleRecord("UserPromptSubmit", turnID: "turn-two", monitor: monitor)
+        ])
+        monitor.applyCodexEvent(.foregroundTurnStarted(turnID: "turn-two", isForeground: true))
 
-        XCTAssertEqual(clearedKinds, [.codexPermissionRequest, .codexQuestion])
+        XCTAssertFalse(monitor.isCodexPermissionAttentionActive)
+        XCTAssertFalse(clearedKinds.contains(.codexQuestion))
+        monitor.applyCodexEvent(.questionResolved(callID: "other-call"))
+        XCTAssertFalse(clearedKinds.contains(.codexQuestion))
+        monitor.applyCodexEvent(.questionResolved(callID: "question-call"))
+        XCTAssertEqual(clearedKinds.filter { $0 == .codexQuestion }, [.codexQuestion])
         monitor.stop()
     }
 
