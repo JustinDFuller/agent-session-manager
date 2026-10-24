@@ -32,7 +32,7 @@
 ## 4. Exact Codex continuation
 
 - [ ] 4.1 Persist optional exact foreground Codex conversation metadata on binding changes; test legacy saved panes, same-tab conversation changes, and preservation of worktree/profile/options/notifications without persisting control credentials.
-- [ ] 4.2 Build exact resume commands for Refresh and Continue and enabled restoration; test conversations in distinct checkouts, updated foreground identity, user option preservation, disabled continuation, and fresh control/hook generations.
+- [ ] 4.2 Build exact resume commands for Refresh and Continue and enabled restoration; test two conversations in one checkout through sequential native new/resume in one pane, updated foreground identity, user option preservation, disabled continuation, and fresh control/hook generations.
 - [ ] 4.3 Add unknown-binding explanation and missing-session Retry/Start New Conversation recovery before process teardown; test unavailable continuation, preserved invalid identities, explicit fresh starts, and legacy fresh-start notices without latest-session fallback.
 - [ ] 4.4 Correct Codex refresh copy and preserve Refresh with New Settings fresh-start behavior; add real Dev coverage that resumes conversation history and completes another turn with working status and notifications after refresh and relaunch.
 - [ ] 4.5 Update continuation, Codex, and public recovery documentation with the reviewed copy; test requested-versus-bound identity diagnostics and confirm the docs match real refresh/restore captures.
@@ -47,7 +47,7 @@
 
 ## 6. Runtime integration acceptance
 
-- [ ] 6.1 Add a real Dev Codex integration flow combining native new/resume, model change, context/token comparison, activity across distinct worktrees, attention acknowledgement, and exact refresh/relaunch continuation; run through real sheets and the installed authenticated CLI using Luna where suitable, recording versions and screenshots/video without fabricated state.
+- [ ] 6.1 Add a real Dev Codex integration flow combining native new/resume, model change, context/token comparison, background-pane activity across distinct worktrees, attention acknowledgement, and exact refresh/relaunch continuation; run through real sheets and the installed authenticated CLI using Luna where suitable, recording versions and screenshots/video without fabricated state.
 - [ ] 6.2 Exercise cross-feature isolation with two Codex panes on distinct UI-supported worktrees and ordinary Claude/Cursor/OpenCode or shell panes; record that Codex session changes and shared status repairs preserve other panes' lifecycle, configuration, notifications, and Agent Control access. Concurrent panes sharing one checkout are unsupported by New Pane and are out of scope.
 - [ ] 6.3 Exercise real authentication failure/retry and available banner prerequisites in Dev, and deliver an acceptance record linking each capability's scenarios to runtime captures and bounded diagnostics; separate source/unit evidence, executed runtime evidence, skips, and unresolved blockers before declaring acceptance complete.
 
