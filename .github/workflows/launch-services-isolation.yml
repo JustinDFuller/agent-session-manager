@@ -1,0 +1,33 @@
+name: Launch Services Isolation
+
+on:
+  pull_request:
+    paths:
+      - "Makefile"
+      - "scripts/repair-launch-services.sh"
+      - "scripts/test-launch-services-repair.sh"
+      - ".github/workflows/launch-services-isolation.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Makefile"
+      - "scripts/repair-launch-services.sh"
+      - "scripts/test-launch-services-repair.sh"
+      - ".github/workflows/launch-services-isolation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Launch Services repair scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify Dev and broad repair scopes
+        run: make test-launch-services-repair

@@ -1,11 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-lsregister="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
-prod_bundle="${1:?production bundle path is required}"
-dev_bundle="${2:?dev bundle path is required}"
+lsregister="${LSREGISTER_BIN:-/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister}"
+osascript_bin="${OSASCRIPT_BIN:-osascript}"
 prod_id="com.justinfuller.agent-session-manager"
 dev_id="com.justinfuller.agent-session-manager.dev"
+if [[ "${1:-}" == "--dev-only" ]]; then
+    [[ $# -eq 2 ]] || { printf 'usage: %s --dev-only <dev bundle path>\n' "$0" >&2; exit 2; }
+    dev_bundle="$2"
+    [[ -d "$dev_bundle" ]] || { printf 'Dev bundle directory does not exist: %s\n' "$dev_bundle" >&2; exit 1; }
+    repair_ids=("$dev_id")
+    verify_ids=("$dev_id")
+    verify_paths=("$dev_bundle")
+else
+    [[ $# -eq 2 ]] || { printf 'usage: %s <production bundle path> <dev bundle path>\n' "$0" >&2; exit 2; }
+    prod_bundle="$1"
+    dev_bundle="$2"
+    repair_ids=("$prod_id" "$dev_id")
+    verify_ids=("$prod_id" "$dev_id")
+    verify_paths=("$prod_bundle" "$dev_bundle")
+fi
 dump="$(mktemp -t agent-session-manager-launch-services.XXXXXX)"
 trap 'rm -f "$dump"' EXIT
 
@@ -34,7 +48,7 @@ registered_paths() {
     ' "$dump"
 }
 
-for bundle_id in "$prod_id" "$dev_id"; do
+for bundle_id in "${repair_ids[@]}"; do
     while IFS= read -r path; do
         [[ -z "$path" ]] || "$lsregister" -u "$path" 2>/dev/null || true
     done < <(registered_paths "$bundle_id")
@@ -47,7 +61,7 @@ verify_bundle() {
     "$lsregister" -f "$bundle_path"
     local resolved
     resolved="$(
-        osascript -l JavaScript -e \
+        "$osascript_bin" -l JavaScript -e \
             "ObjC.import('AppKit'); ObjC.unwrap($.NSWorkspace.sharedWorkspace.URLForApplicationWithBundleIdentifier('$bundle_id').path)"
     )"
     if [[ "$resolved" != "$bundle_path" ]]; then
@@ -57,5 +71,6 @@ verify_bundle() {
     printf 'Launch Services resolves %s to %s\n' "$bundle_id" "$resolved"
 }
 
-verify_bundle "$prod_id" "$prod_bundle"
-verify_bundle "$dev_id" "$dev_bundle"
+for index in "${!verify_ids[@]}"; do
+    verify_bundle "${verify_ids[$index]}" "${verify_paths[$index]}"
+done

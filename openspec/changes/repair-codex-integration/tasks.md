@@ -2,7 +2,7 @@
 
 ## 0. Dev-only Launch Services prerequisite
 
-- [ ] 0.1 Scope the app-dev repair path to Dev registration while preserving the existing explicit broad-repair behavior and production registration/process; confirm the macOS 26 deployment floor with shell-level checks and a real Dev build launch.
+- [x] 0.1 Scope the app-dev repair path to Dev registration while preserving the existing explicit broad-repair behavior and production registration/process; confirm the macOS 26 deployment floor with shell-level checks and a real Dev build launch.
 
 ## 1. Codex compatibility and hook transport
 

@@ -151,7 +151,7 @@ app-dev: build-dev
 	done
 	codesign --force --deep --sign - $(APP_BUNDLE_DEV)
 	touch $(APP_BUNDLE_DEV)
-	$(MAKE) repair-launch-services
+	$(MAKE) repair-launch-services-dev
 
 run-dev: app-dev
 	open $(APP_BUNDLE_DEV)
@@ -314,6 +314,12 @@ restart-dev:
 
 repair-launch-services:
 	@bash scripts/repair-launch-services.sh "$(APP_BUNDLE)" "$(APP_BUNDLE_DEV)"
+
+repair-launch-services-dev:
+	@bash scripts/repair-launch-services.sh --dev-only "$(APP_BUNDLE_DEV)"
+
+test-launch-services-repair:
+	@bash scripts/test-launch-services-repair.sh
 
 clean:
 	rm -rf $(APP_BUNDLE) $(APP_BUNDLE_DEV) .build $(APP_NAME).xcodeproj $(APP_NAME)-*.dmg
