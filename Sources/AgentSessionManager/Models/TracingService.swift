@@ -71,11 +71,7 @@ final class TracingService: @unchecked Sendable {
             .with(resource: resource)
             .add(spanProcessor: SimpleSpanProcessor(spanExporter: exporter))
 
-        if #available(macOS 12, *) {
-            builder = builder.add(spanProcessor: OSSignposterIntegration())
-        } else {
-            builder = builder.add(spanProcessor: SignPostIntegration())
-        }
+        builder = builder.add(spanProcessor: OSSignposterIntegration())
 
         let provider = builder.build()
 

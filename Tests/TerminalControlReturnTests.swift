@@ -59,7 +59,6 @@ final class TerminalControlReturnTests: XCTestCase {
     }
 
     func testControlReturnWithKeyboardReportingSendsControlModifiedReturn() throws {
-        guard #available(macOS 15.0, *) else { throw XCTSkip("Requires macOS 15") }
         let (view, delegate) = makeView()
         view.feed(text: "\u{1b}[>1u")
         XCTAssertFalse(view.terminal.keyboardEnhancementFlags.isEmpty)
@@ -71,7 +70,6 @@ final class TerminalControlReturnTests: XCTestCase {
     }
 
     func testControlReturnWithoutKeyboardReportingSendsCarriageReturn() throws {
-        guard #available(macOS 15.0, *) else { throw XCTSkip("Requires macOS 15") }
         let (view, delegate) = makeView()
         XCTAssertTrue(view.terminal.keyboardEnhancementFlags.isEmpty)
         let event = try keyDownEvent(keyCode: 36, characters: "\r", modifiers: .control)
@@ -82,7 +80,6 @@ final class TerminalControlReturnTests: XCTestCase {
     }
 
     func testControlReturnIgnoresCapsLockAndFunctionBits() throws {
-        guard #available(macOS 15.0, *) else { throw XCTSkip("Requires macOS 15") }
         let (view, delegate) = makeView()
         let event = try keyDownEvent(
             keyCode: 36, characters: "\r", modifiers: [.control, .capsLock, .function])
@@ -93,7 +90,6 @@ final class TerminalControlReturnTests: XCTestCase {
     }
 
     func testControlReturnWithoutKeyboardReportingClearsSelection() throws {
-        guard #available(macOS 15.0, *) else { throw XCTSkip("Requires macOS 15") }
         let (view, _) = makeView()
         view.feed(text: "hello world\n")
         view.selectAll()
@@ -106,7 +102,6 @@ final class TerminalControlReturnTests: XCTestCase {
     }
 
     func testContextMenuKeyDownForOtherKeysSendsNothing() throws {
-        guard #available(macOS 15.0, *) else { throw XCTSkip("Requires macOS 15") }
         let cases = [
             KeyCase(name: "Return", keyCode: 36, characters: "\r", modifiers: []),
             KeyCase(name: "Shift-Return", keyCode: 36, characters: "\r", modifiers: .shift),
@@ -136,7 +131,6 @@ final class TerminalControlReturnTests: XCTestCase {
     }
 
     func testControlReturnDoesNotReachTheResponderChainButOtherKeysDo() throws {
-        guard #available(macOS 15.0, *) else { throw XCTSkip("Requires macOS 15") }
         let cases = [
             KeyCase(name: "Control-Return", keyCode: 36, characters: "\r", modifiers: .control),
             KeyCase(name: "Return", keyCode: 36, characters: "\r", modifiers: []),

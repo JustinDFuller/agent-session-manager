@@ -42,6 +42,10 @@ The scene settings need macOS 15. The floor goes to 26 instead, which is the use
 - The `actool --minimum-deployment-target` argument in `Tests/MacNotificationCoordinatorTests.swift` is set to `26.0` so the test icon compile matches the app.
 - Availability checks that the floor makes always true are removed: `@available(macOS 15.0, *)` on the Control-Return override in `TerminalController.swift` with its `XCTSkip` guards in `Tests/TerminalControlReturnTests.swift`, and the `macOS 12` branch in `TracingService.swift` with its dead `SignPostIntegration` fallback.
 
+### Declare the floor to updaters
+
+Sparkle offers an update to every machine unless the appcast item names a minimum system version. `scripts/update-appcast.sh` adds `sparkle:minimumSystemVersion`, read from `LSMinimumSystemVersion` in `Info.plist`, which is set to `26.0`. Without it, macOS 14 and 15 users would be offered a build that cannot launch.
+
 ### Move macOS CI jobs to macOS 26 runners
 
 An app built for macOS 26 cannot launch on a macOS 15 runner, so `unit-tests.yml`, `ui-tests.yml`, `dependency-toolchain-compatibility.yml`, and `release.yml` change from `macos-15` to `macos-26`. The runner-images repository publishes a macOS 26 image. The two Linux jobs that run `swift package resolve` and `swift format` in a `swift:6.1` container move to `swift:6.2`, because a 6.1 toolchain cannot read a tools-6.2 manifest.

@@ -8,7 +8,7 @@ Debug Mode is the switch for durable diagnostic *files*. It does not gate unifie
   - Unified logging via `os.Logger` (`AppLog`) — every `TracingService` span/record call forwards
     an entry here, regardless of whether Debug Mode is enabled. Visible in Console.app or
     `log stream`.
-  - Instruments signposts (`OSSignposterIntegration` / `SignPostIntegration`) — every span shows up
+  - Instruments signposts (`OSSignposterIntegration`) — every span shows up
     as a `os_signpost` interval in Instruments' Points of Interest, whether or not the JSONL trace
     file exists.
 - **Debug-Mode-gated (durable files):**

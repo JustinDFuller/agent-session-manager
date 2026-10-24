@@ -12,7 +12,7 @@ concurrency:
 jobs:
   build:
     if: ${{ vars.ENABLE_MACOSX_JOBS == 'true' }}
-    runs-on: macos-15
+    runs-on: macos-26
     environment: release
     steps:
       - name: Checkout

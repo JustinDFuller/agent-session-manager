@@ -64,7 +64,6 @@ final class BellCapturingTerminalView: LocalProcessTerminalView {
         }
     }
 
-    @available(macOS 15.0, *)
     override func contextMenuKeyDown(_ event: NSEvent) {
         let modifiers = event.modifierFlags.intersection([.shift, .command, .control, .option])
         guard event.keyCode == 36, modifiers == .control else {

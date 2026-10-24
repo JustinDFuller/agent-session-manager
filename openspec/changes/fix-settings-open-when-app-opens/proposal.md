@@ -12,6 +12,7 @@ Every launch of Agent Session Manager opens a second, blank window titled "Agent
 - The toolchain floor rises to Swift 6.2 and Xcode 26, which building for macOS 26 requires.
 - CI jobs that build or test the app move to macOS 26 runners, and the Linux Swift jobs move to a Swift 6.2 container.
 - The public install and download pages say "macOS 26 or later".
+- New appcast items and the app bundle declare macOS 26 as the minimum system version, so Sparkle does not offer new releases to macOS 14 or 15.
 
 ## Capabilities
 
@@ -27,6 +28,7 @@ None. The existing `native-pane-interactions` requirement that dashboards stay c
 
 - Code: the placeholder scene in `Sources/AgentSessionManager/ContentView.swift`, and availability checks that the new floor makes unnecessary in `Sources/AgentSessionManager/Controllers/TerminalController.swift`, `Sources/AgentSessionManager/Models/TracingService.swift`, and `Tests/TerminalControlReturnTests.swift`.
 - Build: `Package.swift`, `project.yml`, the generated Xcode project, `scripts/check-toolchain.sh`, and the runner labels in the four macOS workflows and the Swift container in the two Linux workflows under `.github/workflows/`.
+- Release: `Info.plist` and `scripts/update-appcast.sh`, so updaters see the new floor.
 - Documentation: `documentation/how-to/install.md`, `documentation/how-to/download.md`, `documentation/features/dev-build.md`, `AGENTS.md`, and the current-state toolchain lines in `AGENTIC_CONTROL.md`.
 - Users: anyone on macOS 14 or 15 stays on their last release. Updates will not install for them.
 - Dependencies: no package changes.

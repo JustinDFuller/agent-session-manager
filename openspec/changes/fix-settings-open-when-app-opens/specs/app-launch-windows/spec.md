@@ -43,3 +43,12 @@ The Settings window MUST open only when the user chooses Settings… from the ap
 
 - **WHEN** a user opens the app menu
 - **THEN** it contains exactly one Settings… item
+
+### Requirement: Updates are offered only to supported macOS versions
+
+New releases MUST declare macOS 26 as their minimum system version, both in the app bundle and in the update feed, so that machines running macOS 14 or 15 are not offered the update.
+
+#### Scenario: Update feed item for a new release
+
+- **WHEN** a release item is added to the update feed
+- **THEN** it names 26.0 as the minimum system version
