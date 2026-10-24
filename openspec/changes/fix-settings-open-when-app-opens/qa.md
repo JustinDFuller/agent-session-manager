@@ -18,5 +18,6 @@ Observed with Computer Use screenshots and an on-screen window count for the lau
 ## Findings
 
 - Raising the floor to macOS 26 alone removed the blank window in this environment. The scene modifiers are belt and braces on top of it.
-- The new launch UI tests pass on the unfixed floor-14 code when run through the Xcode-built test app, which is linked against a newer SDK than the `make app-dev` build. They guard against regression but do not fail on the old code here. See the implementation pull request.
+- The new launch UI tests pass on the unfixed floor-14 code when run through the Xcode-built test app, which is linked against a newer SDK than the `make app-dev` build. They are regression guards, and the before and after above is the proof of the fix. This was accepted by the user.
 - `scripts/recursive-development.sh stop` refused to stop the relaunched process because its recorded identity was the first process. The relaunched Dev process was quit with a normal app quit.
+- The update feed had no minimum system version, so Sparkle would have offered the macOS 26 build to macOS 14 and 15. New items now carry `sparkle:minimumSystemVersion` 26.0 and the app bundle declares `LSMinimumSystemVersion` 26.0. An item generated with a fixture key contained `<sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>`.

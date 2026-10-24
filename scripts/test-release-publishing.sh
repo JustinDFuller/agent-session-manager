@@ -78,6 +78,10 @@ if APPCAST_BASE="$test_root/input/published-appcast.xml" \
     exit 1
 fi
 
+plist_minimum=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$repo_root/Info.plist")
+test "$plist_minimum" = "26.0"
+grep -q "sparkle:minimumSystemVersion>\$minimum_system_version<" "$repo_root/scripts/update-appcast.sh"
+
 if rg -n 'github\.com/JustinDFuller/agent-session-manager/releases|justinfuller\.github\.io' \
     "$repo_root/index.md" \
     "$repo_root/documentation/tutorials" \
