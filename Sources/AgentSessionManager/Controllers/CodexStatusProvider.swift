@@ -679,6 +679,7 @@ final class CodexStatusProvider: StatusLineDataProvider {
     private var quotaSnapshotsByBucket: [String: StatusLineData.RateLimits] = [:]
     private var boundSessionID: String?
     private var boundTranscriptPath: String?
+    private var hasConfirmedInitialSession = false
     private var hasTranscriptUpdateForBoundSession = false
     private var foregroundTurnIsWorking: Bool?
     private var pendingQuestionCallIDs = Set<String>()
@@ -813,32 +814,6 @@ final class CodexStatusProvider: StatusLineDataProvider {
                         && !$0.isDelegated
                         && adapter.hookEvents.contains($0.hookEventName)
                 }
-                if !validRecords.isEmpty {
-                    pendingHookRecords.append(contentsOf: validRecords)
-                    onHookRecords?(validRecords)
-                    for record in validRecords {
-                        let nextWorkingState: Bool?
-                        switch record.hookEventName {
-                        case "UserPromptSubmit": nextWorkingState = true
-                        case "Stop", "Interrupt": nextWorkingState = false
-                        default: nextWorkingState = nil
-                        }
-                        if let nextWorkingState, foregroundTurnIsWorking != nextWorkingState {
-                            foregroundTurnIsWorking = nextWorkingState
-                            trace(
-                                "statusline.codex.activity.changed",
-                                attributes: [
-                                    "pane.id": context.paneID.uuidString,
-                                    "pane.name": context.paneName,
-                                    "tab.id": context.tabID.uuidString,
-                                    "tab.name": context.tabName,
-                                    "state": nextWorkingState ? "working" : "stopped",
-                                    "hook_event_name": record.hookEventName,
-                                ])
-                            onActivityChanged?(nextWorkingState)
-                        }
-                    }
-                }
                 for queuedRecord in candidateRecords where !validRecords.contains(queuedRecord) {
                     trace(
                         "statusline.codex.hook_queue.record_ignored",
@@ -851,21 +826,108 @@ final class CodexStatusProvider: StatusLineDataProvider {
                             "hook_event_name": queuedRecord.hookEventName,
                         ])
                 }
-                if let queuedRecord = validRecords.last(where: {
-                    ["SessionStart", "UserPromptSubmit"].contains($0.hookEventName)
-                        && !($0.sessionID ?? "").isEmpty
-                }), let sessionID = queuedRecord.sessionID {
-                    let record = CodexHookSessionRecord(
-                        paneID: queuedRecord.paneID,
-                        tabID: queuedRecord.tabID,
-                        sessionID: sessionID,
-                        cwd: context.workingDirectory,
-                        model: queuedRecord.model,
-                        transcriptPath: queuedRecord.transcriptPath,
-                        hookEventName: queuedRecord.hookEventName,
-                        timestamp: queuedRecord.timestamp)
-                    bind(record: record, attempt: attempt, lateBound: lateBound)
-                } else if let hookRecordPath = context.codexHookRecordPath,
+                for record in validRecords {
+                    guard let sessionID = record.sessionID, !sessionID.isEmpty else {
+                        trace(
+                            "statusline.codex.hook_queue.record_ignored",
+                            attributes: ["reason": "missing_session_id", "hook_event_name": record.hookEventName])
+                        continue
+                    }
+                    let initialSessionID = context.codexInitialSessionID
+                    let initialIdentityUnconfirmed = initialSessionID != nil && !hasConfirmedInitialSession
+                    if initialIdentityUnconfirmed, sessionID != initialSessionID {
+                        if ["SessionStart", "UserPromptSubmit"].contains(record.hookEventName) {
+                            bind(
+                                record: CodexHookSessionRecord(
+                                    paneID: record.paneID,
+                                    tabID: record.tabID,
+                                    sessionID: sessionID,
+                                    cwd: context.workingDirectory,
+                                    model: record.model,
+                                    transcriptPath: record.transcriptPath,
+                                    hookEventName: record.hookEventName,
+                                    timestamp: record.timestamp),
+                                attempt: attempt,
+                                lateBound: lateBound)
+                        } else {
+                            trace(
+                                "statusline.codex.hook_queue.record_ignored",
+                                attributes: [
+                                    "reason": "continuation_identity_unconfirmed",
+                                    "hook_event_name": record.hookEventName,
+                                ])
+                        }
+                        continue
+                    }
+                    if initialIdentityUnconfirmed
+                        || ["SessionStart", "UserPromptSubmit"].contains(record.hookEventName)
+                    {
+                        bind(
+                            record: CodexHookSessionRecord(
+                                paneID: record.paneID,
+                                tabID: record.tabID,
+                                sessionID: sessionID,
+                                cwd: context.workingDirectory,
+                                model: record.model,
+                                transcriptPath: record.transcriptPath,
+                                hookEventName: record.hookEventName,
+                                timestamp: record.timestamp),
+                            attempt: attempt,
+                            lateBound: lateBound)
+                    }
+                    if let boundSessionID, sessionID != boundSessionID {
+                        trace(
+                            "statusline.codex.hook_queue.record_ignored",
+                            attributes: ["reason": "session_mismatch", "hook_event_name": record.hookEventName])
+                        continue
+                    }
+                    pendingHookRecords.append(record)
+                    onHookRecords?([record])
+                    let nextWorkingState: Bool?
+                    switch record.hookEventName {
+                    case "UserPromptSubmit": nextWorkingState = true
+                    case "Stop", "Interrupt": nextWorkingState = false
+                    default: nextWorkingState = nil
+                    }
+                    if let nextWorkingState, foregroundTurnIsWorking != nextWorkingState {
+                        foregroundTurnIsWorking = nextWorkingState
+                        trace(
+                            "statusline.codex.activity.changed",
+                            attributes: [
+                                "pane.id": context.paneID.uuidString,
+                                "pane.name": context.paneName,
+                                "tab.id": context.tabID.uuidString,
+                                "tab.name": context.tabName,
+                                "state": nextWorkingState ? "working" : "stopped",
+                                "hook_event_name": record.hookEventName,
+                            ])
+                        onActivityChanged?(nextWorkingState)
+                    }
+                    guard sessionID == boundSessionID else { continue }
+                    switch record.hookEventName {
+                    case "UserPromptSubmit":
+                        if let turnID = record.turnID, !turnID.isEmpty, turnID.count <= 128 {
+                            onCodexEvent?(.foregroundTurnStarted(turnID: turnID, isForeground: true), false)
+                        }
+                    case "Stop":
+                        if case .current = adapter, let turnID = record.turnID,
+                            !turnID.isEmpty, turnID.count <= 128
+                        {
+                            onCodexEvent?(.foregroundCompletionCandidate(turnID: turnID), false)
+                        }
+                    case "Interrupt":
+                        if case .current = adapter, (record.turnID?.count ?? 0) <= 128 {
+                            onCodexEvent?(
+                                .foregroundTurnInterrupted(turnID: record.turnID, isForeground: true), false)
+                        }
+                    case "PermissionRequest":
+                        onAttention?(.codexPermissionRequest)
+                        trace("statusline.codex.permission.attention", attributes: ["result": "requested"])
+                    default:
+                        break
+                    }
+                }
+                if validRecords.isEmpty, let hookRecordPath = context.codexHookRecordPath,
                     let record = readHookRecord(path: hookRecordPath)
                 {
                     guard record.paneID == context.paneID.uuidString, record.tabID == context.tabID.uuidString else {
@@ -895,37 +957,6 @@ final class CodexStatusProvider: StatusLineDataProvider {
                         continue
                     }
                     bind(record: record, attempt: attempt, lateBound: lateBound)
-                }
-
-                for record in validRecords where record.sessionID == boundSessionID {
-                    switch record.hookEventName {
-                    case "UserPromptSubmit":
-                        if let turnID = record.turnID, !turnID.isEmpty, turnID.count <= 128 {
-                            onCodexEvent?(.foregroundTurnStarted(turnID: turnID, isForeground: true), false)
-                        }
-                    case "Stop":
-                        if case .current = adapter, let turnID = record.turnID,
-                            !turnID.isEmpty, turnID.count <= 128
-                        {
-                            onCodexEvent?(.foregroundCompletionCandidate(turnID: turnID), false)
-                        }
-                    case "Interrupt":
-                        if case .current = adapter, (record.turnID?.count ?? 0) <= 128 {
-                            onCodexEvent?(
-                                .foregroundTurnInterrupted(turnID: record.turnID, isForeground: true), false)
-                        }
-                    default:
-                        break
-                    }
-                }
-
-                for record in validRecords where record.hookEventName == "PermissionRequest" {
-                    guard record.sessionID == boundSessionID else {
-                        trace("statusline.codex.permission.ignored", attributes: ["reason": "session_mismatch"])
-                        continue
-                    }
-                    onAttention?(.codexPermissionRequest)
-                    trace("statusline.codex.permission.attention", attributes: ["result": "requested"])
                 }
 
                 if attempt == 1 || attempt.isMultiple(of: 20) || (lateBound && !didTraceLateWaiting) {
@@ -995,9 +1026,10 @@ final class CodexStatusProvider: StatusLineDataProvider {
     }
 
     private func bind(record: CodexHookSessionRecord, attempt: Int, lateBound: Bool) {
-        if record.hookEventName != "saved_exact_identity",
+        let isSavedIdentitySeed = record.hookEventName == "saved_exact_identity"
+        if !isSavedIdentitySeed,
             let requestedSessionID = context.codexInitialSessionID,
-            boundSessionID == requestedSessionID,
+            !hasConfirmedInitialSession,
             record.sessionID != requestedSessionID
         {
             trace(
@@ -1010,10 +1042,29 @@ final class CodexStatusProvider: StatusLineDataProvider {
             onSessionBound?(record.sessionID, record.transcriptPath)
             return
         }
+        let confirmsInitialSession =
+            !isSavedIdentitySeed
+            && !hasConfirmedInitialSession
+            && context.codexInitialSessionID == record.sessionID
+        if confirmsInitialSession {
+            hasConfirmedInitialSession = true
+            trace(
+                "statusline.codex.continuation.binding_confirmed",
+                attributes: [
+                    "session_id_prefix": String(record.sessionID.prefix(12)),
+                    "hook_event_name": record.hookEventName,
+                ])
+        }
         let sessionChanged = boundSessionID != record.sessionID
         let nextTranscriptPath = record.transcriptPath ?? boundTranscriptPath
         let transcriptChanged = boundTranscriptPath != nextTranscriptPath
         if !sessionChanged && !transcriptChanged {
+            if confirmsInitialSession {
+                onSessionBound?(record.sessionID, nextTranscriptPath)
+                trace(
+                    "statusline.codex.binding.callback",
+                    attributes: ["session_id_prefix": String(record.sessionID.prefix(12))])
+            }
             if !hasTranscriptUpdateForBoundSession,
                 let model = record.model,
                 latestHarnessData?.model?.id != model
@@ -1059,6 +1110,7 @@ final class CodexStatusProvider: StatusLineDataProvider {
                 trace("statusline.codex.tailer_detached", attributes: ["reason": "session_changed"])
             }
             boundSessionID = record.sessionID
+            foregroundTurnIsWorking = nil
             boundTranscriptPath = record.transcriptPath
             hasTranscriptUpdateForBoundSession = false
             latestHarnessData = nil
@@ -1069,17 +1121,22 @@ final class CodexStatusProvider: StatusLineDataProvider {
                     "session_id_prefix": String(record.sessionID.prefix(12)),
                     "reason": "session_changed",
                 ])
-            onSessionBound?(record.sessionID, record.transcriptPath)
-            trace(
-                "statusline.codex.binding.callback",
-                attributes: [
-                    "session_id_prefix": String(record.sessionID.prefix(12))
-                ])
+            if !isSavedIdentitySeed {
+                onSessionBound?(record.sessionID, record.transcriptPath)
+                trace(
+                    "statusline.codex.binding.callback",
+                    attributes: ["session_id_prefix": String(record.sessionID.prefix(12))])
+            }
         } else {
             let previousTranscriptPath = boundTranscriptPath
             boundTranscriptPath = nextTranscriptPath
-            if previousTranscriptPath != nextTranscriptPath, let nextTranscriptPath {
+            if confirmsInitialSession || previousTranscriptPath != nextTranscriptPath,
+                let nextTranscriptPath
+            {
                 onSessionBound?(record.sessionID, nextTranscriptPath)
+                trace(
+                    "statusline.codex.binding.callback",
+                    attributes: ["session_id_prefix": String(record.sessionID.prefix(12))])
             }
         }
 

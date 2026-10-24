@@ -148,6 +148,7 @@ Other status-line events remain trace events:
 | `statusline.codex.binding.facts_cleared` | Facts belonging to the prior foreground conversation are cleared after a change is recognized |
 | `statusline.codex.binding.callback` | A changed foreground identity is published to the pane monitor |
 | `statusline.codex.continuation.binding_seeded` | A resumed pane starts provider binding from its saved exact session identity before a new hook record arrives |
+| `statusline.codex.continuation.binding_confirmed` | A real matching hook confirms the saved exact session identity and permits later foreground session changes |
 | `statusline.codex.continuation.binding_rejected` | A hook reports a different conversation before the requested resumed identity is confirmed; the mismatch is also reported as an invariant |
 | `statusline.codex.hook_record_ignored` | Codex hook record was present but rejected, usually because the pane/tab ids did not match |
 | `statusline.codex.hook_queue.record_ignored` | A queued record is rejected because its pane, tab, launch generation, or event identity does not match |

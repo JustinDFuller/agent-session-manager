@@ -362,7 +362,6 @@ struct ContentView: View {
                     appSettings.isPRClosedNotificationsEnabled = config.isPRClosedNotificationsEnabled
                     appSettings.alwaysShowNotificationsSidebar = config.alwaysShowNotificationsSidebar
                     appSettings.isClaudeStopNotificationEnabled = config.isClaudeStopNotificationEnabled
-                    appSettings.isCodexCompletionNotificationEnabled = config.isCodexCompletionNotificationEnabled
                     appSettings.isOpencodeStopNotificationEnabled = config.isOpencodeStopNotificationEnabled
                     appSettings.isCodexCompletionNotificationEnabled = config.isCodexCompletionNotificationEnabled
                 }

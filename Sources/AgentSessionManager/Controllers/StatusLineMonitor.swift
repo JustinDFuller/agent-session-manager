@@ -210,39 +210,35 @@ final class StatusLineMonitor {
                     paneName: self.paneName, tabID: tabID, tabName: tabName)
             } else if harness == .codex, let providerContext {
                 let codexProvider = CodexStatusProvider(context: providerContext)
+                let lifecycleGeneration = codexLifecycleGeneration
                 if codexProvider.supportsForegroundLifecycle {
-                    let lifecycleGeneration = codexLifecycleGeneration
                     codexProvider.onActivityChanged = { [weak self] isWorking in
-                        Task { @MainActor in
-                            guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
-                            self.codexLifecycle = isWorking ? .working : .stopped
-                        }
+                        guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
+                        self.codexLifecycle = isWorking ? .working : .stopped
                     }
                     codexProvider.onCodexEvent = { [weak self] event, isCatchUp in
-                        Task { @MainActor in
-                            guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
-                            self.applyCodexEvent(event, isCatchUp: isCatchUp)
-                        }
+                        guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
+                        self.applyCodexEvent(event, isCatchUp: isCatchUp)
                     }
                     codexProvider.onHookRecords = { [weak self] records in
-                        Task { @MainActor in
-                            self?.handleCodexHookRecords(records)
-                        }
+                        guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
+                        self.handleCodexHookRecords(records)
                     }
                     codexProvider.onHookFailure = { [weak self] in
-                        Task { @MainActor in
-                            self?.cancelCodexCompletion(reason: "hook_failure")
-                        }
+                        guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
+                        self.cancelCodexCompletion(reason: "hook_failure")
                     }
                     codexProvider.onAttention = { [weak self] event in
-                        self?.handleCodexAttention(event)
+                        guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
+                        self.handleCodexAttention(event)
                     }
                     codexProvider.onAttentionResolved = { [weak self] kind in
-                        self?.resolveCodexAttention(kind: kind)
+                        guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
+                        self.resolveCodexAttention(kind: kind)
                     }
                 }
                 codexProvider.onSessionBound = { [weak self] id, transcriptPath in
-                    guard let self else { return }
+                    guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
                     if let requestedSessionID = self.codexInitialSessionID {
                         if requestedSessionID == id {
                             self.hasConfirmedCodexInitialSession = true
@@ -1189,6 +1185,7 @@ final class StatusLineMonitor {
             cancelCodexCompletion(reason: "conversation_changed")
             codexForegroundTurnID = nil
             codexHasActiveForegroundTurn = false
+            codexLifecycle = .unknown
             if isCodexPermissionAttentionActive || !activeCodexQuestionCallIDs.isEmpty {
                 traceCodexActivity("attention_cleared", reason: "conversation_changed")
             }

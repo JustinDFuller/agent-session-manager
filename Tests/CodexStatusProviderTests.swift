@@ -1724,21 +1724,33 @@ extension CodexStatusProviderTests {
     }
 
     @MainActor
-    func testContinuationDiagnosticsMatchRequestedAndBoundSessionIdentity() throws {
+    func testContinuationBindingConfirmsSavedIdentityThenFollowsForegroundSwitch() async throws {
         TracingService.shared.resetForTesting()
         TracingService.shared.enableTestCapture()
-        defer { TracingService.shared.resetForTesting() }
+        InvariantReporter.shared.resetForTesting()
+        InvariantReporter.shared.enableTestCapture()
+        let supportSubdirectory = "codex-continuation-confirmation-\(UUID().uuidString)"
+        PersistenceHelpers.overrideAppSupportSubdirectory = supportSubdirectory
+        defer {
+            TracingService.shared.resetForTesting()
+            InvariantReporter.shared.resetForTesting()
+            PersistenceHelpers.overrideAppSupportSubdirectory = nil
+            try? FileManager.default.removeItem(
+                at: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                    .appending(path: supportSubdirectory))
+        }
 
         let codexHome = tempDir.appending(path: "codex-home", directoryHint: .isDirectory)
         let bin = tempDir.appending(path: "bin", directoryHint: .isDirectory)
-        let transcript = tempDir.appending(path: "requested-session.jsonl")
+        let requestedTranscript = tempDir.appending(path: "requested-session.jsonl")
+        let newTranscript = tempDir.appending(path: "new-session.jsonl")
         let database = codexHome.appending(path: "state_5.sqlite")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
-        try Data().write(to: transcript)
+        try Data().write(to: requestedTranscript)
         try createThreadDatabase(
             at: database,
-            rolloutPath: transcript.path,
+            rolloutPath: requestedTranscript.path,
             model: "requested-model",
             createdAtMs: Int64(Date().timeIntervalSince1970 * 1000))
         let codex = bin.appending(path: "codex")
@@ -1752,8 +1764,12 @@ extension CodexStatusProviderTests {
         let tab = Tab(name: "repo", directory: tempDir)
         let pane = Pane(name: "codex-pane", tab: tab, harness: .codex, appSettings: settings)
         let requestedSessionID = "thread-abcdef1234567890"
+        let rejectedSessionID = "thread-rejected123456789"
+        let newSessionID = "thread-new9876543210fedcba"
         pane.codexSessionID = requestedSessionID
-        pane.codexTranscriptPath = transcript.path
+        pane.codexTranscriptPath = requestedTranscript.path
+        pane.agentControlInjectionEnabled = false
+        pane.extraArgs = ["--model", "gpt-5.1"]
         pane.extraEnvVars = [
             "CODEX_HOME": codexHome.path,
             "PATH": "\(bin.path):\(ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")",
@@ -1762,50 +1778,143 @@ extension CodexStatusProviderTests {
         originalController.pendingCommandArgs = ["codex"]
         pane.installTerminalController(originalController)
         tab.panes.append(pane)
+        let appState = AppState()
+        appState.tabs.append(tab)
         defer {
             pane.terminalController?.terminate()
             pane.removeStatusLineMonitor()
         }
 
         tab.refreshPane(pane, appSettings: settings)
+        pane.bindNotifications(appState: appState, isPriority: false)
 
         let monitor = try XCTUnwrap(pane.statusLineMonitor)
         XCTAssertEqual(monitor.codexAdapter, .current(version: "0.162.1"))
-        let boundSessionID = "thread-9876543210fedcba"
-        let bound = expectation(description: "provider records the bound exact session")
+        let rejected = expectation(description: "first mismatching hook is reported")
+        let confirmed = expectation(description: "matching hook confirms the saved identity")
+        let switched = expectation(description: "foreground switch binds the new identity")
         let previousCallback = monitor.onCodexSessionBound
         monitor.onCodexSessionBound = { id, path in
             previousCallback?(id, path)
-            if id == boundSessionID {
-                bound.fulfill()
-            }
+            if id == rejectedSessionID { rejected.fulfill() }
+            if id == requestedSessionID { confirmed.fulfill() }
+            if id == newSessionID { switched.fulfill() }
         }
+        let queue = URL(filePath: monitor.codexHookQueueFilePath)
         try appendQueueRecord(
-            to: URL(filePath: monitor.codexHookQueueFilePath),
+            to: queue,
             paneID: pane.id,
             tabID: tab.id,
             generation: monitor.codexLaunchGeneration,
-            sessionID: boundSessionID,
-            transcriptPath: transcript.path)
-        wait(for: [bound], timeout: 2)
+            sessionID: rejectedSessionID,
+            transcriptPath: requestedTranscript.path)
+        await fulfillment(of: [rejected], timeout: 2)
+        let rejectedInvariantDeadline = Date().addingTimeInterval(2)
+        while InvariantReporter.shared.violationsForTesting.isEmpty, Date() < rejectedInvariantDeadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertEqual(pane.codexSessionID, requestedSessionID)
+        XCTAssertEqual(pane.codexLaunchResumeSessionID, requestedSessionID)
+        XCTAssertEqual(InvariantReporter.shared.violationsForTesting.count, 1)
+
+        try appendQueueRecord(
+            to: queue,
+            paneID: pane.id,
+            tabID: tab.id,
+            generation: monitor.codexLaunchGeneration,
+            sessionID: requestedSessionID,
+            transcriptPath: requestedTranscript.path)
+        await fulfillment(of: [confirmed], timeout: 2)
+        let confirmationAppliedDeadline = Date().addingTimeInterval(2)
+        while pane.codexLaunchResumeSessionID != nil, Date() < confirmationAppliedDeadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertEqual(pane.codexSessionID, requestedSessionID)
+        XCTAssertNil(pane.codexLaunchResumeSessionID)
+
+        try codexTokenLine(model: "new-session-model", input: 90, output: 15, contextTokens: 45, window: 100)
+            .appending("\n")
+            .write(to: newTranscript, atomically: true, encoding: .utf8)
+        try appendQueueRecord(
+            to: queue,
+            paneID: pane.id,
+            tabID: tab.id,
+            generation: monitor.codexLaunchGeneration,
+            sessionID: newSessionID,
+            transcriptPath: newTranscript.path,
+            hookEventName: "UserPromptSubmit")
+        await fulfillment(of: [switched], timeout: 2)
+        let paneBindingDeadline = Date().addingTimeInterval(2)
+        while pane.codexSessionID != newSessionID, Date() < paneBindingDeadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let freshFactsDeadline = Date().addingTimeInterval(2)
+        while monitor.currentData?.model?.id != "new-session-model", Date() < freshFactsDeadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertEqual(pane.codexSessionID, newSessionID)
+        XCTAssertEqual(pane.codexTranscriptPath, newTranscript.path)
+        XCTAssertEqual(monitor.currentData?.model?.id, "new-session-model")
+        XCTAssertEqual(InvariantReporter.shared.violationsForTesting.count, 1)
+
+        try executeSQL(
+            "INSERT INTO threads VALUES ('\(newSessionID)', '\(tempDir.path)', '\(newTranscript.path)', 'new-session-model', 'codex-cli 0.136.0', 105, 'main', 1, 1, 0);",
+            at: database)
+        XCTAssertEqual(
+            CodexContinuationVerifier.check(
+                sessionID: newSessionID,
+                transcriptPath: newTranscript.path,
+                shell: "/bin/sh",
+                workingDirectory: tempDir.path,
+                environment: ["CODEX_HOME": codexHome.path]),
+            .available)
+        tab.refreshPane(pane, appSettings: settings)
+        let currentController = pane.terminalController
+        let refreshedCommand = try XCTUnwrap(
+            currentController?.pendingCommandArgs,
+            "refresh command missing; recovery=\(String(describing: pane.codexContinuationRecovery)), setup=\(String(describing: pane.setupState)), session=\(String(describing: pane.codexSessionID)), launchResume=\(String(describing: pane.codexLaunchResumeSessionID)), previousCommand=\(String(describing: originalController.pendingCommandArgs)), extraArgs=\(pane.extraArgs), pendingShell=\(String(describing: currentController?.pendingShell)), pendingDirectory=\(String(describing: currentController?.pendingDirectory)), codeHome=\(String(describing: currentController?.pendingEnvironment?.first(where: { $0.hasPrefix("CODEX_HOME=") })))"
+        )
+        XCTAssertTrue(
+            refreshedCommand.contains("resume"),
+            "refresh omitted resume; command=\(refreshedCommand), recovery=\(String(describing: pane.codexContinuationRecovery)), setup=\(String(describing: pane.setupState)), session=\(String(describing: pane.codexSessionID)), launchResume=\(String(describing: pane.codexLaunchResumeSessionID)), extraArgs=\(pane.extraArgs)"
+        )
+        let resumeIndex = try XCTUnwrap(refreshedCommand.firstIndex(of: "resume"))
+        XCTAssertEqual(refreshedCommand.filter { $0 == "resume" }.count, 1)
+        XCTAssertEqual(refreshedCommand[resumeIndex + 1], newSessionID)
+        XCTAssertEqual(pane.extraArgs, ["--model", "gpt-5.1"])
+        XCTAssertEqual(pane.codexLaunchResumeSessionID, newSessionID)
+
+        let sessionURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: supportSubdirectory)
+            .appending(path: "sessions.json")
+        let persisted = try JSONDecoder().decode(PersistedSession.self, from: Data(contentsOf: sessionURL))
+        XCTAssertEqual(persisted.tabs.first?.panes.first?.codexSessionID, newSessionID)
+        XCTAssertEqual(persisted.tabs.first?.panes.first?.codexTranscriptPath, newTranscript.path)
 
         let events = TracingService.shared.recordedEventsForTesting
-        let requested = try XCTUnwrap(
+        let preflight = try XCTUnwrap(
             events.first { $0.name == "statusline.codex.continuation.preflight" })
         let rejectedBinding = try XCTUnwrap(
             events.first { $0.name == "statusline.codex.continuation.binding_rejected" })
-        XCTAssertEqual(requested.attributes["requested_session_id_prefix"], String(requestedSessionID.prefix(12)))
-        XCTAssertEqual(requested.attributes["result"], "available")
+        XCTAssertEqual(
+            preflight.attributes["requested_session_id_prefix"], String(requestedSessionID.prefix(12)))
+        XCTAssertEqual(preflight.attributes["result"], "available")
         XCTAssertEqual(
             rejectedBinding.attributes["requested_session_id_prefix"], String(requestedSessionID.prefix(12)))
         XCTAssertEqual(
-            rejectedBinding.attributes["bound_session_id_prefix"], String(boundSessionID.prefix(12)))
-        XCTAssertNotEqual(
-            rejectedBinding.attributes["requested_session_id_prefix"],
-            rejectedBinding.attributes["bound_session_id_prefix"])
+            rejectedBinding.attributes["bound_session_id_prefix"], String(rejectedSessionID.prefix(12)))
+        XCTAssertTrue(events.contains { $0.name == "statusline.codex.continuation.binding_confirmed" })
+        XCTAssertTrue(
+            events.contains {
+                $0.name == "statusline.codex.binding.changed"
+                    && $0.attributes["session_id_prefix"] == String(newSessionID.prefix(12))
+            })
+        XCTAssertTrue(events.contains { $0.name == "statusline.codex.tailer_started" })
         XCTAssertFalse(
             events.contains { event in
-                event.attributes.values.contains { $0.contains(requestedSessionID) || $0.contains(boundSessionID) }
+                event.attributes.values.contains {
+                    $0.contains(requestedSessionID) || $0.contains(rejectedSessionID) || $0.contains(newSessionID)
+                }
             })
     }
 
@@ -2026,6 +2135,211 @@ extension CodexStatusProviderTests {
         XCTAssertEqual(events.map(\.attributes["state"]), ["working", "stopped"])
         XCTAssertTrue(events.allSatisfy { $0.attributes["pane.id"] == context.paneID.uuidString })
         XCTAssertTrue(events.allSatisfy { $0.attributes["tab.id"] == context.tabID.uuidString })
+    }
+
+    @MainActor
+    func testMonitorAndPaneApplySessionBatchInChronologicalOrder() async throws {
+        let supportSubdirectory = "codex-ordered-bindings-\(UUID().uuidString)"
+        PersistenceHelpers.overrideAppSupportSubdirectory = supportSubdirectory
+        defer {
+            PersistenceHelpers.overrideAppSupportSubdirectory = nil
+            try? FileManager.default.removeItem(
+                at: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                    .appending(path: supportSubdirectory))
+        }
+
+        let settings = AppSettings()
+        settings.agentControlInjectionPolicy = .never
+        let tab = Tab(name: "ordered-bindings", directory: tempDir)
+        let pane = Pane(name: "codex-pane", tab: tab, harness: .codex, appSettings: settings)
+        pane.agentControlInjectionEnabled = false
+        pane.codexSessionID = "thread-a"
+        pane.codexLaunchResumeSessionID = "thread-a"
+        pane.codexTranscriptPath = tempDir.appending(path: "thread-a.jsonl").path
+        tab.panes.append(pane)
+        let appState = AppState()
+        appState.tabs.append(tab)
+        let monitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: tempDir.path,
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"),
+            codexInitialSessionID: "thread-a",
+            codexInitialTranscriptPath: pane.codexTranscriptPath)
+        let queueURL = URL(filePath: monitor.codexHookQueueFilePath)
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: pane.id,
+            tabID: tab.id,
+            generation: monitor.codexLaunchGeneration,
+            sessionID: "thread-a",
+            transcriptPath: pane.codexTranscriptPath,
+            hookEventName: "UserPromptSubmit",
+            turnID: "turn-a")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: pane.id,
+            tabID: tab.id,
+            generation: monitor.codexLaunchGeneration,
+            sessionID: "thread-b",
+            transcriptPath: tempDir.appending(path: "thread-b.jsonl").path,
+            hookEventName: "SessionStart")
+        pane.installStatusLineMonitor(monitor)
+        pane.bindNotifications(appState: appState, isPriority: false)
+        let bindingApplied = expectation(description: "session B and its activity reach the pane")
+        let previousCallback = monitor.onCodexSessionBound
+        var boundSessions: [String] = []
+        monitor.onCodexSessionBound = { id, transcriptPath in
+            previousCallback?(id, transcriptPath)
+            boundSessions.append(id)
+            if id == "thread-b", pane.codexSessionID == "thread-b" {
+                bindingApplied.fulfill()
+            }
+        }
+
+        defer {
+            pane.removeStatusLineMonitor()
+        }
+        await fulfillment(of: [bindingApplied], timeout: 2)
+
+        XCTAssertEqual(boundSessions, ["thread-a", "thread-b"])
+        XCTAssertEqual(pane.codexSessionID, "thread-b")
+        XCTAssertEqual(pane.codexTranscriptPath, tempDir.appending(path: "thread-b.jsonl").path)
+        XCTAssertNil(pane.codexLaunchResumeSessionID)
+        XCTAssertNil(pane.codexContinuationRecovery)
+        XCTAssertFalse(monitor.isCodexWorking)
+
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: pane.id,
+            tabID: tab.id,
+            generation: monitor.codexLaunchGeneration,
+            sessionID: "thread-b",
+            transcriptPath: tempDir.appending(path: "thread-b.jsonl").path,
+            hookEventName: "UserPromptSubmit",
+            turnID: "turn-b")
+        let activityDeadline = Date().addingTimeInterval(2)
+        while !monitor.isCodexWorking, Date() < activityDeadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertTrue(monitor.isCodexWorking)
+        XCTAssertEqual(pane.codexSessionID, "thread-b")
+    }
+
+    @MainActor
+    func testUnconfirmedContinuationDropsWrongSessionEffectsBeforeOrderedSwitch() throws {
+        let queueURL = tempDir.appending(path: "initial-binding-events.jsonl")
+        let context = makeContext(
+            processStartTime: Date(),
+            queuePath: queueURL.path,
+            launchGeneration: "initial-binding-generation",
+            adapter: .current(version: "0.162.1"),
+            initialSessionID: "thread-requested",
+            initialTranscriptPath: tempDir.appending(path: "requested.jsonl").path)
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "initial-binding-generation",
+            sessionID: "thread-wrong",
+            hookEventName: "UserPromptSubmit",
+            turnID: "turn-wrong")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "initial-binding-generation",
+            sessionID: "thread-wrong",
+            hookEventName: "Stop",
+            turnID: "turn-wrong")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "initial-binding-generation",
+            sessionID: "thread-wrong",
+            hookEventName: "PermissionRequest")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "initial-binding-generation",
+            sessionID: "thread-requested",
+            transcriptPath: context.codexInitialTranscriptPath,
+            hookEventName: "SessionStart")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "initial-binding-generation",
+            sessionID: "thread-foreground",
+            hookEventName: "UserPromptSubmit",
+            turnID: "turn-foreground")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "initial-binding-generation",
+            sessionID: "thread-foreground",
+            hookEventName: "Stop",
+            turnID: "turn-foreground")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "initial-binding-generation",
+            sessionID: "thread-foreground",
+            hookEventName: "PermissionRequest")
+
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-initial-binding.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.2)
+        let completionReceived = expectation(description: "confirmed foreground stop is processed")
+        let permissionReceived = expectation(description: "confirmed foreground permission is processed")
+        let activityReceived = expectation(description: "only confirmed foreground activity is processed")
+        activityReceived.expectedFulfillmentCount = 2
+        var hookRecords: [CodexHookQueueRecord] = []
+        var providerEvents: [CodexProviderEvent] = []
+        var attentionEvents: [PaneAttentionEvent] = []
+        var activityStates: [Bool] = []
+        var rejectedBindings: [String] = []
+        provider.onHookRecords = { hookRecords.append(contentsOf: $0) }
+        provider.onSessionBound = { id, _ in rejectedBindings.append(id) }
+        provider.onCodexEvent = { event, _ in
+            providerEvents.append(event)
+            if event == .foregroundCompletionCandidate(turnID: "turn-foreground") {
+                completionReceived.fulfill()
+            }
+        }
+        provider.onAttention = { event in
+            attentionEvents.append(event)
+            permissionReceived.fulfill()
+        }
+        provider.onActivityChanged = { working in
+            activityStates.append(working)
+            activityReceived.fulfill()
+        }
+
+        provider.start()
+        wait(for: [completionReceived, permissionReceived, activityReceived], timeout: 2)
+        provider.stop()
+
+        XCTAssertEqual(rejectedBindings, ["thread-wrong", "thread-requested", "thread-foreground"])
+        XCTAssertEqual(
+            hookRecords.map(\.hookEventName), ["SessionStart", "UserPromptSubmit", "Stop", "PermissionRequest"])
+        XCTAssertEqual(
+            providerEvents,
+            [
+                .foregroundTurnStarted(turnID: "turn-foreground", isForeground: true),
+                .foregroundCompletionCandidate(turnID: "turn-foreground"),
+            ])
+        XCTAssertEqual(attentionEvents, [.codexPermissionRequest])
+        XCTAssertEqual(activityStates, [true, false])
     }
 
     @MainActor
@@ -2631,16 +2945,14 @@ extension CodexStatusProviderTests {
         XCTAssertFalse(restartedMonitor === oldMonitor)
         XCTAssertEqual(
             Array(pane.terminalController?.pendingCommandArgs?.suffix(2) ?? []), ["resume", "restart-session"])
-        let bound = expectation(description: "replacement monitor seeds the saved session identity")
-        let previousCallback = restartedMonitor.onCodexSessionBound
+        let bound = expectation(description: "real matching hook confirms the saved session identity")
+        var boundCallbacks: [(String, String?)] = []
         restartedMonitor.onCodexSessionBound = { id, path in
-            previousCallback?(id, path)
+            boundCallbacks.append((id, path))
             if id == "restart-session", path == transcript.path {
                 bound.fulfill()
             }
         }
-        wait(for: [bound], timeout: 2)
-
         let deadline = Date().addingTimeInterval(2)
         while restartedMonitor.currentData?.model?.id != "restart-model", Date() < deadline {
             RunLoop.main.run(until: Date().addingTimeInterval(0.02))
@@ -2648,7 +2960,19 @@ extension CodexStatusProviderTests {
         XCTAssertEqual(restartedMonitor.currentData?.model?.id, "restart-model")
         XCTAssertEqual(restartedMonitor.currentData?.contextWindow?.totalInputTokens, 120)
         XCTAssertEqual(restartedMonitor.currentData?.contextWindow?.totalOutputTokens, 30)
+        XCTAssertTrue(boundCallbacks.isEmpty)
         XCTAssertEqual(try Data(contentsOf: URL(filePath: restartedMonitor.codexHookQueueFilePath)).count, 0)
+
+        try appendQueueRecord(
+            to: URL(filePath: restartedMonitor.codexHookQueueFilePath),
+            paneID: pane.id,
+            tabID: tab.id,
+            generation: restartedMonitor.codexLaunchGeneration,
+            sessionID: "restart-session",
+            transcriptPath: transcript.path)
+        wait(for: [bound], timeout: 2)
+        XCTAssertEqual(boundCallbacks.map(\.0), ["restart-session"])
+        XCTAssertEqual(boundCallbacks.map(\.1), [transcript.path])
     }
 
     @MainActor
@@ -2970,7 +3294,8 @@ extension CodexStatusProviderTests {
         transcriptPath: String? = nil,
         model: String? = nil,
         hookEventName: String = "SessionStart",
-        source: String = "hook"
+        source: String = "hook",
+        turnID: String? = nil
     ) throws {
         let record = CodexHookQueueRecord(
             paneID: paneID.uuidString,
@@ -2978,7 +3303,7 @@ extension CodexStatusProviderTests {
             launchGeneration: generation,
             hookEventName: hookEventName,
             sessionID: sessionID,
-            turnID: nil,
+            turnID: turnID,
             requestID: nil,
             timestamp: Date().timeIntervalSince1970,
             source: source,
