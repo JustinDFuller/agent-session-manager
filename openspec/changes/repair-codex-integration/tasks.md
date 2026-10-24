@@ -30,8 +30,8 @@
 - [x] 4.1 Persist optional exact foreground Codex conversation metadata on binding changes; test legacy saved panes, same-tab conversation changes, and preservation of worktree/profile/options/notifications without persisting control credentials.
 - [x] 4.2 Build exact resume commands for Refresh and Continue and enabled restoration; test two conversations in one checkout, updated foreground identity, user option preservation, disabled continuation, and fresh control/hook generations.
 - [x] 4.3 Add unknown-binding explanation and missing-session Retry/Start New Conversation recovery before process teardown; test unavailable continuation, preserved invalid identities, explicit fresh starts, and legacy fresh-start notices without latest-session fallback.
-- [x] 4.4 Correct Codex refresh copy and preserve Refresh with New Settings fresh-start behavior; add real Dev coverage that resumes conversation history and completes another turn with working status and notifications after refresh and relaunch.
-- [x] 4.5 Update continuation, Codex, and public recovery documentation with the reviewed copy; test requested-versus-bound identity diagnostics and confirm the docs match real refresh/restore captures.
+- [ ] 4.4 Correct Codex refresh copy and preserve Refresh with New Settings fresh-start behavior; add real Dev coverage that resumes conversation history and completes another turn with working status and notifications after refresh and relaunch.
+- [ ] 4.5 Update continuation, Codex, and public recovery documentation with the reviewed copy; test requested-versus-bound identity diagnostics and confirm the docs match real refresh/restore captures.
 
 ## 5. Shared Repository and GitHub status
 
