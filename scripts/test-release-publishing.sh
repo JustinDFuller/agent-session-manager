@@ -78,7 +78,7 @@ if APPCAST_BASE="$test_root/input/published-appcast.xml" \
     exit 1
 fi
 
-plist_minimum=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$repo_root/Info.plist")
+plist_minimum=$(grep -A1 "<key>LSMinimumSystemVersion</key>" "$repo_root/Info.plist" | sed -n "s:.*<string>\\(.*\\)</string>.*:\\1:p")
 test "$plist_minimum" = "26.0"
 grep -q "sparkle:minimumSystemVersion>\$minimum_system_version<" "$repo_root/scripts/update-appcast.sh"
 

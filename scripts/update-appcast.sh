@@ -44,7 +44,7 @@ fi
 signature=$("$repo_root/scripts/sign-update.sh" "$dmg_path")
 file_size=$(stat -f%z "$dmg_path")
 pub_date=$(date -u +"%a, %d %b %Y %H:%M:%S +0000")
-minimum_system_version=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$repo_root/Info.plist")
+minimum_system_version=$(grep -A1 "<key>LSMinimumSystemVersion</key>" "$repo_root/Info.plist" | sed -n "s:.*<string>\\(.*\\)</string>.*:\\1:p")
 
 mkdir -p "$(dirname "$appcast")"
 
