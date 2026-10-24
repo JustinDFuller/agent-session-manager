@@ -26,6 +26,31 @@ final class SettingsFlowTests: BaseTestCase {
         XCTAssertFalse(sidebar.waitForExistence(timeout: 1), "Settings should dismiss after Escape")
     }
 
+    func testSettingsStaysClosedAfterRelaunchWithSettingsOpen() {
+        let sidebar = app.descendants(matching: .any)
+            .matching(identifier: "settings-sidebar-panes").firstMatch
+        app.typeKey(",", modifierFlags: .command)
+        waitFor(sidebar)
+        XCTAssertTrue(
+            app.windows["AgentSessionManager Settings"].exists,
+            "Expected the real Settings window to be titled AgentSessionManager Settings"
+        )
+
+        app.terminate()
+        app.launch()
+        app.activate()
+        waitFor(app.windows[mainWindowTitle])
+        _ = XCTWaiter.wait(for: [XCTestExpectation(description: "relaunch settles")], timeout: 3)
+        let titles = visibleWindowTitles()
+        XCTAssertEqual(titles, [mainWindowTitle], "Expected only the main window after relaunch, found \(titles)")
+        XCTAssertFalse(sidebar.exists, "Settings must stay closed after relaunch")
+
+        app.typeKey(",", modifierFlags: .command)
+        waitFor(sidebar)
+        app.typeKey(",", modifierFlags: .command)
+        waitForDisappear(sidebar)
+    }
+
     func testScrollbackSettingsDefaultAndUnlimitedMode() {
         app.typeKey(",", modifierFlags: .command)
         let panesTab = app.descendants(matching: .any)

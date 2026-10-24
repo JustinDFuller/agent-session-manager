@@ -22,7 +22,7 @@ jobs:
   compatibility:
     name: Dependency and toolchain compatibility
     if: ${{ vars.ENABLE_MACOSX_JOBS == 'true' }}
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
 

@@ -12,7 +12,7 @@ jobs:
   test:
     name: make test-ui-dev-launch
     if: ${{ vars.ENABLE_MACOSX_JOBS == 'true' }}
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7

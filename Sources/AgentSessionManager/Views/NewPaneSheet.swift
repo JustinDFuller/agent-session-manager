@@ -368,10 +368,9 @@ struct NewPaneSheet: View {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle")
                         .foregroundStyle(.secondary)
-                    (Text("No tools are active. Enable a tool in ")
-                        .foregroundStyle(.secondary)
-                        + Text("Settings \u{2192} Tools")
-                        .foregroundColor(Theme.accent))
+                    Text(
+                        "\(Text("No tools are active. Enable a tool in ").foregroundStyle(.secondary))\(Text("Settings \u{2192} Tools").foregroundColor(Theme.accent))"
+                    )
                 }
                 .font(.subheadline)
             } else {

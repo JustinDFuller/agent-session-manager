@@ -83,6 +83,12 @@ class BaseTestCase: XCTestCase {
         )
     }
 
+    func visibleWindowTitles() -> [String] {
+        app.windows.allElementsBoundByIndex
+            .map { $0.title }
+            .filter { $0 != "Notification Center" }
+    }
+
     var emptyStateHint: XCUIElement { app.staticTexts["empty-state-hint"] }
 
     func clearPersistedState() {

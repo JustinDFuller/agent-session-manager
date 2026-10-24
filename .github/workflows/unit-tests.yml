@@ -18,7 +18,7 @@ jobs:
   test:
     name: swift test
     if: ${{ vars.ENABLE_MACOSX_JOBS == 'true' }}
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
         with:
@@ -34,7 +34,7 @@ jobs:
           key: swift-packages-${{ hashFiles('Package.resolved') }}
 
       - name: Run unit tests
-        run: swift test --triple "$(uname -m)-apple-macosx14.0" --enable-code-coverage
+        run: swift test --triple "$(uname -m)-apple-macosx26.0" --enable-code-coverage
 
       - name: Locate coverage inputs
         run: |

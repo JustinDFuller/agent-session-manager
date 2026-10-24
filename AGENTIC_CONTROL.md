@@ -19,7 +19,7 @@ MCP is the preferred agent-facing protocol. Claude Code, Cursor, Codex, and Open
 
 Use one app-owned Streamable HTTP MCP server bound to `127.0.0.1`, rather than one stdio server per pane. The app can then remain the single authority over live `@MainActor` state and can issue per-pane credentials. Native XPC is a possible future integration for other local clients, but the harnesses do not speak XPC and would still require custom adapters.
 
-The official [Swift MCP SDK](https://github.com/modelcontextprotocol/swift-sdk) is the first implementation candidate. The repository uses Swift tools 6.1, matching the SDK's current manifest requirement. The app source remains in its existing Swift 5 language mode until its separate concurrency migration is complete; it is still compiled by the installed Swift 6 toolchain. The control domain must remain independent of that transport decision.
+The official [Swift MCP SDK](https://github.com/modelcontextprotocol/swift-sdk) is the first implementation candidate. The repository uses Swift tools 6.2, which satisfies the SDK's manifest requirement. The app source remains in its existing Swift 5 language mode until its separate concurrency migration is complete; it is still compiled by the installed Swift 6 toolchain. The control domain must remain independent of that transport decision.
 
 ## Configuration
 
@@ -144,7 +144,7 @@ Version updates are automated, but compatibility remains a required gate:
 - `Package.swift` owns direct package lower bounds and the Swift tools/language mode declaration; `Package.resolved` records the exact dependency graph.
 - Dependabot checks Swift packages and GitHub Actions daily, groups compatible updates, and may auto-merge only patch and minor dependency updates after required CI checks. Major updates remain review-required.
 - `dependency-toolchain-compatibility.yml` runs on dependency and toolchain changes and weekly. It checks the supported toolchain floor, resolves the locked graph, and builds the release package before an update can be accepted. Unit tests remain covered by the existing test workflows when enabled; the floor build intentionally avoids conflating XCTest SDK isolation differences with package compatibility.
-- `scripts/check-toolchain.sh` requires Swift 6.1 or newer and Xcode 16 or newer, while the current validated local toolchain is recorded as Swift 6.4 with Xcode 27.0. A toolchain upgrade must update this documentation and retain the full compatibility checks.
+- `scripts/check-toolchain.sh` requires Swift 6.2 or newer and Xcode 26 or newer, while the current validated local toolchain is recorded as Swift 6.4 with Xcode 27.0. A toolchain upgrade must update this documentation and retain the full compatibility checks.
 - Distributed app versions remain derived from release tags and commit count by `scripts/dist.sh`; dependency or toolchain updates do not silently change the product version.
 
 The maintenance workflow is: accept or review the Dependabot update, inspect the resolved graph and release notes, run the compatibility workflow, then update the Swift/Xcode baseline only when the supported toolchain policy changes. Do not bypass a failed compatibility build with weaker concurrency checking or an unreviewed dependency pin.
@@ -275,7 +275,7 @@ The feasibility spike was research-only. Its protocol and toolchain evidence is 
 
 | Item | Observed value |
 |---|---|
-| Repository manifest | Swift tools 6.1, Swift 6 language mode, macOS 14 minimum |
+| Repository manifest | Swift tools 6.2, Swift 6 language mode, macOS 26 minimum |
 | Host toolchain | Swift 6.4, Xcode 27.0 |
 | Swift MCP SDK candidate | 0.12.1; its manifest declares Swift tools 6.1 |
 | Claude Code | 2.1.216 |
