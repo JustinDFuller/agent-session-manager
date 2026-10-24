@@ -508,7 +508,6 @@ final class StatusLineMonitor {
         pendingStopWork?.cancel()
         pendingStopWork = nil
         cancelCodexCompletion(reason: "teardown")
-        codexLifecycleGeneration += 1
         if isCodexPermissionAttentionActive || !activeCodexQuestionCallIDs.isEmpty {
             traceCodexActivity("attention_cleared", reason: "teardown")
             onCodexAttentionResolved?(.codexPermissionRequest)
@@ -516,6 +515,7 @@ final class StatusLineMonitor {
             onCodexAttentionCleared?()
         }
         agnosticProvider?.stop()
+        codexLifecycleGeneration += 1
         if !isClaude {
             TracingService.shared.record(
                 "statusline.provider.stopped",

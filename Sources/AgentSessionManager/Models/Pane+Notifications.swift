@@ -73,23 +73,19 @@ extension Pane {
             }
         }
         statusLineMonitor?.onCodexAttention = { [weak appState, weak tab, weak self] event in
-            Task { @MainActor in
-                guard let appState, let tab, let pane = self else { return }
-                appState.addNotification(
-                    paneID: pane.id,
-                    paneName: pane.name,
-                    tabID: tab.id,
-                    tabName: tab.name,
-                    isPriority: pane.isPriority,
-                    event: event
-                )
-            }
+            guard let appState, let tab, let pane = self else { return }
+            appState.addNotification(
+                paneID: pane.id,
+                paneName: pane.name,
+                tabID: tab.id,
+                tabName: tab.name,
+                isPriority: pane.isPriority,
+                event: event
+            )
         }
         statusLineMonitor?.onCodexAttentionResolved = { [weak appState, weak self] kind in
-            Task { @MainActor in
-                guard let appState, let pane = self else { return }
-                appState.clearNotification(paneID: pane.id, kind: kind)
-            }
+            guard let appState, let pane = self else { return }
+            appState.clearNotification(paneID: pane.id, kind: kind)
         }
         statusLineMonitor?.onOpencodeStopped = { [weak appState, weak tab, weak self] in
             Task { @MainActor in

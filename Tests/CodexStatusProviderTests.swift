@@ -2138,6 +2138,104 @@ extension CodexStatusProviderTests {
     }
 
     @MainActor
+    func testQuestionAttentionClearsSynchronouslyWhenRefreshReplacesMonitor() async throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        let supportSubdirectory = "codex-question-refresh-\(UUID().uuidString)"
+        PersistenceHelpers.overrideAppSupportSubdirectory = supportSubdirectory
+        defer {
+            TracingService.shared.resetForTesting()
+            PersistenceHelpers.overrideAppSupportSubdirectory = nil
+            try? FileManager.default.removeItem(
+                at: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                    .appending(path: supportSubdirectory))
+        }
+
+        let transcript = tempDir.appending(path: "question-session.jsonl")
+        try
+            #"{"type":"response_item","payload":{"type":"function_call","name":"functions.request_user_input","call_id":"question-on-refresh","arguments":"private"}}"#
+            .appending("\n")
+            .write(to: transcript, atomically: true, encoding: .utf8)
+        let bin = tempDir.appending(path: "bin", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let codex = bin.appending(path: "codex")
+        try "#!/bin/sh\nprintf '%s\n' 'codex-cli 0.162.1'\n"
+            .write(to: codex, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: codex.path)
+        let settings = AppSettings()
+        settings.preferredShell = "/bin/sh"
+        settings.agentControlInjectionPolicy = .never
+        let tab = Tab(name: "question-refresh", directory: tempDir)
+        let pane = Pane(name: "codex-pane", tab: tab, harness: .codex, appSettings: settings)
+        pane.agentControlInjectionEnabled = false
+        pane.codexSessionID = "thread-question"
+        pane.codexTranscriptPath = transcript.path
+        pane.extraEnvVars = [
+            "CODEX_HOME": tempDir.appending(path: "codex-home").path,
+            "PATH": "\(bin.path):\(ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")",
+        ]
+        let originalController = TerminalController()
+        originalController.pendingCommandArgs = ["codex"]
+        originalController.pendingDirectory = tempDir.path
+        originalController.pendingShell = "/bin/sh"
+        pane.installTerminalController(originalController)
+        tab.panes.append(pane)
+        let unrelatedPane = Pane(name: "unrelated-pane", tab: tab, harness: .shell, appSettings: settings)
+        tab.panes.append(unrelatedPane)
+        let appState = AppState()
+        appState.tabs.append(tab)
+        pane.bindNotifications(appState: appState, isPriority: false)
+        let originalMonitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: tempDir.path,
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"),
+            codexShell: "/bin/sh",
+            codexEnvironment: ["CODEX_HOME": pane.extraEnvVars["CODEX_HOME"]!],
+            codexInitialSessionID: "thread-question",
+            codexInitialTranscriptPath: transcript.path)
+        pane.installStatusLineMonitor(originalMonitor)
+        appState.addNotification(
+            paneID: unrelatedPane.id,
+            paneName: unrelatedPane.name,
+            tabID: tab.id,
+            tabName: tab.name,
+            isPriority: false,
+            event: .rawBell)
+        let questionDeadline = Date().addingTimeInterval(2)
+        while !appState.notifications.contains(where: { $0.paneID == pane.id && $0.kind == .codexQuestion }),
+            Date() < questionDeadline
+        {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertTrue(appState.notifications.contains { $0.paneID == pane.id && $0.kind == .codexQuestion })
+        XCTAssertTrue(
+            TracingService.shared.recordedEventsForTesting.contains {
+                $0.name == "statusline.codex.question.attention"
+                    && $0.attributes["result"] == "requested"
+            })
+
+        tab.refreshPane(
+            pane,
+            extraArgs: pane.extraArgs,
+            harness: .codex,
+            extraEnvVars: pane.extraEnvVars,
+            appSettings: settings)
+
+        XCTAssertFalse(pane.statusLineMonitor === originalMonitor)
+        XCTAssertFalse(appState.notifications.contains { $0.paneID == pane.id && $0.kind == .codexQuestion })
+        XCTAssertTrue(appState.notifications.contains { $0.paneID == unrelatedPane.id && $0.kind == .terminalBell })
+        XCTAssertNil(pane.codexSessionID)
+        XCTAssertNotNil(pane.statusLineMonitor)
+
+        pane.removeStatusLineMonitor()
+        pane.terminalController?.terminate()
+    }
+
+    @MainActor
     func testMonitorAndPaneApplySessionBatchInChronologicalOrder() async throws {
         let supportSubdirectory = "codex-ordered-bindings-\(UUID().uuidString)"
         PersistenceHelpers.overrideAppSupportSubdirectory = supportSubdirectory
