@@ -203,7 +203,7 @@ final class MacNotificationCoordinatorTests: XCTestCase {
             "--standalone-icon-behavior", "all",
             "--output-partial-info-plist", partial.path,
             "--platform", "macosx",
-            "--minimum-deployment-target", "14.0",
+            "--minimum-deployment-target", "26.0",
         ]
         try process.run()
         process.waitUntilExit()

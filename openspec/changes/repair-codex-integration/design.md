@@ -81,6 +81,10 @@ Extend the existing statusline.codex event family with binding changes, compatib
 
 Report invariants for cross-pane/launch identity contamination, unsupported rich data being displayed, and mismatch between requested and bound continuation identities. Ordinary startup waiting, unknown-version degradation, and user authentication prerequisites are diagnostic outcomes rather than false invariant failures. Update the tracing and invariant catalogs and exercise both Debug Mode capture and always-on unified-log forwarding.
 
+### 8. Isolate Dev Launch Services registration
+
+The Dev build's app-dev repair path targets only the Dev bundle registration. Running or repairing the Dev build must leave the production Launch Services registration and production process unchanged. Preserve the existing explicit broad-repair entry point and its intentional broad scope. Keep the macOS deployment floor at 26.0. Verify the registration scope with shell-level checks and a real Dev build launch; do not treat a build alone as proof of Launch Services behavior.
+
 ## Risks / Trade-offs
 
 - Internal transcript and hook schemas can change → gate adapters by version and required shapes; baseline status remains usable and unknown versions are honestly limited.
@@ -92,7 +96,7 @@ Report invariants for cross-pane/launch identity contamination, unsupported rich
 
 ## Migration Plan
 
-Implement the six top-level task groups as cohesive layers after proposal approval, with all subtasks of each group kept together. Add optional persisted fields and the default-on toggle without rewriting existing pane settings or notifications. Migrate displayed refresh copy and rejected built-in approval guidance when the corresponding adapter is selected; preserve invalid saved values until explicitly corrected.
+Implement the Dev-only Launch Services prerequisite as its own task group before the Codex implementation pull request. Consolidate all six Codex task groups and their subtasks into one implementation pull request as an approved exception to the normal one-group-per-pull-request rule. Keep the macOS deployment floor at 26.0. Add optional persisted fields and the default-on toggle without rewriting existing pane settings or notifications. Migrate displayed refresh copy and rejected built-in approval guidance when the corresponding adapter is selected; preserve invalid saved values until explicitly corrected.
 
 Capture Dev runtime evidence before finalizing the change, including foreground conversation changes, model changes, interruption, completion, permission/question attention, exact refresh/relaunch continuation, and real GitHub status recovery. When checking cross-pane isolation, use distinct worktrees supported by New Pane; the existing UI guard prevents concurrent panes from sharing one checkout, so that unsupported state is out of scope and does not justify changing app behavior. Continue implementation and QA with the shared change active; the later archive-only layer synchronizes main specs and archives after review. This planning PR neither changes runtime nor declares unchecked tasks complete.
 

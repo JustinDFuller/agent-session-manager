@@ -36,7 +36,7 @@ Legacy shortcuts (`make build`, `make run`, `make watch`) still work as producti
 
 ## Toolchain and Dependency Maintenance
 
-The repository uses Swift tools 6.1, Swift 6 language mode, and macOS 14 as its deployment floor. Swift 6.1 or newer and Xcode 16 or newer are required for local builds. The currently validated local toolchain is Swift 6.4 with Xcode 27.0.
+The repository uses Swift tools 6.2, Swift 6 language mode, and macOS 26 as its deployment floor. Swift 6.2 or newer and Xcode 26 or newer are required for local builds. The currently validated local toolchain is Swift 6.4 with Xcode 27.0.
 
 Run `make check-toolchain` before diagnosing a build failure. It prints the active Swift and Xcode versions and fails when they are below the supported floor.
 
@@ -53,7 +53,7 @@ Packaged apps always stage into the shared git common root, even when the comman
 | Production | `<git-common-root>/AgentSessionManager.app` |
 | Dev | `<git-common-root>/AgentSessionManagerDev.app` |
 
-Run `make repair-launch-services` to unregister stale prod/dev URLs, register canonical bundles that exist, and verify Launch Services resolves each packaged bundle ID to the canonical URL. `make app` and `make app-dev` run this repair automatically.
+`make app-dev` requires the canonical Dev bundle to exist, then runs a Dev-only Launch Services repair that unregisters stale Dev URLs, registers the bundle, and verifies that Launch Services resolves the Dev bundle ID to that URL. It leaves production registration untouched. `make app` continues to run the existing broad repair for production and Dev registrations; invoke `make repair-launch-services` explicitly when you need that broad repair. Run `make test-launch-services-repair` for shell-level coverage of both repair scopes.
 
 ## Xcode
 

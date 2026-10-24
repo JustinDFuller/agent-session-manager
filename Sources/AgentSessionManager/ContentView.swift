@@ -10,6 +10,8 @@ struct AgentSessionManagerApp: App {
         Settings {
             EmptyView()
         }
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
         .commands { AppCommands(appState: appDelegate.appState, appSettings: appDelegate.appSettings) }
     }
 }

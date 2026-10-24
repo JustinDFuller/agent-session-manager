@@ -49,7 +49,7 @@ app-prd: build
 	xcrun actool AppIcons/Assets.xcassets --compile $(APP_BUNDLE)/Contents/Resources \
 		--app-icon AppIcon --standalone-icon-behavior all \
 		--output-partial-info-plist $(ICON_PARTIAL_PRD) \
-		--platform macosx --minimum-deployment-target 14.0
+		--platform macosx --minimum-deployment-target 26.0
 	/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $(APP_NAME)" $(APP_BUNDLE)/Contents/Info.plist
 	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(BUNDLE_ID)" $(APP_BUNDLE)/Contents/Info.plist
 	/usr/libexec/PlistBuddy -c "Set :CFBundleName $(APP_NAME)" $(APP_BUNDLE)/Contents/Info.plist
@@ -123,7 +123,7 @@ app-dev: build-dev
 		xcrun actool AppIcons/Assets.xcassets --compile $(APP_BUNDLE_DEV)/Contents/Resources \
 			--app-icon AppIcon-Dev --standalone-icon-behavior all \
 			--output-partial-info-plist $(ICON_PARTIAL_DEV) \
-			--platform macosx --minimum-deployment-target 14.0; \
+			--platform macosx --minimum-deployment-target 26.0; \
 		touch .build/dev-assets-compiled; \
 	fi
 	/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $(APP_NAME_DEV)" $(APP_BUNDLE_DEV)/Contents/Info.plist
@@ -151,7 +151,7 @@ app-dev: build-dev
 	done
 	codesign --force --deep --sign - $(APP_BUNDLE_DEV)
 	touch $(APP_BUNDLE_DEV)
-	$(MAKE) repair-launch-services
+	$(MAKE) repair-launch-services-dev
 
 run-dev: app-dev
 	open $(APP_BUNDLE_DEV)
@@ -314,6 +314,12 @@ restart-dev:
 
 repair-launch-services:
 	@bash scripts/repair-launch-services.sh "$(APP_BUNDLE)" "$(APP_BUNDLE_DEV)"
+
+repair-launch-services-dev:
+	@bash scripts/repair-launch-services.sh --dev-only "$(APP_BUNDLE_DEV)"
+
+test-launch-services-repair:
+	@bash scripts/test-launch-services-repair.sh
 
 clean:
 	rm -rf $(APP_BUNDLE) $(APP_BUNDLE_DEV) .build $(APP_NAME).xcodeproj $(APP_NAME)-*.dmg

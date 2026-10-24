@@ -13,6 +13,7 @@ The October 12 production screenshot shows a working Codex conversation with an 
 - Use an explicit, tested CLI compatibility contract, remove unsupported hook injection and the rejected `untrusted` approval suggestion, and expose unsupported rich data as unavailable.
 - Populate Repository for every harness and make app-side GitHub polling use the user's configured executable and authentication context, with a visible recovery path for authentication failures.
 - Update feature documentation and real Dev acceptance coverage so advertised support reflects behavior exercised with the installed CLI.
+- Add a separate Dev-only Launch Services prerequisite that repairs the Dev registration without changing production registration or its running process, while preserving the macOS 26 floor.
 
 ## Capabilities
 
@@ -23,6 +24,7 @@ The October 12 production screenshot shows a working Codex conversation with an 
 - `codex-continuation`: Exact conversation continuation on pane refresh and opted-in app restoration.
 - `codex-cli-compatibility`: Valid Codex pane options and version-appropriate lifecycle integration.
 - `harness-status-baseline`: Shared repository identity and authenticated GitHub PR status with actionable failure reporting.
+- `dev-launch-services`: Dev-only Launch Services registration and isolation from the production app.
 
 ### Modified Capabilities
 
@@ -32,7 +34,7 @@ None. Existing native pane interaction and native test validation requirements c
 
 The implementation touches Codex providers and hook transport, status monitors, pane activity and notifications, persisted pane metadata, launch/refresh/restore command construction, CLI option copy, and shared GitHub executable resolution. Existing saved panes gain optional Codex conversation metadata without losing settings; there is no public MCP tool signature change or new hosted service. Runtime diagnostics remain metadata-only and pane-scoped.
 
-This proposal defines the behavior and implementation plan for review. Its tasks remain unchecked until implementation and real Dev acceptance are complete.
+This proposal defines the behavior and implementation plan for review. Its tasks remain unchecked until implementation and real Dev acceptance are complete. The Dev-only Launch Services prerequisite is a separate task group and implementation step; the six Codex task groups are consolidated into one implementation pull request as an approved exception to the usual one-group-per-pull-request rule.
 
 ## Deliberately Out of Scope
 

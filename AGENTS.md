@@ -4,7 +4,7 @@ This file provides guidance to AI coding agents (Claude Code, Codex, Cursor CLI,
 
 ## What This Is
 
-Agent Session Manager is a native macOS app (Swift/SwiftUI, macOS 14+) for running multiple AI agent sessions in parallel. It provides a tabbed, multi-pane terminal window where each pane runs Claude Code, Cursor, Codex, or OpenCode in a git worktree context, letting you work on several tasks simultaneously without context switching between windows.
+Agent Session Manager is a native macOS app (Swift/SwiftUI, macOS 26+) for running multiple AI agent sessions in parallel. It provides a tabbed, multi-pane terminal window where each pane runs Claude Code, Cursor, Codex, or OpenCode in a git worktree context, letting you work on several tasks simultaneously without context switching between windows.
 
 **Tabs** represent a working directory. Each tab has a name and a root directory. You can have many tabs open at once and switch between them with ⌘1–⌘9.
 

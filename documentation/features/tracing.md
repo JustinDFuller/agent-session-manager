@@ -52,7 +52,7 @@ The app synchronously writes `app-lifecycle.json` in its application-support dir
 Every `TracingService.startSpan`/`record`/`withSpan` call also, unconditionally:
 
 - writes a unified-log line via `AppLog` (see `documentation/features/debug-logging.md`) — always on, independent of Debug Mode
-- emits an `os_signpost` interval (`OSSignposterIntegration`/`SignPostIntegration`) for Instruments' Points of Interest — also always on
+- emits an `os_signpost` interval (`OSSignposterIntegration`) for Instruments' Points of Interest — also always on
 
 Instrumenting a code path is a single `TracingService` call, not three. Do not add separate `print`/`NSLog`/log calls alongside a span for the same event.
 
