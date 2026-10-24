@@ -204,14 +204,6 @@ final class SettingsFlowTests: BaseTestCase {
             codexCompletionToggle.click()
             XCTAssertEqual(codexCompletionToggle.value as? Int, 1)
 
-            let codexCompletionToggle = app.checkBoxes["settings-codex-completion-notification-toggle"]
-            waitFor(codexCompletionToggle)
-            XCTAssertEqual(codexCompletionToggle.value as? Int, 1)
-            codexCompletionToggle.click()
-            XCTAssertEqual(codexCompletionToggle.value as? Int, 0)
-            codexCompletionToggle.click()
-            XCTAssertEqual(codexCompletionToggle.value as? Int, 1)
-
             let openNotifSettingsButton = app.descendants(matching: .any)
                 .matching(identifier: "settings-open-notification-settings-button")
                 .firstMatch
