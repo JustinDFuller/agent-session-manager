@@ -2,11 +2,11 @@
 
 ## 1. Codex compatibility and hook transport
 
-- [ ] 1.1 Make version-adapter selection control launch preparation and provider parsing; cover current 0.162, legacy 0.136 metrics, and unknown-version baseline behavior with tests that exercise production selection.
-- [ ] 1.2 Prepare only supported hook events and remove StopFailure; cover current Interrupt support, limited legacy hooks, unknown-version launch, and setup failure through launch-argument and app-error tests.
-- [ ] 1.3 Add the metadata-only locked Codex hook queue with pane/tab and launch-generation identity; test burst ordering, partial records, compaction, access retries, superseded generations, and bounded redaction.
-- [ ] 1.4 Update approval guidance and reject unsupported saved built-in values without policy substitution; test Codex 0.162.1 untrusted rejection, retained saved values, and preserved custom options.
-- [ ] 1.5 Update Codex compatibility documentation and its feature matrix, and add compatibility/queue diagnostic coverage; confirm the docs distinguish exercised current support from legacy limitations and diagnostics contain no payload or credential values.
+- [x] 1.1 Make version-adapter selection control launch preparation and provider parsing; cover current 0.162, legacy 0.136 metrics, and unknown-version baseline behavior with tests that exercise production selection.
+- [x] 1.2 Prepare only supported hook events and remove StopFailure; cover current Interrupt support, limited legacy hooks, unknown-version launch, and setup failure through launch-argument and app-error tests.
+- [x] 1.3 Add the metadata-only locked Codex hook queue with pane/tab and launch-generation identity; test burst ordering, partial records, compaction, access retries, superseded generations, and bounded redaction.
+- [x] 1.4 Update approval guidance and reject unsupported saved built-in values without policy substitution; test Codex 0.162.1 untrusted rejection, retained saved values, and preserved custom options.
+- [x] 1.5 Update Codex compatibility documentation and its feature matrix, and add compatibility/queue diagnostic coverage; confirm the docs distinguish exercised current support from legacy limitations and diagnostics contain no payload or credential values.
 
 ## 2. Foreground conversation tracking and status metrics
 

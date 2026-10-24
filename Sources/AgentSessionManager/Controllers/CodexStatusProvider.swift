@@ -13,6 +13,10 @@ struct StatusProviderContext {
     let environment: [String: String]
     let detectedHarnessVersion: String?
     let codexHookRecordPath: String?
+    let codexHookQueuePath: String?
+    let codexHookDiagnosticPath: String?
+    let codexLaunchGeneration: String?
+    let codexAdapter: CodexCompatibilityAdapter?
     let opencodePort: Int?
     let opencodeSessionID: String?
     let opencodeEnvironment: [String: String]
@@ -31,6 +35,10 @@ struct StatusProviderContext {
         codexHookRecordPath: String?,
         opencodePort: Int?,
         opencodeSessionID: String?,
+        codexHookQueuePath: String? = nil,
+        codexHookDiagnosticPath: String? = nil,
+        codexLaunchGeneration: String? = nil,
+        codexAdapter: CodexCompatibilityAdapter? = nil,
         opencodeEnvironment: [String: String] = [:]
     ) {
         self.paneID = paneID
@@ -44,6 +52,10 @@ struct StatusProviderContext {
         self.environment = environment
         self.detectedHarnessVersion = detectedHarnessVersion
         self.codexHookRecordPath = codexHookRecordPath
+        self.codexHookQueuePath = codexHookQueuePath
+        self.codexHookDiagnosticPath = codexHookDiagnosticPath
+        self.codexLaunchGeneration = codexLaunchGeneration
+        self.codexAdapter = codexAdapter
         self.opencodePort = opencodePort
         self.opencodeSessionID = opencodeSessionID
         self.opencodeEnvironment = opencodeEnvironment
@@ -100,18 +112,11 @@ private struct CodexThreadRank {
 
 enum CodexVersionAdapter {
     static func normalize(_ version: String?) -> String? {
-        guard let version else { return nil }
-        let trimmed = version.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalized =
-            trimmed
-            .replacingOccurrences(of: "codex-cli", with: "")
-            .replacingOccurrences(of: "codex", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized.isEmpty ? nil : normalized
+        CodexCompatibilityAdapter.normalize(version)
     }
 
     static func supports(_ version: String?) -> Bool {
-        normalize(version)?.hasPrefix("0.136.") == true
+        CodexCompatibilityAdapter.select(version).supportsRichStatus
     }
 }
 
@@ -131,7 +136,20 @@ final class CodexStateStore {
         }
         defer { sqlite3_close(db) }
 
-        let columns = try availableColumns(db: db)
+        var columnsStatement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(threads)", -1, &columnsStatement, nil) == SQLITE_OK,
+            let columnsStatement
+        else {
+            throw CodexStateStoreError.schemaUnavailable
+        }
+        defer { sqlite3_finalize(columnsStatement) }
+        var columns = Set<String>()
+        while sqlite3_step(columnsStatement) == SQLITE_ROW {
+            if let name = text(columnsStatement, 1) {
+                columns.insert(name)
+            }
+        }
+        guard !columns.isEmpty else { throw CodexStateStoreError.schemaUnavailable }
         let required = Set(["id", "cwd"])
         guard required.isSubset(of: columns) else {
             throw CodexStateStoreError.schemaUnavailable
@@ -196,24 +214,6 @@ final class CodexStateStore {
         )
     }
 
-    private func availableColumns(db: OpaquePointer) throws -> Set<String> {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "PRAGMA table_info(threads)", -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else {
-            throw CodexStateStoreError.schemaUnavailable
-        }
-        defer { sqlite3_finalize(statement) }
-        var columns = Set<String>()
-        while sqlite3_step(statement) == SQLITE_ROW {
-            if let name = text(statement, 1) {
-                columns.insert(name)
-            }
-        }
-        guard !columns.isEmpty else { throw CodexStateStoreError.schemaUnavailable }
-        return columns
-    }
-
     private func text(_ statement: OpaquePointer, _ index: Int32) -> String? {
         guard let raw = sqlite3_column_text(statement, index) else { return nil }
         let value = String(cString: raw)
@@ -239,7 +239,12 @@ enum CodexStateStoreError: Error, Equatable {
 }
 
 struct CodexRolloutParser {
-    static func parseLine(_ data: Data, expectedCWD: String) -> StatusLineData? {
+    static func parseLine(
+        _ data: Data,
+        expectedCWD: String,
+        adapter: CodexCompatibilityAdapter = .legacy(version: "0.136.0")
+    ) -> StatusLineData? {
+        guard adapter.supportsRichStatus else { return nil }
         guard
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let type = object["type"] as? String
@@ -326,6 +331,13 @@ struct CodexRolloutParser {
         let remainingPct = usedPct.map { min(100, max(0, 100 - $0)) }
         let model = payload["model"] as? String ?? info?["model"] as? String
 
+        let rawRateLimits = payload["rate_limits"] as? [String: Any]
+        let rateLimits = rawRateLimits.map {
+            StatusLineData.RateLimits(
+                fiveHour: rate($0["primary"] as? [String: Any], expectedWindowMinutes: 300),
+                sevenDay: rate($0["secondary"] as? [String: Any], expectedWindowMinutes: 10_080))
+        }
+
         return StatusLineData(
             model: model.map { StatusLineData.Model(id: $0, displayName: $0) },
             cost: nil,
@@ -335,7 +347,7 @@ struct CodexRolloutParser {
                 totalInputTokens: input,
                 totalOutputTokens: output
             ),
-            rateLimits: rateLimits(from: payload["rate_limits"] as? [String: Any]),
+            rateLimits: rateLimits,
             worktree: nil,
             workspace: nil,
             effort: nil,
@@ -348,14 +360,6 @@ struct CodexRolloutParser {
             exceeds200kTokens: nil,
             pr: nil,
             sessionStatus: nil
-        )
-    }
-
-    private static func rateLimits(from raw: [String: Any]?) -> StatusLineData.RateLimits? {
-        guard let raw else { return nil }
-        return StatusLineData.RateLimits(
-            fiveHour: rate(raw["primary"] as? [String: Any], expectedWindowMinutes: 300),
-            sevenDay: rate(raw["secondary"] as? [String: Any], expectedWindowMinutes: 10_080)
         )
     }
 
@@ -386,15 +390,21 @@ struct CodexRolloutParser {
 final class CodexRolloutTailer {
     let rolloutPath: String
     let expectedCWD: String
+    let adapter: CodexCompatibilityAdapter
     var onUpdate: ((StatusLineData) -> Void)?
     var onTrace: ((String, [String: String]) -> Void)?
     private var watcher: FileSystemEventWatcher?
     private var offset: UInt64 = 0
     private var pendingLineBuffer = Data()
 
-    init(rolloutPath: String, expectedCWD: String) {
+    init(
+        rolloutPath: String,
+        expectedCWD: String,
+        adapter: CodexCompatibilityAdapter = .legacy(version: "0.136.0")
+    ) {
         self.rolloutPath = rolloutPath
         self.expectedCWD = expectedCWD
+        self.adapter = adapter
     }
 
     func start() {
@@ -449,47 +459,45 @@ final class CodexRolloutTailer {
             try handle.seek(toOffset: offset)
             let data = try handle.readToEnd() ?? Data()
             offset += UInt64(data.count)
-            process(data: data, catchUp: catchUp)
-        } catch {}
-    }
+            guard !data.isEmpty || !pendingLineBuffer.isEmpty else {
+                onTrace?(
+                    "statusline.codex.tailer_read",
+                    ["line_count": "0", "update_count": "0", "catch_up": catchUp ? "true" : "false"])
+                return
+            }
 
-    private func process(data: Data, catchUp: Bool) {
-        guard !data.isEmpty || !pendingLineBuffer.isEmpty else {
+            pendingLineBuffer.append(data)
+            guard let lastNewline = pendingLineBuffer.lastIndex(of: UInt8(ascii: "\n")) else { return }
+
+            let completeData = pendingLineBuffer[..<lastNewline]
+            let afterNewline = pendingLineBuffer.index(after: lastNewline)
+            pendingLineBuffer = Data(pendingLineBuffer[afterNewline...])
+
+            var lines = completeData.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: true)
+            if catchUp, lines.count > 200 {
+                lines = lines.suffix(200)
+            }
+
+            var lineCount = 0
+            var updateCount = 0
+            for line in lines {
+                lineCount += 1
+                guard line.count <= 64 * 1024 else { continue }
+                if let update = CodexRolloutParser.parseLine(
+                    Data(line), expectedCWD: expectedCWD, adapter: adapter)
+                {
+                    updateCount += 1
+                    onUpdate?(update)
+                }
+            }
             onTrace?(
                 "statusline.codex.tailer_read",
-                ["line_count": "0", "update_count": "0", "catch_up": catchUp ? "true" : "false"])
-            return
-        }
-
-        pendingLineBuffer.append(data)
-        guard let lastNewline = pendingLineBuffer.lastIndex(of: UInt8(ascii: "\n")) else { return }
-
-        let completeData = pendingLineBuffer[..<lastNewline]
-        let afterNewline = pendingLineBuffer.index(after: lastNewline)
-        pendingLineBuffer = Data(pendingLineBuffer[afterNewline...])
-
-        var lines = completeData.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: true)
-        if catchUp, lines.count > 200 {
-            lines = lines.suffix(200)
-        }
-
-        var lineCount = 0
-        var updateCount = 0
-        for line in lines {
-            lineCount += 1
-            guard line.count <= 64 * 1024 else { continue }
-            if let update = CodexRolloutParser.parseLine(Data(line), expectedCWD: expectedCWD) {
-                updateCount += 1
-                onUpdate?(update)
-            }
-        }
-        onTrace?(
-            "statusline.codex.tailer_read",
-            [
-                "line_count": "\(lineCount)",
-                "update_count": "\(updateCount)",
-                "catch_up": catchUp ? "true" : "false",
-            ])
+                [
+                    "line_count": "\(lineCount)",
+                    "update_count": "\(updateCount)",
+                    "catch_up": catchUp ? "true" : "false",
+                ])
+        } catch {}
     }
 }
 
@@ -497,18 +505,23 @@ final class CodexRolloutTailer {
 final class CodexStatusProvider: StatusLineDataProvider {
     var onUpdate: ((StatusLineData) -> Void)?
     var onAttention: ((PaneAttentionEvent) -> Void)?
+    var onHookRecords: (([CodexHookQueueRecord]) -> Void)?
+    private(set) var pendingHookRecords: [CodexHookQueueRecord] = []
 
     private let context: StatusProviderContext
+    private let adapter: CodexCompatibilityAdapter
     private let stateStore: CodexStateStore
     private let startupRetryInterval: TimeInterval
     private let startupTimeout: TimeInterval
     private let baseline: ToolAgnosticDataProvider
     private var tailer: CodexRolloutTailer?
     private var stateTask: Task<Void, Never>?
+    private var hookDiagnosticTask: Task<Void, Never>?
     private var latestHarnessData: StatusLineData?
     private var latestBaselineData: StatusLineData?
     private var boundSessionID: String?
     private var boundTranscriptPath: String?
+    private var lastHookWriterDiagnostic: String?
 
     init(
         context: StatusProviderContext,
@@ -517,6 +530,7 @@ final class CodexStatusProvider: StatusLineDataProvider {
         startupTimeout: TimeInterval = 15
     ) {
         self.context = context
+        self.adapter = context.codexAdapter ?? CodexCompatibilityAdapter.select(context.detectedHarnessVersion)
         self.stateStore = stateStore
         self.startupRetryInterval = startupRetryInterval
         self.startupTimeout = startupTimeout
@@ -534,118 +548,239 @@ final class CodexStatusProvider: StatusLineDataProvider {
             self.emitMerged()
         }
         baseline.start()
+        if context.codexHookDiagnosticPath != nil {
+            hookDiagnosticTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    self?.readAndRecordHookWriterDiagnostic()
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+            }
+        }
         stateTask = Task { [weak self] in
-            await self?.bindCodexSession()
+            guard let self else { return }
+            guard adapter.supportsRichStatus else {
+                trace(
+                    "statusline.codex.compatibility.selected",
+                    attributes: [
+                        "adapter": adapter.identifier,
+                        "version": adapter.version ?? "unknown",
+                        "result": "baseline_only",
+                    ])
+                return
+            }
+            trace(
+                "statusline.codex.compatibility.selected",
+                attributes: [
+                    "adapter": adapter.identifier,
+                    "version": adapter.version ?? "unknown",
+                    "result": "enabled",
+                    "hook_count": "\(adapter.hookEvents.count)",
+                ])
+            guard context.codexHookQueuePath != nil || context.codexHookRecordPath != nil else {
+                traceRetryableSelectionFailure(
+                    reason: "missing_hook_path", retryReason: "missing_hook_path", attempt: 1)
+                return
+            }
+            let queue = context.codexHookQueuePath.map { CodexHookQueue(fileURL: URL(filePath: $0)) }
+            let deadline = Date().addingTimeInterval(startupTimeout)
+            var attempt = 0
+            var didTraceLateWaiting = false
+
+            while !Task.isCancelled {
+                attempt += 1
+                let lateBound = Date() > deadline
+                readAndRecordHookWriterDiagnostic()
+                var candidateRecords: [CodexHookQueueRecord] = []
+                if let queue {
+                    do {
+                        let drain = try queue.drain()
+                        candidateRecords = drain.records
+                        if !drain.records.isEmpty || drain.malformedRecordCount > 0 || drain.partialRecordRetained
+                            || attempt == 1 || attempt.isMultiple(of: 20)
+                        {
+                            trace(
+                                "statusline.codex.hook_queue.drained",
+                                attributes: [
+                                    "record_count": "\(drain.records.count)",
+                                    "malformed_count": "\(drain.malformedRecordCount)",
+                                    "partial_retained": String(drain.partialRecordRetained),
+                                    "retry_attempt": "\(attempt)",
+                                ])
+                        }
+                    } catch {
+                        let failureCode: String
+                        switch error as? CodexHookQueueError {
+                        case .openFailed: failureCode = "open_failed"
+                        case .lockUnavailable: failureCode = "lock_unavailable"
+                        case .readFailed: failureCode = "read_failed"
+                        case .writeFailed: failureCode = "compaction_failed"
+                        case .fileTooLarge: failureCode = "queue_too_large"
+                        case nil: failureCode = "unknown"
+                        }
+                        trace(
+                            "statusline.codex.hook_queue.read_failed",
+                            attributes: [
+                                "result": failureCode,
+                                "retry_attempt": "\(attempt)",
+                            ])
+                    }
+                }
+                let validRecords = candidateRecords.filter {
+                    $0.paneID == context.paneID.uuidString
+                        && $0.tabID == context.tabID.uuidString
+                        && (context.codexLaunchGeneration == nil
+                            || $0.launchGeneration == context.codexLaunchGeneration)
+                        && adapter.hookEvents.contains($0.hookEventName)
+                }
+                if !validRecords.isEmpty {
+                    pendingHookRecords.append(contentsOf: validRecords)
+                    onHookRecords?(validRecords)
+                }
+                for queuedRecord in candidateRecords where !validRecords.contains(queuedRecord) {
+                    trace(
+                        "statusline.codex.hook_queue.record_ignored",
+                        attributes: [
+                            "reason": queuedRecord.paneID != context.paneID.uuidString
+                                || queuedRecord.tabID != context.tabID.uuidString
+                                ? "pane_tab_mismatch" : "generation_or_event_mismatch",
+                            "hook_event_name": queuedRecord.hookEventName,
+                        ])
+                }
+                if let queuedRecord = validRecords.last(where: {
+                    ["SessionStart", "UserPromptSubmit"].contains($0.hookEventName)
+                        && !($0.sessionID ?? "").isEmpty
+                }), let sessionID = queuedRecord.sessionID {
+                    let record = CodexHookSessionRecord(
+                        paneID: queuedRecord.paneID,
+                        tabID: queuedRecord.tabID,
+                        sessionID: sessionID,
+                        cwd: context.workingDirectory,
+                        model: queuedRecord.model,
+                        transcriptPath: queuedRecord.transcriptPath,
+                        hookEventName: queuedRecord.hookEventName,
+                        timestamp: queuedRecord.timestamp)
+                    await bind(record: record, attempt: attempt, lateBound: lateBound)
+                    await startBoundTailerOrEnrichment(
+                        record: record, deadline: Date().addingTimeInterval(startupTimeout))
+                    return
+                }
+                if let hookRecordPath = context.codexHookRecordPath, let record = readHookRecord(path: hookRecordPath) {
+                    guard record.paneID == context.paneID.uuidString, record.tabID == context.tabID.uuidString else {
+                        if attempt == 1 || attempt.isMultiple(of: 20) {
+                            trace(
+                                "statusline.codex.hook_record_ignored",
+                                attributes: [
+                                    "reason": "hook_context_mismatch",
+                                    "retry_attempt": "\(attempt)",
+                                    "late_bound": lateBound ? "true" : "false",
+                                    "record_pane_id": record.paneID,
+                                    "record_tab_id": record.tabID,
+                                    "hook_event_name": record.hookEventName,
+                                ])
+                        }
+                        if !lateBound {
+                            traceRetryableSelectionFailure(
+                                reason: "hook_context_mismatch",
+                                retryReason: "hook_context_mismatch",
+                                attempt: attempt,
+                                extraAttributes: [
+                                    "hook_record_available": "true",
+                                    "hook_event_name": record.hookEventName,
+                                ])
+                        }
+                        _ = await sleepUntilNextRetry(deadline: nil)
+                        continue
+                    }
+                    await bind(record: record, attempt: attempt, lateBound: lateBound)
+                    await startBoundTailerOrEnrichment(
+                        record: record, deadline: Date().addingTimeInterval(startupTimeout))
+                    return
+                }
+
+                if attempt == 1 || attempt.isMultiple(of: 20) || (lateBound && !didTraceLateWaiting) {
+                    trace(
+                        "statusline.codex.hook_waiting",
+                        attributes: [
+                            "retry_attempt": "\(attempt)",
+                            "late_bound": lateBound ? "true" : "false",
+                            "hook_record_available": "false",
+                        ])
+                    if lateBound {
+                        didTraceLateWaiting = true
+                    }
+                }
+                if !lateBound {
+                    traceRetryableSelectionFailure(
+                        reason: "hook_record_unavailable",
+                        retryReason: "waiting_for_hook_record",
+                        attempt: attempt,
+                        extraAttributes: ["hook_record_available": "false"])
+                }
+                _ = await sleepUntilNextRetry(deadline: nil)
+            }
         }
     }
 
     func stop() {
         stateTask?.cancel()
         stateTask = nil
+        hookDiagnosticTask?.cancel()
+        hookDiagnosticTask = nil
         baseline.stop()
         tailer?.stop()
         tailer = nil
     }
 
-    private func bindCodexSession() async {
-        guard let hookRecordPath = context.codexHookRecordPath else {
-            traceRetryableSelectionFailure(reason: "missing_hook_path", retryReason: "missing_hook_path", attempt: 1)
-            return
-        }
-        let deadline = Date().addingTimeInterval(startupTimeout)
-        var attempt = 0
-        var didTraceLateWaiting = false
+    private func readAndRecordHookWriterDiagnostic() {
+        guard let path = context.codexHookDiagnosticPath,
+            FileManager.default.fileExists(atPath: path),
+            let handle = try? FileHandle(forReadingFrom: URL(filePath: path))
+        else { return }
+        let data = try? handle.read(upToCount: 64)
+        try? handle.close()
+        try? FileManager.default.removeItem(atPath: path)
+        guard let data, let value = String(data: data, encoding: .utf8),
+            ["queue_lock_timeout", "hook_write_failed"].contains(value),
+            value != lastHookWriterDiagnostic
+        else { return }
+        lastHookWriterDiagnostic = value
+        trace("statusline.codex.hook_queue.write_failed", attributes: ["result": value])
+    }
 
-        while !Task.isCancelled {
-            attempt += 1
-            let lateBound = Date() > deadline
-            if let record = readHookRecord(path: hookRecordPath) {
-                guard record.paneID == context.paneID.uuidString, record.tabID == context.tabID.uuidString else {
-                    if attempt == 1 || attempt.isMultiple(of: 20) {
-                        trace(
-                            "statusline.codex.hook_record_ignored",
-                            attributes: [
-                                "reason": "hook_context_mismatch",
-                                "retry_attempt": "\(attempt)",
-                                "late_bound": lateBound ? "true" : "false",
-                                "record_pane_id": record.paneID,
-                                "record_tab_id": record.tabID,
-                                "hook_event_name": record.hookEventName,
-                            ])
-                    }
-                    if !lateBound {
-                        traceRetryableSelectionFailure(
-                            reason: "hook_context_mismatch",
-                            retryReason: "hook_context_mismatch",
-                            attempt: attempt,
-                            extraAttributes: [
-                                "hook_record_available": "true",
-                                "hook_event_name": record.hookEventName,
-                            ])
-                    }
-                    _ = await sleepUntilNextRetry(deadline: nil)
-                    continue
-                }
-                boundSessionID = record.sessionID
-                boundTranscriptPath = record.transcriptPath
-                trace(
-                    "statusline.codex.hook_bound",
-                    attributes: [
-                        "hook_record_available": "true",
-                        "hook_event_name": record.hookEventName,
-                        "retry_attempt": "\(attempt)",
-                        "late_bound": lateBound ? "true" : "false",
-                        "session_id_prefix": String(record.sessionID.prefix(12)),
-                        "transcript_available": record.transcriptPath.map {
-                            FileManager.default.fileExists(atPath: $0) ? "true" : "false"
-                        } ?? "false",
-                    ])
-                let stateData = StatusLineData(
-                    model: record.model.map { StatusLineData.Model(id: $0, displayName: $0) },
-                    cost: nil,
-                    contextWindow: nil,
-                    rateLimits: nil,
-                    worktree: nil,
-                    workspace: nil,
-                    effort: nil,
-                    thinking: nil,
-                    agent: nil,
-                    outputStyle: nil,
-                    vim: nil,
-                    sessionName: nil,
-                    version: CodexVersionAdapter.normalize(context.detectedHarnessVersion),
-                    exceeds200kTokens: nil,
-                    pr: nil,
-                    sessionStatus: nil
-                )
-                await MainActor.run {
-                    self.latestHarnessData = stateData
-                    self.emitMerged()
-                }
-                await startBoundTailerOrEnrichment(record: record, deadline: Date().addingTimeInterval(startupTimeout))
-                return
-            }
-
-            if attempt == 1 || attempt.isMultiple(of: 20) || (lateBound && !didTraceLateWaiting) {
-                trace(
-                    "statusline.codex.hook_waiting",
-                    attributes: [
-                        "retry_attempt": "\(attempt)",
-                        "late_bound": lateBound ? "true" : "false",
-                        "hook_record_available": "false",
-                    ])
-                if lateBound {
-                    didTraceLateWaiting = true
-                }
-            }
-            if !lateBound {
-                traceRetryableSelectionFailure(
-                    reason: "hook_record_unavailable",
-                    retryReason: "waiting_for_hook_record",
-                    attempt: attempt,
-                    extraAttributes: ["hook_record_available": "false"])
-            }
-            _ = await sleepUntilNextRetry(deadline: nil)
+    private func bind(record: CodexHookSessionRecord, attempt: Int, lateBound: Bool) async {
+        boundSessionID = record.sessionID
+        boundTranscriptPath = record.transcriptPath
+        trace(
+            "statusline.codex.hook_bound",
+            attributes: [
+                "hook_event_name": record.hookEventName,
+                "retry_attempt": "\(attempt)",
+                "late_bound": String(lateBound),
+                "session_id_prefix": String(record.sessionID.prefix(12)),
+                "transcript_available": record.transcriptPath.map {
+                    FileManager.default.fileExists(atPath: $0) ? "true" : "false"
+                } ?? "false",
+            ])
+        let stateData = StatusLineData(
+            model: record.model.map { StatusLineData.Model(id: $0, displayName: $0) },
+            cost: nil,
+            contextWindow: nil,
+            rateLimits: nil,
+            worktree: nil,
+            workspace: nil,
+            effort: nil,
+            thinking: nil,
+            agent: nil,
+            outputStyle: nil,
+            vim: nil,
+            sessionName: nil,
+            version: adapter.version,
+            exceeds200kTokens: nil,
+            pr: nil,
+            sessionStatus: nil)
+        await MainActor.run {
+            self.latestHarnessData = stateData
+            self.emitMerged()
         }
     }
 
@@ -766,7 +901,8 @@ final class CodexStatusProvider: StatusLineDataProvider {
 
     private func startTailer(path: String) {
         tailer?.stop()
-        let next = CodexRolloutTailer(rolloutPath: path, expectedCWD: context.workingDirectory)
+        let next = CodexRolloutTailer(
+            rolloutPath: path, expectedCWD: context.workingDirectory, adapter: adapter)
         next.onTrace = { [weak self] name, attributes in
             self?.trace(name, attributes: attributes)
         }

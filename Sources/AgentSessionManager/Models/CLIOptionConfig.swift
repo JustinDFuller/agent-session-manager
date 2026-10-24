@@ -149,7 +149,7 @@ struct CLIOptionConfig: Identifiable, Codable {
         case "--workspace":
             return .string(placeholder: "Path to workspace directory")
         case "--ask-for-approval":
-            return .string(placeholder: "untrusted / on-request / never")
+            return .string(placeholder: "on-request / never")
         case "--config":
             return .string(placeholder: "key=value")
         case "--disable":
@@ -393,7 +393,7 @@ struct CLIOptionConfig: Identifiable, Codable {
     static let codexAll: [CLIOptionConfig] = [
         CLIOptionConfig(
             id: "--ask-for-approval", label: "Ask for Approval",
-            description: "Control approval timing: untrusted, on-request, or never", isAvailable: false,
+            description: "Control approval timing: on-request or never", isAvailable: false,
             isDefaultEnabled: false),
         CLIOptionConfig(
             id: "--config", label: "Config", description: "Override configuration values (JSON-parsed if possible)",

@@ -586,8 +586,7 @@ struct NewPaneSheet: View {
             pane.scrollbackOverride = committedScrollbackOverride
             tab.refreshPane(
                 pane, extraArgs: extraArgs, harness: selectedHarness, extraEnvVars: extraEnvVars,
-                appSettings: appSettings)
-            pane.profileID = selectedProfileID
+                profileID: selectedProfileID, appSettings: appSettings)
             SessionPersistence.save(appState: appState)
             resetForm()
             dismiss()

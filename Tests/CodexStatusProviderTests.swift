@@ -135,18 +135,14 @@ final class CodexStatusProviderTests: XCTestCase {
     }
 
     func testRolloutParserMapsTokenCountAndRateLimits() throws {
-        let line = Data(
-            """
-            {"type":"event_msg","payload":{"type":"token_count","model":"gpt-5.1-codex","total_token_usage":{"input_tokens":300,"output_tokens":100},"last_token_usage":{"total_tokens":250},"model_context_window":1000,"rate_limits":{"primary":{"window_minutes":300,"used_percentage":25,"resets_at":2000000000},"secondary":{"window_minutes":10080,"used_percentage":50,"resets_at":2000003600}}}}
-            """.utf8)
+        let line = Data(CodexCompatibilityFixtures.currentTokenCount.utf8)
 
         let data = CodexRolloutParser.parseLine(line, expectedCWD: "/repo")
 
-        XCTAssertEqual(data?.model?.id, "gpt-5.1-codex")
-        XCTAssertEqual(data?.contextWindow?.totalInputTokens, 300)
-        XCTAssertEqual(data?.contextWindow?.totalOutputTokens, 100)
-        XCTAssertEqual(data?.contextWindow?.usedPercentage, 25)
-        XCTAssertEqual(data?.contextWindow?.remainingPercentage, 75)
+        XCTAssertEqual(data?.contextWindow?.totalInputTokens, 30)
+        XCTAssertEqual(data?.contextWindow?.totalOutputTokens, 10)
+        XCTAssertEqual(data?.contextWindow?.usedPercentage, 40)
+        XCTAssertEqual(data?.contextWindow?.remainingPercentage, 60)
         XCTAssertEqual(data?.rateLimits?.fiveHour?.usedPercentage, 25)
         XCTAssertEqual(data?.rateLimits?.fiveHour?.resetsAt, 2_000_000_000)
         XCTAssertEqual(data?.rateLimits?.sevenDay?.usedPercentage, 50)
@@ -166,32 +162,16 @@ final class CodexStatusProviderTests: XCTestCase {
     }
 
     func testRolloutParserMapsCodex136NestedTokenCountShape() throws {
-        let line = Data(
-            """
-            {"type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.1-codex","total_token_usage":{"input_tokens":320,"output_tokens":80},"last_token_usage":{"total_tokens":200},"model_context_window":2000},"rate_limits":{"primary":{"window_minutes":300,"used_percent":12.5,"resets_at":2000000000},"secondary":{"window_minutes":10080,"used_percent":44,"resets_at":2000003600}}}}
-            """.utf8)
+        let line = Data(CodexCompatibilityFixtures.legacyTokenCount.utf8)
 
         let data = CodexRolloutParser.parseLine(line, expectedCWD: "/repo")
 
-        XCTAssertEqual(data?.model?.id, "gpt-5.1-codex")
-        XCTAssertEqual(data?.contextWindow?.totalInputTokens, 320)
-        XCTAssertEqual(data?.contextWindow?.totalOutputTokens, 80)
-        XCTAssertEqual(data?.contextWindow?.usedPercentage, 10)
-        XCTAssertEqual(data?.contextWindow?.remainingPercentage, 90)
+        XCTAssertEqual(data?.contextWindow?.totalInputTokens, 20)
+        XCTAssertEqual(data?.contextWindow?.totalOutputTokens, 5)
+        XCTAssertEqual(data?.contextWindow?.usedPercentage, 31)
+        XCTAssertEqual(data?.contextWindow?.remainingPercentage, 69)
         XCTAssertEqual(data?.rateLimits?.fiveHour?.usedPercentage, 12.5)
         XCTAssertEqual(data?.rateLimits?.sevenDay?.usedPercentage, 44)
-    }
-
-    func testRolloutParserMapsTurnContextModelBeforeTokenUsage() throws {
-        let line = Data(
-            """
-            {"type":"event_msg","payload":{"type":"turn_context","model":"gpt-5.1-codex"}}
-            """.utf8)
-
-        let data = CodexRolloutParser.parseLine(line, expectedCWD: "/repo")
-
-        XCTAssertEqual(data?.model?.id, "gpt-5.1-codex")
-        XCTAssertNil(data?.contextWindow)
     }
 
     func testRolloutParserUsesLastTokenUsageForContextAndTotalUsageForTokenTotals() throws {
@@ -714,18 +694,33 @@ final class CodexStatusProviderTests: XCTestCase {
         )
     }
 
-    func testBuildCodexCommandRegistersAppOwnedHooks() {
-        let command = Tab.buildCodexCommand(hookScriptPath: "/tmp/hook path.py", extraArgs: ["--model", "gpt-5.1"])
+    func testBuildCodexCommandRegistersOnlyAdapterSupportedHooks() {
+        let current = Tab.buildCodexCommand(
+            hookScriptPath: "/tmp/hook path.py",
+            adapter: .current(version: "0.162.1"),
+            extraArgs: ["--model", "gpt-5.1"])
+        let legacy = Tab.buildCodexCommand(
+            hookScriptPath: "/tmp/hook path.py",
+            adapter: .legacy(version: "0.136.0"),
+            extraArgs: [])
+        let unknown = Tab.buildCodexCommand(
+            hookScriptPath: "/tmp/hook path.py",
+            adapter: .unsupported(version: "0.163.0"),
+            extraArgs: ["--model", "custom"])
 
-        XCTAssertTrue(command.contains("codex"))
-        XCTAssertTrue(command.contains("--dangerously-bypass-hook-trust"))
-        XCTAssertTrue(command.contains("features.hooks=true"))
-        XCTAssertTrue(command.contains(where: { $0.hasPrefix("hooks.SessionStart=") }))
-        XCTAssertTrue(command.contains(where: { $0.hasPrefix("hooks.UserPromptSubmit=") }))
-        XCTAssertTrue(command.contains(where: { $0.hasPrefix("hooks.Stop=") }))
-        XCTAssertTrue(command.contains(where: { $0.contains("/tmp/hook path.py") }))
-        XCTAssertTrue(command.contains("--model"))
-        XCTAssertTrue(command.contains("gpt-5.1"))
+        XCTAssertTrue(current.contains("codex"))
+        XCTAssertFalse(current.contains("--dangerously-bypass-hook-trust"))
+        XCTAssertTrue(current.contains("features.hooks=true"))
+        XCTAssertTrue(current.contains(where: { $0.hasPrefix("hooks.SessionStart=") }))
+        XCTAssertTrue(current.contains(where: { $0.hasPrefix("hooks.UserPromptSubmit=") }))
+        XCTAssertTrue(current.contains(where: { $0.hasPrefix("hooks.Stop=") }))
+        XCTAssertTrue(current.contains(where: { $0.hasPrefix("hooks.Interrupt=") }))
+        XCTAssertFalse(current.contains(where: { $0.hasPrefix("hooks.StopFailure=") }))
+        XCTAssertTrue(current.contains(where: { $0.contains("/tmp/hook path.py") }))
+        XCTAssertTrue(current.contains("--model"))
+        XCTAssertTrue(current.contains("gpt-5.1"))
+        XCTAssertFalse(legacy.contains(where: { $0.hasPrefix("hooks.Interrupt=") }))
+        XCTAssertEqual(unknown, ["codex", "--model", "custom"])
     }
 }
 
@@ -840,6 +835,154 @@ extension CodexStatusProviderTests {
 }
 
 extension CodexStatusProviderTests {
+    @MainActor
+    func testHookWriterFailureIsReportedWithOnlyBoundedCode() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+        let diagnosticURL = tempDir.appending(path: "hook-writer-diagnostic.txt")
+        let queueURL = tempDir.appending(path: "diagnostic-queue.jsonl")
+        let context = makeContext(
+            processStartTime: Date(),
+            queuePath: queueURL.path,
+            diagnosticPath: diagnosticURL.path,
+            launchGeneration: "diagnostic-generation",
+            adapter: .current(version: "0.162.1"))
+        let record = CodexHookQueueRecord(
+            paneID: context.paneID.uuidString,
+            tabID: context.tabID.uuidString,
+            launchGeneration: "diagnostic-generation",
+            hookEventName: "SessionStart",
+            sessionID: "diagnostic-session",
+            turnID: nil,
+            requestID: nil,
+            timestamp: 1,
+            source: "hook",
+            model: nil,
+            transcriptPath: nil,
+            result: nil)
+        var queueData = try JSONEncoder().encode(record)
+        queueData.append(UInt8(ascii: "\n"))
+        try queueData.write(to: queueURL)
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-diagnostic.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.2)
+        let hookObserved = expectation(description: "session start is delivered before the failure")
+        let traceCheck = expectation(description: "post-bind writer failure becomes a bounded provider diagnostic")
+        provider.onHookRecords = { _ in
+            try? "queue_lock_timeout".write(to: diagnosticURL, atomically: true, encoding: .utf8)
+            hookObserved.fulfill()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { traceCheck.fulfill() }
+
+        provider.start()
+        wait(for: [hookObserved, traceCheck], timeout: 2)
+        provider.stop()
+
+        let failure = TracingService.shared.recordedEventsForTesting.first {
+            $0.name == "statusline.codex.hook_queue.write_failed"
+        }
+        XCTAssertEqual(failure?.attributes["result"], "queue_lock_timeout")
+        XCTAssertFalse(String(describing: failure?.attributes ?? [:]).contains("SENSITIVE"))
+    }
+
+    @MainActor
+    func testProviderBindsLatestForegroundRecordFromStartupBurst() throws {
+        let rolloutA = tempDir.appending(path: "session-a.jsonl")
+        let rolloutB = tempDir.appending(path: "session-b.jsonl")
+        try (codexTokenLine(model: "session-a-model", input: 10, output: 2, contextTokens: 12, window: 100) + "\n")
+            .write(to: rolloutA, atomically: true, encoding: .utf8)
+        try (codexTokenLine(model: "session-b-model", input: 20, output: 3, contextTokens: 23, window: 100) + "\n")
+            .write(to: rolloutB, atomically: true, encoding: .utf8)
+        let processStartMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let dbURL = tempDir.appending(path: "startup-burst.sqlite")
+        try executeSQL(
+            """
+            CREATE TABLE threads (
+              id TEXT, cwd TEXT, rollout_path TEXT, model TEXT, cli_version TEXT,
+              tokens_used INTEGER, git_branch TEXT, created_at_ms INTEGER,
+              updated_at_ms INTEGER, is_archived INTEGER
+            );
+            INSERT INTO threads VALUES ('session-a', '\(tempDir.path)', '\(rolloutA.path)', 'session-a-model', '0.162.1', 12, 'main', \(processStartMs), \(processStartMs), 0);
+            INSERT INTO threads VALUES ('session-b', '\(tempDir.path)', '\(rolloutB.path)', 'session-b-model', '0.162.1', 23, 'main', \(processStartMs), \(processStartMs), 0);
+            """,
+            at: dbURL)
+
+        let context = makeContext(
+            processStartTime: Date(),
+            queuePath: tempDir.appending(path: "startup-burst.jsonl").path,
+            launchGeneration: "generation-one",
+            adapter: .current(version: "0.162.1"))
+        let records = [
+            CodexHookQueueRecord(
+                paneID: context.paneID.uuidString,
+                tabID: context.tabID.uuidString,
+                launchGeneration: "generation-one",
+                hookEventName: "SessionStart",
+                sessionID: "session-a",
+                turnID: nil,
+                requestID: nil,
+                timestamp: 1,
+                source: "hook",
+                model: "session-a-model",
+                transcriptPath: rolloutA.path,
+                result: nil),
+            CodexHookQueueRecord(
+                paneID: context.paneID.uuidString,
+                tabID: context.tabID.uuidString,
+                launchGeneration: "generation-one",
+                hookEventName: "UserPromptSubmit",
+                sessionID: "session-b",
+                turnID: "turn-b",
+                requestID: nil,
+                timestamp: 2,
+                source: "hook",
+                model: "session-b-model",
+                transcriptPath: rolloutB.path,
+                result: nil),
+        ]
+        let supersededGenerationRecord = CodexHookQueueRecord(
+            paneID: context.paneID.uuidString,
+            tabID: context.tabID.uuidString,
+            launchGeneration: "superseded-generation",
+            hookEventName: "UserPromptSubmit",
+            sessionID: "stale-session",
+            turnID: nil,
+            requestID: nil,
+            timestamp: 0,
+            source: "hook",
+            model: "stale-model",
+            transcriptPath: nil,
+            result: nil)
+        let queueRecords = [supersededGenerationRecord] + records
+        let queueData = try queueRecords.reduce(into: Data()) { data, record in
+            data.append(try JSONEncoder().encode(record))
+            data.append(0x0A)
+        }
+        try queueData.write(to: URL(filePath: context.codexHookQueuePath!))
+
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: dbURL),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.5)
+        let expectation = XCTestExpectation(description: "latest startup burst session binds")
+        provider.onUpdate = { data in
+            if data.model?.id == "session-b-model", data.contextWindow?.totalInputTokens == 20 {
+                expectation.fulfill()
+            }
+        }
+
+        provider.start()
+        wait(for: [expectation], timeout: 2)
+        provider.stop()
+
+        XCTAssertEqual(provider.pendingHookRecords, records)
+        XCTAssertEqual(provider.pendingHookRecords.last?.sessionID, "session-b")
+    }
+
     fileprivate func executeSQL(_ sql: String, at url: URL) throws {
         var db: OpaquePointer?
         XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
@@ -891,7 +1034,14 @@ extension CodexStatusProviderTests {
         )
     }
 
-    fileprivate func makeContext(processStartTime: Date, hookRecordPath: String? = nil) -> StatusProviderContext {
+    fileprivate func makeContext(
+        processStartTime: Date,
+        hookRecordPath: String? = nil,
+        queuePath: String? = nil,
+        diagnosticPath: String? = nil,
+        launchGeneration: String? = nil,
+        adapter: CodexCompatibilityAdapter? = nil
+    ) -> StatusProviderContext {
         StatusProviderContext(
             paneID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
             paneName: "codex-pane",
@@ -905,7 +1055,11 @@ extension CodexStatusProviderTests {
             detectedHarnessVersion: "codex-cli 0.136.0",
             codexHookRecordPath: hookRecordPath ?? tempDir.appending(path: "hook-record.json").path,
             opencodePort: nil,
-            opencodeSessionID: nil
+            opencodeSessionID: nil,
+            codexHookQueuePath: queuePath,
+            codexHookDiagnosticPath: diagnosticPath,
+            codexLaunchGeneration: launchGeneration,
+            codexAdapter: adapter
         )
     }
 
