@@ -2,7 +2,7 @@
 
 ## 0. Dev-only Launch Services prerequisite
 
-- [ ] 0.1 Scope the app-dev repair path to Dev registration while preserving the existing explicit broad-repair behavior and production registration/process; confirm the macOS 26 deployment floor with shell-level checks and a real Dev build launch.
+- [x] 0.1 Scope the app-dev repair path to Dev registration while preserving the existing explicit broad-repair behavior and production registration/process; confirm the macOS 26 deployment floor with shell-level checks and a real Dev build launch.
 
 ## 1. Codex compatibility and hook transport
 
@@ -51,4 +51,4 @@
 - [ ] 6.2 Exercise cross-feature isolation with two Codex panes on distinct UI-supported worktrees and ordinary Claude/Cursor/OpenCode or shell panes; record that Codex session changes and shared status repairs preserve other panes' lifecycle, configuration, notifications, and Agent Control access. Concurrent panes sharing one checkout are unsupported by New Pane and are out of scope.
 - [ ] 6.3 Exercise real authentication failure/retry and available banner prerequisites in Dev, and deliver an acceptance record linking each capability's scenarios to runtime captures and bounded diagnostics; separate source/unit evidence, executed runtime evidence, skips, and unresolved blockers before declaring acceptance complete.
 
-The separate Dev-only Launch Services prerequisite owns group 0. One implementation pull request owns all six Codex groups 1 through 6 and their subtasks as an approved exception to the usual one-group-per-pull-request rule. Task checkboxes track actual implementation and QA progress; group 0.1 and tasks 3.5, 4.4, 4.5, and 6.1 through 6.3 remain open. Review, OpenSpec validation, CI monitoring, and the later archive-only transition are workflow steps rather than completed implementation tasks.
+The separate Dev-only Launch Services prerequisite owns group 0. One implementation pull request owns all six Codex groups 1 through 6 and their subtasks as an approved exception to the usual one-group-per-pull-request rule. Task checkboxes track actual implementation and QA progress; task 0.1 is complete, and tasks 3.5, 4.4, 4.5, and 6.1 through 6.3 remain open. Review, OpenSpec validation, CI monitoring, and the later archive-only transition are workflow steps rather than completed implementation tasks.

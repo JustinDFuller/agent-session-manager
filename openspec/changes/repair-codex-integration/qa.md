@@ -6,6 +6,8 @@ This record tracks implementation and runtime acceptance evidence for OpenSpec p
 
 This matrix is authoritative for the current completion state. It supersedes contradictory historical closure statements below while retaining their run notes as history. Source and unit results do not substitute for current Dev runtime evidence.
 
+The separate [Dev Launch Services QA record](dev-launch-services-qa.md) documents completed prerequisite task 0.1, including the Dev-only repair boundary, deployment floor, production identity checks, and actual Dev launches. The consolidated Codex source at `e49b779` additionally fixes stale initial-session binding gates, chronological hook/binding effects across one drained batch, and question-only attention cleanup during monitor replacement. Focused chronology and refresh regressions passed 2/2, the Codex provider suite passed 71/71, and session-persistence notification tests passed 36/36; the full normal commit hook passed the XCTest suite, format check, and lint. These are source and automated-test results only and do not replace the current-source Dev acceptance still required below.
+
 | Task | State | Retained evidence | Still required |
 | --- | --- | --- | --- |
 | 3.5 Codex attention | INCOMPLETE | Earlier runs recorded working/completion, a Plan-mode native question, and a macOS completion banner. The retained question/banner images do not clearly show the Dev question UI; the permission probes did not produce a native permission request or acknowledgement. | Capture Dev UI and bounded pane diagnostics for working, completion, permission request and acknowledgement, native question and resolution, and the available banner flow. |
@@ -55,7 +57,7 @@ Codex launch construction now places user options before the `resume <session-id
 
 The latest storage check reported about 15 GiB free. Storage pressure no longer blocks UI work. A focused UI retry of the latest layout and screenshot edits is still needed before same-pane recovery, cross-profile validation, or a real harness run can be exercised; visual acceptance is incomplete.
 
-The current task file has 23 of 29 tasks checked: groups 1–2, tasks 3.1–3.4, 4.1–4.3, and 5.1–5.5 are checked. Tasks 3.5, 4.4–4.5, and 6.1–6.3 remain open for retained attention, continuation, integrated-flow, cross-feature, and runtime-acceptance evidence. Permission-request resolution follows the user's approved behavior: Codex 0.162.1 permission attention clears on the next foreground turn because its hook does not provide a request identifier.
+The current task file has 24 of 30 tasks checked: task 0.1, groups 1–2, tasks 3.1–3.4, 4.1–4.3, and 5.1–5.5 are checked. Tasks 3.5, 4.4–4.5, and 6.1–6.3 remain open for retained attention, continuation, integrated-flow, cross-feature, and runtime-acceptance evidence. Permission-request resolution follows the user's approved behavior: Codex 0.162.1 permission attention clears on the next foreground turn because its hook does not provide a request identifier.
 
 ## Codex permission and question source evidence (2026-10-15)
 
