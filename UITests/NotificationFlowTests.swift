@@ -26,7 +26,7 @@ final class NotificationFlowTests: BaseTestCase {
         let number = try XCTUnwrap(metadata["number"] as? Int)
         let directory = GitUITestWorkspace.directoryURL
         GitUITestWorkspace.runGitOrFail(
-            ["remote", "add", "origin", "https://github.com/JustinDFuller-org/agent-session-manager.git"],
+            ["remote", "set-url", "origin", "https://github.com/JustinDFuller-org/agent-session-manager.git"],
             cwd: directory)
         GitUITestWorkspace.runGitOrFail(
             ["fetch", "--depth=1", "origin", "refs/pull/\(number)/head"], cwd: directory)
@@ -41,6 +41,12 @@ final class NotificationFlowTests: BaseTestCase {
         app.launchArguments = ["--uitesting"]
         app.launch()
         app.activate()
+
+        let prStatus = app.buttons.matching(identifier: "status-line-row").matching(
+            NSPredicate(format: "label CONTAINS %@", "#\(number) (merged)")
+        ).firstMatch
+        waitFor(prStatus, timeout: 30)
+        XCTAssertTrue(prStatus.exists, "Expected real authenticated GitHub status for PR #\(number)")
 
         let row = app.descendants(matching: .any).matching(identifier: "notification-row-merged-pr").firstMatch
         waitFor(row, timeout: 30)

@@ -28,6 +28,10 @@ Open **Settings → Debug** and enable **Enable Debug Mode**. Violations are alw
 
 Each occurrence has its own UUID. Repeated violations of the same invariant remain separate dashboard rows.
 
+An unrecognized Codex version falling back to baseline-only integration and a saved Codex option requiring user correction are expected compatibility outcomes, not invariant violations. Compatibility spans record those decisions without turning unsupported versions or preserved user settings into false invariant failures.
+
+Codex foreground activity and fixed-copy attention transitions are recorded as bounded `statusline.codex.activity.changed` trace events with pane and owning-tab identity. These expected lifecycle transitions are not invariant violations; missing optional lifecycle metadata and unsupported adapter capabilities remain compatibility outcomes. In isolated Dev run `3b40c3e1-e951-4aa1-b36f-25ead2de2391`, telemetry captured working/stopped and completion plus native question request/resolution transitions without a Codex invariant occurrence. The run did not trigger Codex permission attention, so it provides no evidence for that path. No Codex-specific invariant ID is currently defined.
+
 `AuxiliaryWindowRegistry.checkOpenWindows()` records `app.launch.auxiliary_windows_checked` (observed window titles and requested ids) every time it runs, regardless of outcome, so a quiet launch is distinguishable from a check that never executed.
 
 ## File

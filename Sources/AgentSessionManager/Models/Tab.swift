@@ -404,6 +404,10 @@ final class Tab: Identifiable {
         scrollbackOverride: ScrollbackLimit? = nil,
         agentControlInjectionEnabled: Bool = true,
         resumeOpencodeSessionID: String? = nil,
+        resumeCodexSessionID: String? = nil,
+        codexTranscriptPath: String? = nil,
+        codexContinuationRecovery: CodexContinuationRecovery? = nil,
+        codexContinuationNotice: String? = nil,
         statusLineConfigOverride: StatusLineConfig? = nil,
         appSettings: AppSettings? = nil
     ) -> Pane {
@@ -444,6 +448,23 @@ final class Tab: Identifiable {
         pane.extraArgs = extraArgs
         pane.extraEnvVars = extraEnvVars
         pane.opencodeSessionID = resumeOpencodeSessionID
+        pane.codexSessionID = resumeCodexSessionID
+        pane.codexTranscriptPath = codexTranscriptPath
+        pane.codexContinuationRecovery = codexContinuationRecovery
+        pane.codexContinuationNotice = codexContinuationNotice
+        if harness == .codex, codexContinuationRecovery == .exactSessionUnavailable {
+            panes.append(pane)
+            TracingService.shared.record(
+                "statusline.codex.continuation.restore_deferred",
+                attributes: [
+                    "pane.id": pane.id.uuidString,
+                    "pane.name": pane.name,
+                    "tab.id": self.id.uuidString,
+                    "tab.name": self.name,
+                    "result": "awaiting_user_recovery",
+                ])
+            return pane
+        }
         TracingService.shared.record(
             "agent_control.injection_decision.resolved",
             attributes: [
@@ -457,12 +478,25 @@ final class Tab: Identifiable {
                 "agent_control.source": "pane_added",
             ])
         let cwd = worktreeDirectory?.path ?? directory.path
+        let codexEnvironment = ProcessEnvironment.sanitize(
+            Tab.hostEnvironmentForChildProcess() + extraEnvVars.map { "\($0.key)=\($0.value)" })
+        let codexAdapter =
+            harness == .codex
+            ? CodexCompatibilityAdapter.detect(
+                shell: appSettings.map { ShellResolver.resolved($0) } ?? ShellResolver.detectedLoginShell(),
+                workingDirectory: cwd,
+                environment: codexEnvironment) : nil
 
         if harness != .shell && harness != .opencode {
             let monitor = StatusLineMonitor(
                 paneID: pane.id, paneName: pane.name,
                 workingDirectory: cwd, harness: harness, processStartTime: Date(),
                 tabID: self.id, tabName: self.name,
+                codexAdapter: codexAdapter,
+                codexShell: appSettings.map { ShellResolver.resolved($0) } ?? ShellResolver.detectedLoginShell(),
+                codexEnvironment: ProcessEnvironment.dictionary(from: codexEnvironment),
+                codexInitialSessionID: resumeCodexSessionID,
+                codexInitialTranscriptPath: codexTranscriptPath,
                 customFieldEnvironment: extraEnvVars)
             pane.installStatusLineMonitor(monitor)
         }
@@ -483,17 +517,15 @@ final class Tab: Identifiable {
             )
         case .codex:
             applyExtraEnvVars(extraEnvVars, to: controller)
-            pane.statusLineMonitor?.writeCodexHookScript()
-            controller.pendingEnvironment =
-                (controller.pendingEnvironment ?? [])
-                + [
-                    "AGENT_SESSION_MANAGER_PANE_ID=\(pane.id.uuidString)",
-                    "AGENT_SESSION_MANAGER_TAB_ID=\(self.id.uuidString)",
-                    "AGENT_SESSION_MANAGER_CODEX_HOOK_RECORD_PATH=\(pane.statusLineMonitor!.codexHookRecordFilePath)",
-                ]
-            controller.pendingCommandArgs = Tab.buildCodexCommand(
-                hookScriptPath: pane.statusLineMonitor!.codexHookScriptFilePath,
-                extraArgs: extraArgs)
+            guard let monitor = pane.statusLineMonitor,
+                configureCodexLaunch(
+                    for: pane, monitor: monitor, controller: controller,
+                    extraArgs: extraArgs, appSettings: appSettings,
+                    resumeSessionID: resumeCodexSessionID)
+            else {
+                panes.append(pane)
+                return pane
+            }
         case .cursor:
             applyExtraEnvVars(extraEnvVars, to: controller)
             applyCursorHookEnvironment(to: controller, pane: pane)
@@ -526,6 +558,7 @@ final class Tab: Identifiable {
                 persistedDecision: pane.agentControlInjectionEnabled)
         }
         let new = TerminalController()
+        var replacementCodexMonitor: StatusLineMonitor?
         new.pendingDirectory = old.pendingDirectory
         new.pendingEnvironment = old.pendingEnvironment.map {
             AgentControlHarnessInjection.removingControlEnvironment(from: $0)
@@ -545,6 +578,31 @@ final class Tab: Identifiable {
                 opencodeEnvironment: pane.extraEnvVars,
                 customFieldEnvironment: pane.extraEnvVars)
             pane.installStatusLineMonitor(monitor)
+        } else if pane.harness == .codex {
+            let cwd = pane.worktreeDirectory?.path ?? directory.path
+            new.pendingEnvironment = Tab.hostEnvironmentForChildProcess()
+            applyExtraEnvVars(pane.extraEnvVars, to: new)
+            let adapter = CodexCompatibilityAdapter.detect(
+                shell: launchSettings.map { ShellResolver.resolved($0) } ?? ShellResolver.detectedLoginShell(),
+                workingDirectory: cwd,
+                environment: ProcessEnvironment.sanitize(new.pendingEnvironment ?? []))
+            let monitor = StatusLineMonitor(
+                paneID: pane.id, paneName: pane.name,
+                workingDirectory: cwd, harness: pane.harness, processStartTime: Date(),
+                tabID: self.id, tabName: self.name,
+                codexAdapter: adapter,
+                codexShell: launchSettings.map { ShellResolver.resolved($0) } ?? ShellResolver.detectedLoginShell(),
+                codexEnvironment: ProcessEnvironment.dictionary(from: new.pendingEnvironment ?? []),
+                codexInitialSessionID: pane.codexSessionID,
+                codexInitialTranscriptPath: pane.codexTranscriptPath,
+                customFieldEnvironment: pane.extraEnvVars)
+            replacementCodexMonitor = monitor
+            guard
+                configureCodexLaunch(
+                    for: pane, monitor: monitor, controller: new,
+                    extraArgs: pane.extraArgs, appSettings: launchSettings,
+                    resumeSessionID: pane.codexSessionID)
+            else { return }
         } else {
             new.pendingCommandArgs = old.pendingCommandArgs.map {
                 AgentControlHarnessInjection.removingControlArguments(from: $0, harness: pane.harness)
@@ -554,6 +612,7 @@ final class Tab: Identifiable {
         guard prepareAgentControl(for: pane, controller: new, appSettings: launchSettings) else { return }
 
         old.terminate()
+        if let replacementCodexMonitor { pane.installStatusLineMonitor(replacementCodexMonitor) }
         pane.installTerminalController(new)
         pane.restartToken = UUID()
     }
@@ -563,10 +622,29 @@ final class Tab: Identifiable {
         extraArgs: [String]? = nil,
         harness: Harness? = nil,
         extraEnvVars: [String: String] = [:],
+        profileID: UUID?? = nil,
         appSettings: AppSettings? = nil
     ) {
         if let extraArgs, let harness {
-            guard let old = pane.terminalController else { return }
+            let old = pane.terminalController
+            let hasFailedSetup: Bool
+            if case .failed = pane.setupState {
+                hasFailedSetup = true
+            } else {
+                hasFailedSetup = false
+            }
+            let canRefreshFailedCodexPane =
+                pane.harness == .codex
+                && pane.worktreeDirectory != nil
+                && pane.statusLineMonitor != nil
+                && hasFailedSetup
+            guard
+                old != nil
+                    || (pane.harness == .codex
+                        && pane.codexContinuationRecovery != nil)
+                    || canRefreshFailedCodexPane
+            else { return }
+            if let profileID { pane.profileID = profileID }
             if let appSettings {
                 pane.agentControlInjectionEnabled = appSettings.resolvedAgentControlInjectionDecision(
                     persistedDecision: pane.agentControlInjectionEnabled)
@@ -576,7 +654,7 @@ final class Tab: Identifiable {
                 pane.cursorAgentControlPluginDirectory = nil
             }
             pane.harness = harness
-            old.terminate()
+            old?.terminate()
             let cwd = pane.worktreeDirectory?.path ?? directory.path
             let controller = TerminalController()
             controller.pendingEnvironment = Tab.hostEnvironmentForChildProcess()
@@ -602,20 +680,25 @@ final class Tab: Identifiable {
                     paneID: pane.id, paneName: pane.name,
                     workingDirectory: cwd, harness: harness, processStartTime: Date(),
                     tabID: self.id, tabName: self.name,
+                    codexAdapter: CodexCompatibilityAdapter.detect(
+                        shell: appSettings.map { ShellResolver.resolved($0) } ?? ShellResolver.detectedLoginShell(),
+                        workingDirectory: cwd,
+                        environment: ProcessEnvironment.sanitize(
+                            Tab.hostEnvironmentForChildProcess()
+                                + extraEnvVars.map { "\($0.key)=\($0.value)" })),
+                    codexShell: appSettings.map { ShellResolver.resolved($0) } ?? ShellResolver.detectedLoginShell(),
+                    codexEnvironment: ProcessEnvironment.dictionary(
+                        from: ProcessEnvironment.sanitize(
+                            Tab.hostEnvironmentForChildProcess()
+                                + extraEnvVars.map { "\($0.key)=\($0.value)" })),
                     customFieldEnvironment: extraEnvVars)
                 pane.installStatusLineMonitor(monitor)
                 applyExtraEnvVars(extraEnvVars, to: controller)
-                monitor.writeCodexHookScript()
-                controller.pendingEnvironment =
-                    (controller.pendingEnvironment ?? [])
-                    + [
-                        "AGENT_SESSION_MANAGER_PANE_ID=\(pane.id.uuidString)",
-                        "AGENT_SESSION_MANAGER_TAB_ID=\(self.id.uuidString)",
-                        "AGENT_SESSION_MANAGER_CODEX_HOOK_RECORD_PATH=\(monitor.codexHookRecordFilePath)",
-                    ]
-                controller.pendingCommandArgs = Tab.buildCodexCommand(
-                    hookScriptPath: monitor.codexHookScriptFilePath,
-                    extraArgs: extraArgs)
+                guard
+                    configureCodexLaunch(
+                        for: pane, monitor: monitor, controller: controller,
+                        extraArgs: extraArgs, appSettings: appSettings)
+                else { return }
             case .cursor:
                 let monitor = StatusLineMonitor(
                     paneID: pane.id, paneName: pane.name,
@@ -636,26 +719,95 @@ final class Tab: Identifiable {
                 return
             }
 
+            if harness == .codex {
+                pane.codexSessionID = nil
+                pane.codexTranscriptPath = nil
+                pane.codexContinuationRecovery = nil
+                pane.codexContinuationNotice = nil
+            }
             pane.extraArgs = extraArgs
             pane.extraEnvVars = extraEnvVars
+            controller.terminalView.telemetryTabName = self.name
+            controller.terminalView.telemetryTabUUID = self.id
+            controller.terminalView.telemetryPaneName = pane.name
+            controller.terminalView.telemetryPaneUUID = pane.id
             pane.installTerminalController(controller)
+            pane.setupState = nil
             pane.restartToken = UUID()
+            if harness == .codex, let appState = pane.notificationAppState {
+                SessionPersistence.save(appState: appState)
+            }
             return
         }
 
-        guard let old = pane.terminalController else { return }
+        let old = pane.terminalController
+        guard old != nil || (pane.harness == .codex && pane.codexContinuationRecovery != nil) else { return }
+        if pane.harness == .codex {
+            guard let sessionID = pane.codexSessionID else {
+                pane.codexContinuationRecovery = .identityNotRecorded
+                TracingService.shared.record(
+                    "statusline.codex.continuation.preflight",
+                    attributes: [
+                        "pane.id": pane.id.uuidString,
+                        "pane.name": pane.name,
+                        "tab.id": id.uuidString,
+                        "tab.name": name,
+                        "result": "identity_not_recorded",
+                    ])
+                return
+            }
+            let environment = ProcessEnvironment.dictionary(
+                from: ProcessEnvironment.sanitize(
+                    Tab.hostEnvironmentForChildProcess()
+                        + pane.extraEnvVars.map { "\($0.key)=\($0.value)" }))
+            let access = CodexContinuationVerifier.check(
+                sessionID: sessionID,
+                transcriptPath: pane.codexTranscriptPath,
+                shell: pane.appSettings.map { ShellResolver.resolved($0) } ?? ShellResolver.detectedLoginShell(),
+                workingDirectory: pane.worktreeDirectory?.path ?? directory.path,
+                environment: environment)
+            TracingService.shared.record(
+                "statusline.codex.continuation.preflight",
+                attributes: [
+                    "pane.id": pane.id.uuidString,
+                    "pane.name": pane.name,
+                    "tab.id": id.uuidString,
+                    "tab.name": name,
+                    "requested_session_id_prefix": String(sessionID.prefix(12)),
+                    "result": access.traceValue,
+                ])
+            guard access == .available else {
+                pane.codexContinuationRecovery = .exactSessionUnavailable
+                return
+            }
+            pane.codexContinuationRecovery = nil
+        }
         let new = TerminalController()
-        new.pendingDirectory = old.pendingDirectory
-        new.pendingEnvironment = Tab.hostEnvironmentForChildProcess()
-        new.pendingShell = old.pendingShell
-        old.terminate()
+        new.pendingDirectory = old?.pendingDirectory ?? pane.worktreeDirectory?.path ?? directory.path
+        new.pendingEnvironment =
+            old?.pendingEnvironment.map {
+                AgentControlHarnessInjection.removingControlEnvironment(from: $0)
+            } ?? Tab.hostEnvironmentForChildProcess()
+        new.pendingShell = old?.pendingShell ?? pane.appSettings.map { ShellResolver.resolved($0) }
         let cwd = new.pendingDirectory ?? directory.path
+        if pane.harness == .codex { applyExtraEnvVars(pane.extraEnvVars, to: new) }
+        let codexAdapter =
+            pane.harness == .codex
+            ? CodexCompatibilityAdapter.detect(
+                shell: new.pendingShell ?? ShellResolver.detectedLoginShell(),
+                workingDirectory: cwd,
+                environment: ProcessEnvironment.sanitize(new.pendingEnvironment ?? [])) : nil
         var monitor: StatusLineMonitor?
         if pane.harness != .opencode {
             monitor = StatusLineMonitor(
                 paneID: pane.id, paneName: pane.name,
                 workingDirectory: cwd, harness: pane.harness, processStartTime: Date(),
                 tabID: self.id, tabName: self.name,
+                codexAdapter: codexAdapter,
+                codexShell: new.pendingShell ?? ShellResolver.detectedLoginShell(),
+                codexEnvironment: ProcessEnvironment.dictionary(from: new.pendingEnvironment ?? []),
+                codexInitialSessionID: pane.codexSessionID,
+                codexInitialTranscriptPath: pane.codexTranscriptPath,
                 customFieldEnvironment: pane.extraEnvVars)
         }
         if let monitor {
@@ -676,19 +828,15 @@ final class Tab: Identifiable {
                 resumeSessionID: pane.opencodeSessionID, harness: pane.harness)
         }
         if pane.harness == .codex, let monitor {
-            monitor.writeCodexHookScript()
-            new.pendingEnvironment =
-                (new.pendingEnvironment ?? [])
-                + [
-                    "AGENT_SESSION_MANAGER_PANE_ID=\(pane.id.uuidString)",
-                    "AGENT_SESSION_MANAGER_TAB_ID=\(self.id.uuidString)",
-                    "AGENT_SESSION_MANAGER_CODEX_HOOK_RECORD_PATH=\(monitor.codexHookRecordFilePath)",
-                ]
-            new.pendingCommandArgs = Tab.buildCodexCommand(
-                hookScriptPath: monitor.codexHookScriptFilePath,
-                extraArgs: pane.extraArgs)
+            guard
+                configureCodexLaunch(
+                    for: pane, monitor: monitor, controller: new,
+                    extraArgs: pane.extraArgs, appSettings: pane.appSettings,
+                    resumeSessionID: pane.codexSessionID)
+            else { return }
         }
         guard prepareAgentControl(for: pane, controller: new, appSettings: pane.appSettings) else { return }
+        old?.terminate()
         pane.installTerminalController(new)
         pane.restartToken = UUID()
     }
@@ -954,24 +1102,54 @@ extension Tab {
         ["claude", "--settings", settingsPath] + extraArgs
     }
 
-    nonisolated static func buildCodexCommand(hookScriptPath: String, extraArgs: [String]) -> [String] {
+    nonisolated static func buildCodexCommand(
+        hookScriptPath: String,
+        adapter: CodexCompatibilityAdapter,
+        extraArgs: [String],
+        resumeSessionID: String? = nil,
+        previousResumeSessionID: String? = nil
+    ) -> [String] {
+        var launchArgs = extraArgs
+        if let previousResumeSessionID,
+            let resumeIndex = launchArgs.firstIndex(of: "resume"),
+            launchArgs.indices.contains(resumeIndex + 1),
+            launchArgs[resumeIndex + 1] == previousResumeSessionID
+        {
+            launchArgs.removeSubrange(resumeIndex...(resumeIndex + 1))
+        }
+        if let resumeSessionID {
+            launchArgs.append(contentsOf: ["resume", resumeSessionID])
+        }
+        guard !adapter.hookEvents.isEmpty else { return ["codex"] + launchArgs }
         let hookCommand = "/usr/bin/python3 \(shellQuote(hookScriptPath))"
         let escapedHookCommand =
             hookCommand
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         let commandValue = "[{hooks=[{type=\"command\",command=\"\(escapedHookCommand)\",timeout=5}]}]"
-        let hookEvents = ["SessionStart", "UserPromptSubmit", "Stop", "StopFailure"]
-        var args: [String] = [
-            "codex",
-            "--dangerously-bypass-hook-trust",
-            "-c",
-            "features.hooks=true",
-        ]
-        for event in hookEvents {
-            args.append(contentsOf: ["-c", "hooks.\(event)=\(commandValue)"])
+        var hookConfigArgs: [String] = ["-c", "features.hooks=true"]
+        for event in adapter.hookEvents {
+            hookConfigArgs.append(contentsOf: ["-c", "hooks.\(event)=\(commandValue)"])
         }
-        return args + extraArgs
+        return ["codex"] + hookConfigArgs + launchArgs
+    }
+
+    nonisolated static func codexResumeSessionIDForRestore(
+        harness: Harness,
+        savedSessionID: String?,
+        continueOnRestart: Bool
+    ) -> String? {
+        guard harness == .codex, continueOnRestart else { return nil }
+        return savedSessionID
+    }
+
+    nonisolated static func codexRestoreNotice(
+        harness: Harness,
+        savedSessionID: String?,
+        continueOnRestart: Bool
+    ) -> String? {
+        guard harness == .codex, continueOnRestart, savedSessionID == nil else { return nil }
+        return "No prior Codex conversation was recorded. This pane started a new conversation."
     }
 
     nonisolated static func buildOpenCodeCommand(port: Int?, extraArgs: [String]) -> [String] {

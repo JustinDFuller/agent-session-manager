@@ -72,12 +72,23 @@ extension Tab {
             ])
 
         let cwd = resolved.processDirectory.path
+        let codexEnvironment = ProcessEnvironment.sanitize(
+            Tab.hostEnvironmentForChildProcess() + extraEnvVars.map { "\($0.key)=\($0.value)" })
+        let codexAdapter =
+            pane.harness == .codex
+            ? CodexCompatibilityAdapter.detect(
+                shell: appSettings.map { ShellResolver.resolved($0) } ?? ShellResolver.detectedLoginShell(),
+                workingDirectory: cwd,
+                environment: codexEnvironment) : nil
 
         if pane.harness != .shell && pane.harness != .opencode {
             let monitor = StatusLineMonitor(
                 paneID: pane.id, paneName: pane.name,
                 workingDirectory: cwd, harness: pane.harness, processStartTime: Date(),
                 tabID: self.id, tabName: self.name,
+                codexAdapter: codexAdapter,
+                codexShell: appSettings.map { ShellResolver.resolved($0) } ?? ShellResolver.detectedLoginShell(),
+                codexEnvironment: ProcessEnvironment.dictionary(from: codexEnvironment),
                 customFieldEnvironment: extraEnvVars)
             pane.installStatusLineMonitor(monitor)
         }
@@ -98,17 +109,11 @@ extension Tab {
             )
         case .codex:
             applyExtraEnvVars(extraEnvVars, to: controller)
-            pane.statusLineMonitor?.writeCodexHookScript()
-            controller.pendingEnvironment =
-                (controller.pendingEnvironment ?? [])
-                + [
-                    "AGENT_SESSION_MANAGER_PANE_ID=\(pane.id.uuidString)",
-                    "AGENT_SESSION_MANAGER_TAB_ID=\(self.id.uuidString)",
-                    "AGENT_SESSION_MANAGER_CODEX_HOOK_RECORD_PATH=\(pane.statusLineMonitor!.codexHookRecordFilePath)",
-                ]
-            controller.pendingCommandArgs = Tab.buildCodexCommand(
-                hookScriptPath: pane.statusLineMonitor!.codexHookScriptFilePath,
-                extraArgs: effectiveExtraArgs)
+            guard let monitor = pane.statusLineMonitor,
+                configureCodexLaunch(
+                    for: pane, monitor: monitor, controller: controller,
+                    extraArgs: effectiveExtraArgs, appSettings: appSettings)
+            else { return }
         case .cursor:
             applyExtraEnvVars(extraEnvVars, to: controller)
             controller.pendingEnvironment =
@@ -136,5 +141,157 @@ extension Tab {
         }
         pane.installTerminalController(controller)
         pane.setupState = nil
+    }
+
+    func configureCodexLaunch(
+        for pane: Pane,
+        monitor: StatusLineMonitor,
+        controller: TerminalController,
+        extraArgs: [String],
+        appSettings: AppSettings?,
+        resumeSessionID: String? = nil
+    ) -> Bool {
+        if pane.codexContinuationRecovery == .exactSessionUnavailable, resumeSessionID != nil {
+            return false
+        }
+        guard let adapter = monitor.codexAdapter else {
+            pane.setupState = .failed(
+                error: "Codex compatibility could not be selected. Retry after checking the configured shell.")
+            return false
+        }
+        let catalog = appSettings?.codexCliOptions ?? CLIOptionConfig.codexAll
+        if let unsupported = adapter.unsupportedBuiltinOption(
+            in: extraArgs,
+            catalog: catalog)
+        {
+            pane.setupState = .failed(
+                error:
+                    "Codex does not support the saved value '\(unsupported.value)' for \(unsupported.name) in \(adapter.version ?? "this version"). Change the global setting in Settings → Harnesses → Codex or edit the affected profile, then use Refresh Pane → Refresh with New Settings and choose 'on-request' or 'never'. Your saved value and custom options are unchanged."
+            )
+            TracingService.shared.record(
+                "statusline.codex.compatibility.rejected_option",
+                attributes: [
+                    "pane.id": pane.id.uuidString,
+                    "pane.name": pane.name,
+                    "tab.id": id.uuidString,
+                    "tab.name": name,
+                    "adapter": adapter.identifier,
+                    "option": unsupported.name,
+                    "reason": "unsupported_saved_builtin_value",
+                ])
+            return false
+        }
+        if let resumeSessionID {
+            guard adapter.supportsRichStatus else {
+                pane.codexContinuationRecovery = .exactSessionUnavailable
+                TracingService.shared.record(
+                    "statusline.codex.continuation.preflight",
+                    attributes: [
+                        "pane.id": pane.id.uuidString,
+                        "pane.name": pane.name,
+                        "tab.id": id.uuidString,
+                        "tab.name": name,
+                        "result": "unknown_adapter",
+                    ])
+                return false
+            }
+            let environment = ProcessEnvironment.dictionary(
+                from: ProcessEnvironment.sanitize(controller.pendingEnvironment ?? []))
+            let access = CodexContinuationVerifier.check(
+                sessionID: resumeSessionID,
+                transcriptPath: pane.codexTranscriptPath,
+                shell: controller.pendingShell ?? appSettings.map { ShellResolver.resolved($0) }
+                    ?? ShellResolver.detectedLoginShell(),
+                workingDirectory: controller.pendingDirectory ?? pane.worktreeDirectory?.path ?? directory.path,
+                environment: environment)
+            TracingService.shared.record(
+                "statusline.codex.continuation.preflight",
+                attributes: [
+                    "pane.id": pane.id.uuidString,
+                    "pane.name": pane.name,
+                    "tab.id": id.uuidString,
+                    "tab.name": name,
+                    "requested_session_id_prefix": String(resumeSessionID.prefix(12)),
+                    "result": access.traceValue,
+                ])
+            guard access == .available else {
+                pane.codexContinuationRecovery = .exactSessionUnavailable
+                return false
+            }
+            pane.codexContinuationRecovery = nil
+        }
+        controller.pendingEnvironment =
+            (controller.pendingEnvironment ?? [])
+            + [
+                "AGENT_SESSION_MANAGER_PANE_ID=\(pane.id.uuidString)",
+                "AGENT_SESSION_MANAGER_TAB_ID=\(id.uuidString)",
+            ]
+        guard !adapter.hookEvents.isEmpty else {
+            controller.pendingCommandArgs = Tab.buildCodexCommand(
+                hookScriptPath: monitor.codexHookScriptFilePath,
+                adapter: adapter,
+                extraArgs: extraArgs,
+                resumeSessionID: resumeSessionID,
+                previousResumeSessionID: pane.codexLaunchResumeSessionID)
+            pane.codexLaunchResumeSessionID = resumeSessionID
+            TracingService.shared.record(
+                "statusline.codex.compatibility.selected",
+                attributes: [
+                    "pane.id": pane.id.uuidString,
+                    "pane.name": pane.name,
+                    "tab.id": id.uuidString,
+                    "tab.name": name,
+                    "adapter": adapter.identifier,
+                    "version": adapter.version ?? "unknown",
+                    "result": "baseline_only",
+                ])
+            return true
+        }
+        do {
+            try monitor.writeCodexHookScript()
+        } catch {
+            pane.setupState = .failed(
+                error:
+                    "Agent Session Manager could not prepare Codex lifecycle integration. Check temporary file access and retry."
+            )
+            TracingService.shared.record(
+                "statusline.codex.hook_setup.failed",
+                attributes: [
+                    "pane.id": pane.id.uuidString,
+                    "pane.name": pane.name,
+                    "tab.id": id.uuidString,
+                    "tab.name": name,
+                    "adapter": adapter.identifier,
+                    "result": "file_setup_failed",
+                ])
+            return false
+        }
+        controller.pendingEnvironment =
+            (controller.pendingEnvironment ?? [])
+            + [
+                "AGENT_SESSION_MANAGER_CODEX_LAUNCH_GENERATION=\(monitor.codexLaunchGeneration)",
+                "AGENT_SESSION_MANAGER_CODEX_HOOK_QUEUE_PATH=\(monitor.codexHookQueueFilePath)",
+                "AGENT_SESSION_MANAGER_CODEX_HOOK_DIAGNOSTIC_PATH=\(monitor.codexHookDiagnosticFilePath)",
+            ]
+        controller.pendingCommandArgs = Tab.buildCodexCommand(
+            hookScriptPath: monitor.codexHookScriptFilePath,
+            adapter: adapter,
+            extraArgs: extraArgs,
+            resumeSessionID: resumeSessionID,
+            previousResumeSessionID: pane.codexLaunchResumeSessionID)
+        pane.codexLaunchResumeSessionID = resumeSessionID
+        TracingService.shared.record(
+            "statusline.codex.compatibility.selected",
+            attributes: [
+                "pane.id": pane.id.uuidString,
+                "pane.name": pane.name,
+                "tab.id": id.uuidString,
+                "tab.name": name,
+                "adapter": adapter.identifier,
+                "version": adapter.version ?? "unknown",
+                "result": "hooks_prepared",
+                "hook_count": "\(adapter.hookEvents.count)",
+            ])
+        return true
     }
 }

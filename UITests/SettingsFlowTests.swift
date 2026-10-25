@@ -196,6 +196,13 @@ final class SettingsFlowTests: BaseTestCase {
 
             let bannerToggle = app.checkBoxes["settings-macos-banner-notifications-toggle"]
             waitFor(bannerToggle)
+            let codexCompletionToggle = app.checkBoxes["settings-codex-completion-notification-toggle"]
+            waitFor(codexCompletionToggle)
+            XCTAssertEqual(codexCompletionToggle.value as? Int, 1)
+            codexCompletionToggle.click()
+            XCTAssertEqual(codexCompletionToggle.value as? Int, 0)
+            codexCompletionToggle.click()
+            XCTAssertEqual(codexCompletionToggle.value as? Int, 1)
 
             let openNotifSettingsButton = app.descendants(matching: .any)
                 .matching(identifier: "settings-open-notification-settings-button")

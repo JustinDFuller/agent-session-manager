@@ -87,7 +87,7 @@ struct StatusLineView: View {
             factValueView(item: item, data: data)
         }
         .fixedSize(horizontal: true, vertical: false)
-        if item.id == "pr", data?.pr != nil {
+        if item.id == "pr", data?.pr != nil || prStateIsFailure(data?.prTrackingState) {
             Button {
                 showPRPopover.toggle()
             } label: {
@@ -98,8 +98,15 @@ struct StatusLineView: View {
             .contentShape(Rectangle())
             .popover(isPresented: $showPRPopover, arrowEdge: .bottom) {
                 if let pr = data?.pr {
-                    PRPopoverContent(pr: pr)
-                        .padding()
+                    PRPopoverContent(pr: pr, state: data?.prTrackingState) {
+                        PRTrackingCoordinator.shared.retry(paneID: paneID)
+                    }
+                    .padding()
+                } else if let state = data?.prTrackingState {
+                    PRStatusPopoverContent(state: state) {
+                        PRTrackingCoordinator.shared.retry(paneID: paneID)
+                    }
+                    .padding()
                 }
             }
         } else {
@@ -114,6 +121,13 @@ struct StatusLineView: View {
                 Image(systemName: pr.stateIconName)
                     .font(.system(size: 10))
                     .foregroundStyle(AnyShapeStyle(prCircleColor(pr: pr)))
+                if prStateIsFailure(data?.prTrackingState) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
+                } else if data?.prTrackingState == .loading {
+                    ProgressView().controlSize(.mini)
+                }
             } else if item.id.hasPrefix("custom:") {
                 let custom = data?.customFields?[item.id]
                 Image(
@@ -202,9 +216,18 @@ struct StatusLineView: View {
                         .lineLimit(1)
                 }
             } else {
-                Text("—")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                switch data?.prTrackingState {
+                case .loading:
+                    Text("Checking PR…").font(.caption).foregroundStyle(.secondary)
+                case .current:
+                    Text("PR").font(.caption).foregroundStyle(.secondary)
+                case .absent:
+                    Text("No PR").font(.caption).foregroundStyle(.secondary)
+                case .failed(.authentication):
+                    Text("GitHub authentication required").font(.caption).foregroundStyle(.orange)
+                case .failed, nil:
+                    Text("PR status unavailable").font(.caption).foregroundStyle(.orange)
+                }
             }
         default:
             if item.id.hasPrefix("custom:"), let percent = data?.customFields?[item.id]?.percent {
@@ -288,6 +311,11 @@ struct StatusLineView: View {
         pr.circleColor
     }
 
+    private func prStateIsFailure(_ state: StatusLineData.PRTrackingState?) -> Bool {
+        if case .failed? = state { return true }
+        return false
+    }
+
     private func progressTint(_ pct: Int) -> Color {
         pct < 70 ? .green : pct < 90 ? .orange : .red
     }
@@ -323,11 +351,16 @@ private struct RateProgressView: View {
 
 private struct PRPopoverContent: View {
     let pr: PullRequest
+    let state: StatusLineData.PRTrackingState?
+    let onRetry: () -> Void
 
     private static let maxVisibleChecks = 5
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if case .failed(let failure) = state {
+                PRStatusMessage(failure: failure, onRetry: onRetry)
+            }
             HStack {
                 Circle()
                     .fill(pr.circleColor)
@@ -453,5 +486,51 @@ private struct PRPopoverContent: View {
                 }
             }
         }
+    }
+}
+
+private struct PRStatusPopoverContent: View {
+    let state: StatusLineData.PRTrackingState
+    let onRetry: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            switch state {
+            case .loading:
+                Label("Checking pull-request status", systemImage: "arrow.triangle.2.circlepath")
+            case .current:
+                Text("Pull-request status is current.")
+            case .absent:
+                Text("No pull request was found for this branch.")
+            case .failed(let failure):
+                PRStatusMessage(failure: failure, onRetry: onRetry)
+            }
+        }
+        .frame(maxWidth: 280, alignment: .leading)
+    }
+}
+
+private struct PRStatusMessage: View {
+    let failure: GitHubCLIFailure
+    let onRetry: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(
+                failure == .authentication
+                    ? "GitHub authentication required" : "GitHub pull-request status could not be refreshed"
+            )
+            .font(.headline)
+            Text(
+                failure == .authentication
+                    ? "Authenticate the GitHub CLI selected by your configured shell, then retry."
+                    : "The previous pull-request status is retained until GitHub can be checked again."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            Button("Retry", action: onRetry)
+                .accessibilityIdentifier("pr-status-retry")
+        }
+        .frame(maxWidth: 280, alignment: .leading)
     }
 }

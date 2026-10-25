@@ -8,7 +8,7 @@ Codex continuation preserves the specific conversation a user was working on whe
 
 ### Requirement: Refresh and Continue resumes the exact conversation
 
-Refresh and Continue on a Codex pane MUST resume its current foreground conversation with the same checkout, profile, CLI options, and control-injection decision. Its exact-session preflight MUST use the same final `CODEX_HOME` exported by the configured interactive shell as the Codex process. The app MUST NOT select a conversation by latest activity or shared working directory. The sheet MUST describe continuation without promising an unsupported `--continue` flag.
+Refresh and Continue on a Codex pane MUST resume that pane's current foreground conversation with the same checkout, profile, CLI options, and control-injection decision. Its exact-session preflight MUST use the same final `CODEX_HOME` exported by the configured interactive shell as the Codex process. The app MUST NOT select a conversation by latest activity or shared working directory. The sheet MUST describe conversation continuation without promising an unsupported `--continue` flag.
 
 #### Scenario: Two Codex panes use distinct checkouts
 
@@ -19,6 +19,15 @@ Refresh and Continue on a Codex pane MUST resume its current foreground conversa
 
 - **WHEN** the user switches Codex conversations and then selects Refresh and Continue
 - **THEN** the newly selected foreground conversation is resumed
+
+### Requirement: Codex state lookup uses the effective home
+
+The app MUST resolve `CODEX_HOME` from the configured interactive shell's exported value first, then the launch environment value, then the default `~/.codex` directory. SQLite enrichment and exact-session preflight MUST use the same resolved home as the interactive Codex process.
+
+#### Scenario: Shell startup changes Codex home
+
+- **WHEN** the configured shell exports a `CODEX_HOME` different from the inherited launch value
+- **THEN** SQLite enrichment and exact-session preflight use the shell-exported home
 
 ### Requirement: Enabled restoration resumes saved Codex conversations
 

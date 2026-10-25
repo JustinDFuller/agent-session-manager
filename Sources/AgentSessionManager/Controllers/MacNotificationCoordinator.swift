@@ -31,7 +31,9 @@ final class MacNotificationCoordinator: NSObject, UNUserNotificationCenterDelega
         lastChimeAt: Date?, outstanding: (reason: String, isSpecific: Bool)?,
         incomingSource: PaneAttentionEvent.Source, incomingReason: String
     ) -> CoalesceDecision {
-        let incomingSpecific = incomingSource != .claudeStop && incomingSource != .cursorStop
+        let incomingSpecific =
+            incomingSource != .claudeStop && incomingSource != .cursorStop
+            && incomingSource != .codexStop
         let withinCooldown = lastChimeAt.map { now.timeIntervalSince($0) < cooldown } ?? false
         let silent = outstanding != nil || withinCooldown
         if let outstanding, outstanding.isSpecific, !incomingSpecific {

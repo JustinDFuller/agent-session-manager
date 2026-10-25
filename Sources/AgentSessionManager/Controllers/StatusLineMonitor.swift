@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Darwin
 import Foundation
 import Observation
@@ -23,16 +24,27 @@ enum SidebarSide: String, Codable, CaseIterable {
 @Observable
 @MainActor
 final class StatusLineMonitor {
+    private static var codexHookScriptReferenceCounts: [String: Int] = [:]
+
     enum ClaudeLifecycle { case unknown, working, stopped }
     enum CursorLifecycle { case unknown, working, stopped }
+    enum CodexLifecycle { case unknown, working, stopped }
 
     private(set) var currentData: StatusLineData?
     private(set) var claudeLifecycle: ClaudeLifecycle = .unknown
     private(set) var cursorLifecycle: CursorLifecycle = .unknown
+    private(set) var codexLifecycle: CodexLifecycle = .unknown
     var isClaudeWorking: Bool { claudeLifecycle == .working }
     var isClaudeStopped: Bool { claudeLifecycle == .stopped }
     var isCursorWorking: Bool { cursorLifecycle == .working }
     var isCursorStopped: Bool { cursorLifecycle == .stopped }
+    var isCodexWorking: Bool { codexLifecycle == .working }
+    var isCodexStopped: Bool { codexLifecycle == .stopped }
+    private(set) var isCodexPermissionAttentionActive = false
+    private var activeCodexTurnID: String?
+    private var canceledCodexTurnIDs = Set<String>()
+    private var pendingCodexCompletionTurnID: String?
+    private var activeCodexQuestionCallIDs = Set<String>()
     private(set) var isOpenCodeWorking = false
 
     private let paneID: UUID
@@ -45,7 +57,13 @@ final class StatusLineMonitor {
     let hookLogFilePath: String
     let hookLogScriptFilePath: String
     let codexHookRecordFilePath: String
-    let codexHookScriptFilePath: String
+    let codexHookQueueFilePath: String
+    let codexHookDiagnosticFilePath: String
+    private(set) var codexHookScriptFilePath: String
+    let codexLaunchGeneration: String
+    let codexAdapter: CodexCompatibilityAdapter?
+    private let codexInitialSessionID: String?
+    private var hasConfirmedCodexInitialSession = false
     private let workingDirectory: String?
     let harness: Harness
     private let isClaude: Bool
@@ -62,8 +80,15 @@ final class StatusLineMonitor {
     private var attentionRetryAttempt = 0
     private var attentionWatcherGeneration = 0
     private var lastAttentionPayloadFingerprint: Int?
+    private var retainsCodexHookScript = false
     private var pendingStopWork: DispatchWorkItem?
+    private var pendingCodexCompletionWork: DispatchWorkItem?
+    private var codexCompletionGeneration = 0
+    private var codexBoundSessionID: String?
+    private var codexForegroundTurnID: String?
+    private var codexHasActiveForegroundTurn = false
     private var hasConfirmedBackgroundWork = false
+    private var codexLifecycleGeneration = 0
     var stopNotificationGracePeriod: TimeInterval = 1.8
     private var agnosticProvider: (any StatusLineDataProvider)?
     private var gitDiffTimer: Timer?
@@ -80,9 +105,15 @@ final class StatusLineMonitor {
 
     var onClaudeHookAttention: ((PaneAttentionEvent) -> Void)?
     var onClaudeStopped: (() -> Void)?
+    var onCodexStopped: (() -> Void)?
+    var onCodexAttention: ((PaneAttentionEvent) -> Void)?
+    var onCodexAttentionResolved: ((NotificationKind) -> Void)?
+    var onCodexAttentionCleared: (() -> Void)?
+    var onCodexQuestionCleared: (() -> Void)?
     var onOpencodeStopped: (() -> Void)?
     var onOpencodeActivityChanged: ((Bool) -> Void)?
     var onOpencodeSessionBound: ((String) -> Void)?
+    var onCodexSessionBound: ((String, String?) -> Void)?
     var onOpencodePermissionReplied: (() -> Void)?
     var onOpencodePortRaceLost: (() -> Void)?
     var onPRMerged: ((_ prNumber: Int, _ prTitle: String) -> Void)?
@@ -103,10 +134,16 @@ final class StatusLineMonitor {
         opencodePort: Int? = nil,
         opencodeSessionID: String? = nil,
         opencodeEnvironment: [String: String] = [:],
+        codexAdapter: CodexCompatibilityAdapter? = nil,
+        codexShell: String? = nil,
+        codexEnvironment: [String: String] = [:],
+        codexInitialSessionID: String? = nil,
+        codexInitialTranscriptPath: String? = nil,
         customFieldEnvironment: [String: String] = [:]
     ) {
         self.paneID = paneID
-        self.paneName = paneName.isEmpty ? String(paneID.uuidString.prefix(8)) : paneName
+        let resolvedPaneName = paneName.isEmpty ? String(paneID.uuidString.prefix(8)) : paneName
+        self.paneName = resolvedPaneName
         self.tabID = tabID
         self.tabName = tabName
         self.workingDirectory = workingDirectory
@@ -123,10 +160,22 @@ final class StatusLineMonitor {
             NSTemporaryDirectory() + "agent-session-manager-claude-hooklog-script-\(paneID.uuidString).py"
         codexHookRecordFilePath =
             NSTemporaryDirectory() + "agent-session-manager-codex-session-\(paneID.uuidString).json"
-        codexHookScriptFilePath =
-            NSTemporaryDirectory() + "agent-session-manager-codex-hook-\(paneID.uuidString).py"
-        let resolvedPaneName = self.paneName
-        let resolvedCodexHookRecordPath = codexHookRecordFilePath
+        let resolvedCodexLaunchGeneration = UUID().uuidString
+        codexLaunchGeneration = resolvedCodexLaunchGeneration
+        self.codexAdapter = codexAdapter
+        self.codexInitialSessionID = codexInitialSessionID
+        let resolvedCodexHookQueueFilePath =
+            NSTemporaryDirectory()
+            + "agent-session-manager-codex-hooks-\(paneID.uuidString)-\(resolvedCodexLaunchGeneration).jsonl"
+        codexHookQueueFilePath = resolvedCodexHookQueueFilePath
+        let resolvedCodexHookDiagnosticFilePath =
+            NSTemporaryDirectory()
+            + "agent-session-manager-codex-hook-diagnostic-\(paneID.uuidString)-\(resolvedCodexLaunchGeneration).txt"
+        codexHookDiagnosticFilePath = resolvedCodexHookDiagnosticFilePath
+        let resolvedCodexHookScriptFilePath =
+            NSTemporaryDirectory()
+            + "agent-session-manager-codex-hook-\(paneID.uuidString)-\(resolvedCodexLaunchGeneration).py"
+        codexHookScriptFilePath = resolvedCodexHookScriptFilePath
         providerContext = workingDirectory.map { cwd in
             StatusProviderContext(
                 paneID: paneID,
@@ -137,11 +186,18 @@ final class StatusLineMonitor {
                 harness: harness,
                 processStartTime: processStartTime,
                 launchArgs: [],
-                environment: [:],
+                environment: codexEnvironment,
+                codexShell: codexShell,
                 detectedHarnessVersion: nil,
-                codexHookRecordPath: harness == .codex ? resolvedCodexHookRecordPath : nil,
+                codexHookRecordPath: nil,
                 opencodePort: opencodePort,
                 opencodeSessionID: opencodeSessionID,
+                codexHookQueuePath: harness == .codex ? resolvedCodexHookQueueFilePath : nil,
+                codexHookDiagnosticPath: harness == .codex ? resolvedCodexHookDiagnosticFilePath : nil,
+                codexLaunchGeneration: harness == .codex ? resolvedCodexLaunchGeneration : nil,
+                codexAdapter: harness == .codex ? codexAdapter : nil,
+                codexInitialSessionID: harness == .codex ? codexInitialSessionID : nil,
+                codexInitialTranscriptPath: harness == .codex ? codexInitialTranscriptPath : nil,
                 opencodeEnvironment: opencodeEnvironment
             )
         }
@@ -153,7 +209,55 @@ final class StatusLineMonitor {
                     workingDirectory: cwd, paneID: paneID, processStartTime: processStartTime,
                     paneName: self.paneName, tabID: tabID, tabName: tabName)
             } else if harness == .codex, let providerContext {
-                provider = CodexStatusProvider(context: providerContext)
+                let codexProvider = CodexStatusProvider(context: providerContext)
+                let lifecycleGeneration = codexLifecycleGeneration
+                if codexProvider.supportsForegroundLifecycle {
+                    codexProvider.onActivityChanged = { [weak self] isWorking in
+                        guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
+                        self.codexLifecycle = isWorking ? .working : .stopped
+                    }
+                    codexProvider.onCodexEvent = { [weak self] event, isCatchUp in
+                        guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
+                        self.applyCodexEvent(event, isCatchUp: isCatchUp)
+                    }
+                    codexProvider.onHookRecords = { [weak self] records in
+                        guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
+                        self.handleCodexHookRecords(records)
+                    }
+                    codexProvider.onHookFailure = { [weak self] in
+                        guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
+                        self.cancelCodexCompletion(reason: "hook_failure")
+                    }
+                    codexProvider.onAttention = { [weak self] event in
+                        guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
+                        self.handleCodexAttention(event)
+                    }
+                    codexProvider.onAttentionResolved = { [weak self] kind in
+                        guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
+                        self.resolveCodexAttention(kind: kind)
+                    }
+                }
+                codexProvider.onSessionBound = { [weak self] id, transcriptPath in
+                    guard let self, self.codexLifecycleGeneration == lifecycleGeneration else { return }
+                    if let requestedSessionID = self.codexInitialSessionID {
+                        if requestedSessionID == id {
+                            self.hasConfirmedCodexInitialSession = true
+                        } else if !self.hasConfirmedCodexInitialSession {
+                            self.onCodexSessionBound?(id, transcriptPath)
+                            return
+                        }
+                    }
+                    self.bindCodexSession(id)
+                    TracingService.shared.record(
+                        "statusline.codex.session.bound.received",
+                        attributes: [
+                            "pane.name": self.paneName, "pane.id": self.paneID.uuidString,
+                            "tab.id": self.tabID.uuidString, "tab.name": self.tabName,
+                            "session_id_prefix": String(id.prefix(12)),
+                        ])
+                    self.onCodexSessionBound?(id, transcriptPath)
+                }
+                provider = codexProvider
             } else if harness == .opencode, let providerContext {
                 let opencodeProvider = OpenCodeStatusProvider(context: providerContext)
                 opencodeProvider.onActivityChanged = { [weak self] isWorking in
@@ -234,6 +338,55 @@ final class StatusLineMonitor {
     }
 
     func start() {
+        if let cwd = workingDirectory {
+            Task { [weak self] in
+                guard let self else { return }
+                if let stats = await GitDiffStats.compute(in: cwd) {
+                    await MainActor.run {
+                        self.cachedGitStats = stats
+                        if var data = self.currentData {
+                            self.applyI3Enforcement(to: &data)
+                            self.currentData = data
+                        }
+                    }
+                }
+            }
+            Task { [weak self] in
+                guard let self else { return }
+                let identity = await Self.fetchRepoIdentity(workingDirectory: cwd)
+                await MainActor.run {
+                    self.cachedRepoIdentity = identity
+                    if self.currentData == nil { self.currentData = .empty() }
+                    self.currentData?.repo = identity
+                    TracingService.shared.record(
+                        "statusline.repository.identity",
+                        attributes: [
+                            "pane.name": self.paneName,
+                            "pane.id": self.paneID.uuidString,
+                            "tab.id": self.tabID.uuidString,
+                            "tab.name": self.tabName,
+                            "harness": self.harness.rawValue,
+                            "result": identity == nil ? "unavailable" : "resolved",
+                        ])
+                }
+            }
+            gitDiffTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                Task { [weak self] in
+                    guard let self else { return }
+                    if let stats = await GitDiffStats.compute(in: cwd) {
+                        await MainActor.run {
+                            self.cachedGitStats = stats
+                            if var data = self.currentData {
+                                self.applyI3Enforcement(to: &data)
+                                self.currentData = data
+                            }
+                        }
+                    }
+                    await MainActor.run { self.checkPayloadFreshness() }
+                }
+            }
+        }
         if isClaude {
             writeSettingsFile()
             TracingService.shared.record(
@@ -286,26 +439,6 @@ final class StatusLineMonitor {
             }
             hookLogWatcher?.start()
 
-            if let cwd = workingDirectory {
-                Task { [weak self] in
-                    guard let self else { return }
-                    if let stats = await GitDiffStats.compute(in: cwd) {
-                        await MainActor.run { self.cachedGitStats = stats }
-                    }
-                }
-                startRepoIdentityFetch(cwd: cwd)
-                gitDiffTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
-                    guard let self else { return }
-                    Task { [weak self] in
-                        guard let self else { return }
-                        if let stats = await GitDiffStats.compute(in: cwd) {
-                            await MainActor.run { self.cachedGitStats = stats }
-                        }
-                        await MainActor.run { self.checkPayloadFreshness() }
-                    }
-                }
-            }
-
             stopAttentionWatcher()
             FileManager.default.createFile(
                 atPath: attentionSignalFilePath, contents: nil, attributes: [.posixPermissions: 0o600])
@@ -331,16 +464,21 @@ final class StatusLineMonitor {
                 isActive: true,
                 paneName: paneName,
                 tabID: tabID,
-                tabName: tabName
-            ) { [weak self] pr in
-                guard let self else { return }
-                if self.currentData == nil {
-                    self.currentData = .empty(pr: pr)
-                } else {
-                    self.currentData?.pr = pr
-                }
-                self.checkForPRResolutionTransition(pr)
-            }
+                tabName: tabName,
+                onPRData: { [weak self] pr in
+                    guard let self else { return }
+                    if self.currentData == nil {
+                        self.currentData = .empty(pr: pr)
+                    } else {
+                        self.currentData?.pr = pr
+                    }
+                    self.checkForPRResolutionTransition(pr)
+                },
+                onPRStatus: { [weak self] status in
+                    guard let self else { return }
+                    if self.currentData == nil { self.currentData = .empty() }
+                    self.currentData?.prTrackingState = status
+                })
         }
     }
 
@@ -369,7 +507,15 @@ final class StatusLineMonitor {
         hasConfirmedBackgroundWork = false
         pendingStopWork?.cancel()
         pendingStopWork = nil
+        cancelCodexCompletion(reason: "teardown")
+        if isCodexPermissionAttentionActive || !activeCodexQuestionCallIDs.isEmpty {
+            traceCodexActivity("attention_cleared", reason: "teardown")
+            onCodexAttentionResolved?(.codexPermissionRequest)
+            onCodexAttentionResolved?(.codexQuestion)
+            onCodexAttentionCleared?()
+        }
         agnosticProvider?.stop()
+        codexLifecycleGeneration += 1
         if !isClaude {
             TracingService.shared.record(
                 "statusline.provider.stopped",
@@ -377,9 +523,23 @@ final class StatusLineMonitor {
         }
         agnosticProvider = nil
         cursorLifecycle = .unknown
+        codexLifecycle = .unknown
+        activeCodexTurnID = nil
+        canceledCodexTurnIDs.removeAll()
+        pendingCodexCompletionTurnID = nil
+        activeCodexQuestionCallIDs.removeAll()
+        isCodexPermissionAttentionActive = false
+        codexBoundSessionID = nil
+        codexForegroundTurnID = nil
+        codexHasActiveForegroundTurn = false
         PRTrackingCoordinator.shared.unsubscribe(paneID: paneID)
         lastKnownPRState = nil
         onOpencodeStopped = nil
+        onCodexStopped = nil
+        onCodexAttention = nil
+        onCodexAttentionResolved = nil
+        onCodexAttentionCleared = nil
+        onCodexQuestionCleared = nil
         onOpencodePermissionReplied = nil
         hasFiredResolutionNotification = false
         try? FileManager.default.removeItem(atPath: filePath)
@@ -388,7 +548,18 @@ final class StatusLineMonitor {
         try? FileManager.default.removeItem(atPath: hookLogFilePath)
         try? FileManager.default.removeItem(atPath: hookLogScriptFilePath)
         try? FileManager.default.removeItem(atPath: codexHookRecordFilePath)
-        try? FileManager.default.removeItem(atPath: codexHookScriptFilePath)
+        if retainsCodexHookScript {
+            let referenceCount = Self.codexHookScriptReferenceCounts[codexHookScriptFilePath, default: 1] - 1
+            if referenceCount == 0 {
+                try? FileManager.default.removeItem(atPath: codexHookScriptFilePath)
+                Self.codexHookScriptReferenceCounts.removeValue(forKey: codexHookScriptFilePath)
+            } else {
+                Self.codexHookScriptReferenceCounts[codexHookScriptFilePath] = referenceCount
+            }
+            retainsCodexHookScript = false
+        }
+        try? FileManager.default.removeItem(atPath: codexHookQueueFilePath)
+        try? FileManager.default.removeItem(atPath: codexHookDiagnosticFilePath)
     }
 
     func configureCursorAttentionWatcher(enabled: Bool) {
@@ -618,10 +789,27 @@ final class StatusLineMonitor {
         }
         merged.repo = cachedRepoIdentity
         merged.customFields = cachedCustomFieldValues
+        applyI1Enforcement(to: &merged)
+        applyI3Enforcement(to: &merged)
         currentData = merged
+        var attributes = providerTraceAttributes(providerName: providerName)
+        attributes["has_model"] = merged.model == nil ? "false" : "true"
+        attributes["has_context"] = merged.contextWindow?.usedPercentage == nil ? "false" : "true"
+        attributes["has_context_size"] = merged.contextWindow?.contextWindowSize == nil ? "false" : "true"
+        attributes["has_input_tokens"] = merged.contextWindow?.totalInputTokens == nil ? "false" : "true"
+        attributes["has_output_tokens"] = merged.contextWindow?.totalOutputTokens == nil ? "false" : "true"
+        attributes["has_tokens"] =
+            merged.contextWindow?.totalInputTokens == nil && merged.contextWindow?.totalOutputTokens == nil
+            ? "false" : "true"
+        attributes["has_rate_limits"] = merged.rateLimits == nil ? "false" : "true"
+        attributes["has_five_hour_rate_limit"] = merged.rateLimits?.fiveHour == nil ? "false" : "true"
+        attributes["has_seven_day_rate_limit"] = merged.rateLimits?.sevenDay == nil ? "false" : "true"
+        attributes["has_worktree"] = merged.worktree == nil ? "false" : "true"
+        attributes["has_repo"] = merged.repo == nil ? "false" : "true"
+        attributes["has_version"] = merged.version == nil ? "false" : "true"
         TracingService.shared.record(
             "statusline.provider.update_applied",
-            attributes: providerTraceAttributes(providerName: providerName))
+            attributes: attributes)
     }
 
     private func providerTraceAttributes(providerName: String) -> [String: String] {
@@ -801,6 +989,280 @@ final class StatusLineMonitor {
         }
         pendingStopWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + stopNotificationGracePeriod, execute: work)
+    }
+
+    func handleCodexAttention(_ event: PaneAttentionEvent) {
+        if event.source == .codexPermissionRequest {
+            isCodexPermissionAttentionActive = true
+        }
+        onCodexAttention?(event)
+    }
+
+    func resolveCodexAttention(kind: NotificationKind) {
+        if kind == .codexPermissionRequest {
+            isCodexPermissionAttentionActive = false
+        }
+        if kind == .codexQuestion {
+            onCodexQuestionCleared?()
+        }
+        onCodexAttentionResolved?(kind)
+    }
+
+    func acknowledgeCodexAttention() {
+        isCodexPermissionAttentionActive = false
+        activeCodexQuestionCallIDs.removeAll()
+    }
+
+    func acknowledgeCodexAttention(kind: NotificationKind) {
+        if kind == .codexPermissionRequest {
+            isCodexPermissionAttentionActive = false
+        } else if kind == .codexQuestion {
+            activeCodexQuestionCallIDs.removeAll()
+        }
+    }
+
+    func applyCodexEvent(_ event: CodexProviderEvent, isCatchUp: Bool = false) {
+        switch event {
+        case .foregroundTurnStarted(let turnID, let isForeground):
+            guard isForeground else { return }
+            if pendingCodexCompletionWork != nil {
+                traceCodexActivity("completion_canceled", reason: "new_foreground_turn")
+            }
+            cancelCodexCompletion(reason: "new_foreground_turn")
+            pendingCodexCompletionTurnID = nil
+            if codexLifecycle != .working {
+                codexLifecycle = .working
+                traceCodexActivity("working", reason: "turn_started")
+            }
+            activeCodexTurnID = turnID
+            canceledCodexTurnIDs.remove(turnID)
+            let hadPermissionAttention = isCodexPermissionAttentionActive
+            if hadPermissionAttention {
+                traceCodexActivity("attention_cleared", reason: "next_foreground_turn")
+            }
+            isCodexPermissionAttentionActive = false
+            onCodexAttentionResolved?(.codexPermissionRequest)
+            if hadPermissionAttention {
+                onCodexAttentionCleared?()
+            }
+        case .foregroundTurnCompleted(let turnID, let isForeground, let succeeded):
+            guard isForeground, activeCodexTurnID == nil || activeCodexTurnID == turnID else { return }
+            codexLifecycle = .stopped
+            if !succeeded {
+                if activeCodexTurnID == turnID { activeCodexTurnID = nil }
+                if codexForegroundTurnID == turnID { codexHasActiveForegroundTurn = false }
+                rememberCanceledCodexTurn(turnID)
+                if pendingCodexCompletionTurnID == turnID
+                    || (pendingCodexCompletionWork != nil && codexForegroundTurnID == turnID)
+                {
+                    cancelCodexCompletion(reason: "turn_failed")
+                    pendingCodexCompletionTurnID = nil
+                    traceCodexActivity("completion_canceled", reason: "turn_failed")
+                }
+            }
+            traceCodexActivity("stopped", reason: succeeded ? "turn_completed" : "turn_failed")
+        case .foregroundCompletionCandidate(let turnID):
+            guard !canceledCodexTurnIDs.contains(turnID), activeCodexTurnID == turnID else { return }
+            codexLifecycle = .stopped
+            activeCodexTurnID = nil
+            if pendingCodexCompletionWork != nil {
+                pendingCodexCompletionTurnID = nil
+                return
+            }
+            cancelCodexCompletion(reason: "superseded_completion")
+            pendingCodexCompletionTurnID = nil
+            guard !isCatchUp else { return }
+            pendingCodexCompletionTurnID = turnID
+            if stopNotificationGracePeriod <= 0 {
+                pendingCodexCompletionTurnID = nil
+                traceCodexActivity("completion_ready", reason: "grace_elapsed")
+                onCodexStopped?()
+            } else {
+                codexCompletionGeneration += 1
+                let generation = codexCompletionGeneration
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self,
+                        self.codexCompletionGeneration == generation,
+                        self.codexLifecycle == .stopped,
+                        self.pendingCodexCompletionTurnID == turnID,
+                        !self.canceledCodexTurnIDs.contains(turnID)
+                    else { return }
+                    self.pendingCodexCompletionWork = nil
+                    self.pendingCodexCompletionTurnID = nil
+                    self.recordCodexCompletion(phase: "delivered", reason: "foreground_stop")
+                    self.traceCodexActivity("completion_ready", reason: "grace_elapsed")
+                    self.onCodexStopped?()
+                }
+                pendingCodexCompletionWork = work
+                recordCodexCompletion(phase: "scheduled", reason: "foreground_stop")
+                traceCodexActivity("completion_scheduled", reason: "grace_period")
+                DispatchQueue.main.asyncAfter(deadline: .now() + stopNotificationGracePeriod, execute: work)
+            }
+        case .foregroundTurnInterrupted(let turnID, let isForeground):
+            guard isForeground,
+                turnID == nil || activeCodexTurnID == turnID || pendingCodexCompletionTurnID == turnID
+            else { return }
+            cancelCodexCompletion(reason: turnID == nil ? "session_rebound" : "interrupted")
+            if let turnID { rememberCanceledCodexTurn(turnID) }
+            pendingCodexCompletionTurnID = nil
+            codexLifecycle = .stopped
+            activeCodexTurnID = nil
+            traceCodexActivity("stopped", reason: turnID == nil ? "session_rebound" : "turn_interrupted")
+            traceCodexActivity("completion_canceled", reason: turnID == nil ? "session_rebound" : "turn_interrupted")
+            if turnID == nil {
+                if isCodexPermissionAttentionActive || !activeCodexQuestionCallIDs.isEmpty {
+                    traceCodexActivity("attention_cleared", reason: "session_rebound")
+                }
+                activeCodexQuestionCallIDs.removeAll()
+                canceledCodexTurnIDs.removeAll()
+                isCodexPermissionAttentionActive = false
+                onCodexAttentionResolved?(.codexPermissionRequest)
+                onCodexAttentionResolved?(.codexQuestion)
+                onCodexAttentionCleared?()
+            }
+        case .permissionRequested(let turnID):
+            guard activeCodexTurnID == nil || turnID == nil || activeCodexTurnID == turnID,
+                !isCodexPermissionAttentionActive
+            else { return }
+            isCodexPermissionAttentionActive = true
+            onCodexAttention?(PaneAttentionEvent.codexPermissionRequest)
+            traceCodexActivity("attention_requested", reason: "permission")
+        case .questionRequested(let callID):
+            guard !activeCodexQuestionCallIDs.contains(callID) else { return }
+            activeCodexQuestionCallIDs.insert(callID)
+            onCodexAttention?(PaneAttentionEvent.codexQuestion)
+            traceCodexActivity("attention_requested", reason: "question")
+        case .questionResolved(let callID):
+            guard activeCodexQuestionCallIDs.remove(callID) != nil else { return }
+            if activeCodexQuestionCallIDs.isEmpty {
+                onCodexQuestionCleared?()
+                onCodexAttentionResolved?(.codexQuestion)
+            }
+            traceCodexActivity("attention_cleared", reason: "matching_question_output")
+        }
+    }
+
+    func codexProcessExited() {
+        cancelCodexCompletion(reason: "process_exit")
+        activeCodexTurnID = nil
+        pendingCodexCompletionTurnID = nil
+        canceledCodexTurnIDs.removeAll()
+        if isCodexPermissionAttentionActive || !activeCodexQuestionCallIDs.isEmpty {
+            traceCodexActivity("attention_cleared", reason: "process_exit")
+        }
+        activeCodexQuestionCallIDs.removeAll()
+        isCodexPermissionAttentionActive = false
+        onCodexAttentionResolved?(.codexPermissionRequest)
+        onCodexAttentionResolved?(.codexQuestion)
+        onCodexAttentionCleared?()
+        codexLifecycle = .unknown
+        traceCodexActivity("stopped", reason: "process_exit")
+        traceCodexActivity("completion_canceled", reason: "process_exit")
+    }
+
+    private func rememberCanceledCodexTurn(_ turnID: String) {
+        canceledCodexTurnIDs.insert(turnID)
+        if canceledCodexTurnIDs.count > 64, let oldest = canceledCodexTurnIDs.first {
+            canceledCodexTurnIDs.remove(oldest)
+        }
+    }
+
+    private func traceCodexActivity(_ state: String, reason: String) {
+        TracingService.shared.record(
+            "statusline.codex.activity.changed",
+            attributes: [
+                "pane.name": paneName,
+                "pane.id": paneID.uuidString,
+                "tab.id": tabID.uuidString,
+                "tab.name": tabName,
+                "state": state,
+                "reason": reason,
+            ])
+    }
+
+    func bindCodexSession(_ sessionID: String) {
+        if let previousID = codexBoundSessionID, previousID != sessionID {
+            cancelCodexCompletion(reason: "conversation_changed")
+            codexForegroundTurnID = nil
+            codexHasActiveForegroundTurn = false
+            codexLifecycle = .unknown
+            if isCodexPermissionAttentionActive || !activeCodexQuestionCallIDs.isEmpty {
+                traceCodexActivity("attention_cleared", reason: "conversation_changed")
+            }
+            isCodexPermissionAttentionActive = false
+            activeCodexQuestionCallIDs.removeAll()
+            onCodexAttentionResolved?(.codexPermissionRequest)
+            onCodexAttentionResolved?(.codexQuestion)
+            onCodexAttentionCleared?()
+        }
+        codexBoundSessionID = sessionID
+    }
+
+    func handleCodexHookRecords(_ records: [CodexHookQueueRecord]) {
+        for record in records {
+            guard !record.isDelegated else { continue }
+            switch record.hookEventName {
+            case "UserPromptSubmit":
+                if let sessionID = record.sessionID, codexBoundSessionID != sessionID {
+                    bindCodexSession(sessionID)
+                }
+                onCodexAttentionResolved?(.codexPermissionRequest)
+                cancelCodexCompletion(reason: "new_turn")
+                codexForegroundTurnID = record.turnID
+                codexHasActiveForegroundTurn = true
+            case "Interrupt":
+                guard record.sessionID == codexBoundSessionID,
+                    record.turnID == codexForegroundTurnID
+                else { continue }
+                cancelCodexCompletion(reason: "interrupted")
+                codexForegroundTurnID = nil
+                codexHasActiveForegroundTurn = false
+            case "Stop":
+                guard record.sessionID == codexBoundSessionID,
+                    codexHasActiveForegroundTurn,
+                    record.turnID == codexForegroundTurnID,
+                    !canceledCodexTurnIDs.contains(record.turnID ?? "")
+                else { continue }
+                guard pendingCodexCompletionWork == nil else { continue }
+                codexCompletionGeneration += 1
+                let generation = codexCompletionGeneration
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self, self.codexCompletionGeneration == generation,
+                        self.pendingCodexCompletionWork != nil
+                    else { return }
+                    self.pendingCodexCompletionWork = nil
+                    self.recordCodexCompletion(phase: "delivered", reason: "foreground_stop")
+                    self.onCodexStopped?()
+                }
+                pendingCodexCompletionWork = work
+                recordCodexCompletion(phase: "scheduled", reason: "foreground_stop")
+                DispatchQueue.main.asyncAfter(deadline: .now() + stopNotificationGracePeriod, execute: work)
+                codexHasActiveForegroundTurn = false
+            default:
+                break
+            }
+        }
+    }
+
+    private func cancelCodexCompletion(reason: String) {
+        guard let work = pendingCodexCompletionWork else { return }
+        work.cancel()
+        pendingCodexCompletionWork = nil
+        codexCompletionGeneration += 1
+        recordCodexCompletion(phase: "canceled", reason: reason)
+    }
+
+    private func recordCodexCompletion(phase: String, reason: String) {
+        TracingService.shared.record(
+            "statusline.codex.completion",
+            attributes: [
+                "pane.id": paneID.uuidString,
+                "pane.name": paneName,
+                "tab.id": tabID.uuidString,
+                "tab.name": tabName,
+                "phase": phase,
+                "reason": reason,
+            ])
     }
 
     private func stopAttentionWatcher() {
@@ -1116,15 +1578,6 @@ extension StatusLineMonitor {
         cachedGitStats = stats
     }
 
-    private func startRepoIdentityFetch(cwd: String) {
-        Task { [weak self] in
-            guard let self else { return }
-            if let identity = await Self.fetchRepoIdentity(workingDirectory: cwd) {
-                await MainActor.run { self.cachedRepoIdentity = identity }
-            }
-        }
-    }
-
     static func fetchRepoIdentity(workingDirectory: String) async -> StatusLineData.Repo? {
         await withCheckedContinuation { continuation in
             let task = Process()
@@ -1226,36 +1679,144 @@ extension StatusLineMonitor {
 }
 
 extension StatusLineMonitor {
-    func writeCodexHookScript() {
+    func writeCodexHookScript() throws {
         let script = """
             #!/usr/bin/env python3
+            import fcntl
             import json
             import os
+            import re
             import sys
             import time
 
-            payload = json.load(sys.stdin)
+            def report_diagnostic(kind, event_name, result=None):
+                try:
+                    path = os.environ.get("AGENT_SESSION_MANAGER_CODEX_HOOK_DIAGNOSTIC_PATH")
+                    if not path:
+                        return
+                    allowed_events = {"SessionStart", "UserPromptSubmit", "Stop", "PermissionRequest", "PostToolUse", "Interrupt"}
+                    event = event_name if event_name in allowed_events else "unknown"
+                    allowed_results = {"started", "queue_lock_timeout", "hook_write_failed"}
+                    outcome = result if result in allowed_results else "started"
+                    encoded = f"{kind}|{event}|{outcome}\\n".encode("ascii")
+                    with open(path, "a+b", buffering=0) as handle:
+                        lock_deadline = time.monotonic() + 0.4
+                        while True:
+                            try:
+                                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                break
+                            except BlockingIOError:
+                                if time.monotonic() >= lock_deadline:
+                                    return
+                                time.sleep(0.01)
+                        handle.seek(0, os.SEEK_END)
+                        if handle.tell() + len(encoded) > 8192:
+                            start = max(0, handle.tell() - 4096)
+                            handle.seek(start)
+                            existing = handle.read(4096)
+                            existing = existing[existing.find(b"\\n") + 1:] if b"\\n" in existing else b""
+                            handle.seek(0)
+                            handle.truncate()
+                            handle.write(existing)
+                        handle.seek(0, os.SEEK_END)
+                        handle.write(encoded)
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except BaseException:
+                    pass
+
+            hook_event_name = "unknown"
+
+            def report_failure(code):
+                report_diagnostic("failed", hook_event_name, code)
+
+            def silent_exception(error_type, error_value, error_traceback):
+                report_failure("hook_write_failed")
+
+            sys.excepthook = silent_exception
+
+            def bounded(value, limit=128):
+                if not isinstance(value, str):
+                    return None
+                return value.encode("utf-8", errors="replace")[:limit].decode("utf-8", errors="ignore")
+
+            raw_payload = sys.stdin.buffer.read()
+            event_match = re.search(
+                rb'"hook_event_name"\\s*:\\s*"(SessionStart|UserPromptSubmit|Stop|PermissionRequest|PostToolUse|Interrupt)"',
+                raw_payload[:4096])
+            hook_event_name = event_match.group(1).decode("ascii") if event_match else "unknown"
+            report_diagnostic("invoked", hook_event_name, "started")
+            payload = json.loads(raw_payload)
             record = {
                 "pane_id": os.environ.get("AGENT_SESSION_MANAGER_PANE_ID", ""),
                 "tab_id": os.environ.get("AGENT_SESSION_MANAGER_TAB_ID", ""),
-                "session_id": payload.get("session_id", ""),
-                "cwd": payload.get("cwd", ""),
-                "model": payload.get("model"),
-                "transcript_path": payload.get("transcript_path"),
-                "hook_event_name": payload.get("hook_event_name", ""),
-                "timestamp": time.time()
+                "launch_generation": os.environ.get("AGENT_SESSION_MANAGER_CODEX_LAUNCH_GENERATION", ""),
+                "hook_event_name": hook_event_name,
+                "session_id": bounded(payload.get("session_id")),
+                "turn_id": bounded(payload.get("turn_id")),
+                "request_id": bounded(payload.get("request_id")),
+                "timestamp": time.time(),
+                "source": "subagent" if payload.get("agent_id") else bounded(payload.get("source"), 64) or "hook",
+                "model": bounded(payload.get("model"), 128),
+                "transcript_path": bounded(payload.get("transcript_path"), 1024),
+                "result": "interrupted" if hook_event_name == "Interrupt" else None
             }
-            path = os.environ["AGENT_SESSION_MANAGER_CODEX_HOOK_RECORD_PATH"]
-            tmp_path = path + ".tmp"
-            with open(tmp_path, "w", encoding="utf-8") as handle:
-                json.dump(record, handle, separators=(",", ":"))
-            os.replace(tmp_path, path)
+            encoded = json.dumps(record, separators=(",", ":")).encode("utf-8") + b"\\n"
+            path = os.environ["AGENT_SESSION_MANAGER_CODEX_HOOK_QUEUE_PATH"]
+            with open(path, "a+b", buffering=0) as handle:
+                lock_deadline = time.monotonic() + 0.4
+                while True:
+                    try:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= lock_deadline:
+                            report_failure("queue_lock_timeout")
+                            sys.exit(0)
+                        time.sleep(0.01)
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() + len(encoded) > 1048576:
+                    start = max(0, handle.tell() - 917504)
+                    handle.seek(start)
+                    existing = handle.read(917504)
+                    if start > 0:
+                        existing = existing[existing.find(b"\\n") + 1:] if b"\\n" in existing else b""
+                    handle.seek(0)
+                    handle.truncate()
+                    handle.write(existing)
+                handle.seek(0, os.SEEK_END)
+                handle.write(encoded)
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
             """
-        try? script.write(to: URL(filePath: codexHookScriptFilePath), atomically: true, encoding: .utf8)
-        try? FileManager.default.setAttributes(
+        let scriptFingerprint = SHA256.hash(data: Data(script.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        codexHookScriptFilePath =
+            NSTemporaryDirectory()
+            + "agent-session-manager-codex-hook-\(paneID.uuidString)-\(scriptFingerprint).py"
+        try script.write(to: URL(filePath: codexHookScriptFilePath), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
             [.posixPermissions: 0o700],
             ofItemAtPath: codexHookScriptFilePath)
-        FileManager.default.createFile(atPath: codexHookRecordFilePath, contents: nil)
+        if !retainsCodexHookScript {
+            Self.codexHookScriptReferenceCounts[codexHookScriptFilePath, default: 0] += 1
+            retainsCodexHookScript = true
+        }
+        if !FileManager.default.createFile(atPath: codexHookQueueFilePath, contents: nil),
+            !FileManager.default.fileExists(atPath: codexHookQueueFilePath)
+        {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: codexHookQueueFilePath)
+        if !FileManager.default.createFile(atPath: codexHookDiagnosticFilePath, contents: nil),
+            !FileManager.default.fileExists(atPath: codexHookDiagnosticFilePath)
+        {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: codexHookDiagnosticFilePath)
     }
 
     func writeHookLogScript() {

@@ -874,6 +874,13 @@ struct PullRequest: Codable, Identifiable {
 }
 
 struct StatusLineData: Codable {
+    enum PRTrackingState: Equatable, Codable {
+        case loading
+        case current
+        case absent
+        case failed(GitHubCLIFailure)
+    }
+
     struct Repo: Codable {
         let host: String
         let owner: String
@@ -993,9 +1000,11 @@ struct StatusLineData: Codable {
     struct RateLimits: Codable {
         let fiveHour: RateLimit?
         let sevenDay: RateLimit?
+        var bucketID: String?
         enum CodingKeys: String, CodingKey {
             case fiveHour = "five_hour"
             case sevenDay = "seven_day"
+            case bucketID = "bucket_id"
         }
     }
 
@@ -1057,6 +1066,7 @@ struct StatusLineData: Codable {
     var version: String?
     var exceeds200kTokens: Bool?
     var pr: PullRequest?
+    var prTrackingState: PRTrackingState?
     var sessionStatus: SessionStatus?
     var repo: Repo?
     var customFields: [String: CustomFieldRenderValue]?
@@ -1078,6 +1088,7 @@ struct StatusLineData: Codable {
         case exceeds200kTokens = "exceeds_200k_tokens"
         case sessionStatus = "session_status"
         case repo
+        case prTrackingState = "pr_tracking_state"
     }
 
     static func empty(pr: PullRequest? = nil) -> StatusLineData {
@@ -1086,7 +1097,7 @@ struct StatusLineData: Codable {
             worktree: nil, workspace: nil, effort: nil, thinking: nil,
             agent: nil, outputStyle: nil, vim: nil,
             sessionName: nil, version: nil, exceeds200kTokens: nil,
-            pr: pr, sessionStatus: nil, repo: nil
+            pr: pr, prTrackingState: nil, sessionStatus: nil, repo: nil
         )
     }
 }

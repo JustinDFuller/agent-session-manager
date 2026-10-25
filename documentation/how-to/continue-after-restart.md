@@ -25,7 +25,11 @@ Keep the Git worktrees used by your panes on disk. If you delete a worktree, the
 3. In the **Cleanup** section, enable or disable **Continue on Restart**.
 4. Quit and reopen Agent Session Manager.
 
-The app restores tabs and panes whose working copies still exist. With **Continue on Restart** enabled, Claude Code and Cursor use `--continue`, while OpenCode uses its available session-resume behavior. Codex panes reopen in their working copies without an added continuation option.
+The app restores tabs and panes whose working copies still exist. With **Continue on Restart** enabled, Claude Code and Cursor use `--continue`, OpenCode uses its available session-resume behavior, and Codex attempts to resume the exact foreground conversation recorded for each pane. Codex panes without a recorded conversation start fresh; if a saved conversation is unavailable, the pane offers **Retry** or **Start New Conversation**.
+
+For a Codex pane, **Refresh and Continue** resumes that pane's exact foreground conversation when it is available. **Refresh with New Settings…** starts a fresh Codex conversation. If continuation is unavailable, choose **Retry** to check again or **Start New Conversation** to continue in a new session.
+
+To restart a Codex pane, open its context menu and choose **Refresh Pane…**. Choose **Refresh and Continue** to resume its current conversation, or **Refresh with New Settings…** to apply updated options and start a fresh conversation. The refresh sheet summarizes this choice as continuing the current Codex conversation or starting fresh with new settings.
 
 ## What you should see
 
@@ -36,6 +40,7 @@ The saved tabs reappear when their project directories can be restored, with eac
 - If a tab or pane is missing, confirm that its project directory and Git worktree still exist.
 - If the project path contains spaces and the tab does not return, update to a build containing the current session-restore fix or recreate the tab.
 - If the pane reopens but the conversation does not resume, check **Settings → Panes → Continue on Restart** and the selected tool's own session behavior.
+- If Codex offers recovery for a saved conversation, confirm that the configured shell's exported `CODEX_HOME` points to the Codex data containing that conversation. The app checks this shell value first, then the launch environment's `CODEX_HOME`, then `~/.codex`.
 - If you intentionally deleted the worktree, create a new pane from the relevant branch or worktree.
 
 ## Related tasks

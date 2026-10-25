@@ -16,7 +16,7 @@ Track build and review progress without leaving the pane where you are working.
 
 ## Before you start
 
-Install the GitHub CLI (`gh`) and authenticate it. The pane must use a Git branch with a GitHub pull request.
+Install the GitHub CLI (`gh`) and authenticate it in the shell selected in **Settings → Panes → Terminal**. The pane must use a Git branch with a GitHub pull request.
 
 ## How to use it
 
@@ -26,7 +26,7 @@ Install the GitHub CLI (`gh`) and authenticate it. The pane must use a Git branc
 2. In **GitHub PR Tracking**, enable **Track pull requests**.
 3. Add **PR** to a status-line row with **Add Item**.
 
-The **PR** item shows the pull-request number and state when a pull request is found for the pane's current branch.
+The **PR** item shows the pull-request number and state when one is found for the pane's current branch. While the first check is running it shows **Checking…**; a successful check with no pull request shows **No PR**.
 
 ### Configure state notifications
 
@@ -40,11 +40,12 @@ At the action prompt, choose **Close Pane** to remove the pane and keep its Git 
 
 ## What you should see
 
-The status line shows the **PR** item when tracking finds a pull request. The pull-request state can also be opened from the status-line item for more information.
+The **PR** item can show **Checking…**, a current pull request, **No PR**, or **Unavailable** when the pane has no supported GitHub remote or branch, or when its latest check failed. A successful query that finds no pull request shows **No PR** without an error; an authentication failure shows an error in the popover and offers **Retry**. Click the item to read the latest check status and the reason for an unavailable result. If a refresh fails after a pull request was found, the prior result remains visible with a **Stale** label.
 
 ## If it does not work
 
-- Confirm that `gh` is installed and authenticated.
+- If the PR item reports an error, click it to read the cause and choose **Retry** after resolving it. An authentication failure is labeled **GitHub authentication required** and explains that the GitHub CLI selected by the configured shell needs authentication. Restore authentication for the account you already use in that shell, then retry. Selecting **Retry** refreshes the shell context and query without restarting the pane; the app does not switch accounts or change credentials.
+- Confirm that `gh` is installed and authenticated in the configured shell. Running `gh auth status` there reports the current CLI authentication without switching accounts.
 - Confirm that **Track pull requests** is enabled and that **PR** is in a status-line row.
 - Confirm that the pane's current branch has a GitHub pull request.
 - If banners do not appear, allow notifications for Agent Session Manager in **System Settings → Notifications**.

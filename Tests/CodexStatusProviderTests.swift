@@ -3,6 +3,13 @@ import XCTest
 
 @testable import AgentSessionManager
 
+private struct ContextPercentageScenario {
+    let window: Int
+    let current: Int
+    let used: Int
+    let remaining: Int
+}
+
 final class CodexStatusProviderTests: XCTestCase {
     private var tempDir: URL!
 
@@ -51,6 +58,329 @@ final class CodexStatusProviderTests: XCTestCase {
         XCTAssertEqual(selected?.gitBranch, "feature")
         XCTAssertEqual(selected?.createdAtMs, 2300)
         XCTAssertEqual(selected?.updatedAtMs, 4000)
+    }
+
+    func testContinuationVerifierRequiresExactAccessibleSessionInEffectiveCodexHome() throws {
+        let codexHome = tempDir.appending(path: "custom-codex-home", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        let rollout = tempDir.appending(path: "exact-session.jsonl")
+        try Data("{}\n".utf8).write(to: rollout)
+        let database = codexHome.appending(path: "state_5.sqlite")
+        try createThreadDatabase(
+            at: database,
+            rolloutPath: rollout.path,
+            model: "gpt-6-luna",
+            createdAtMs: 1)
+        let environment = ["CODEX_HOME": codexHome.path]
+
+        XCTAssertEqual(
+            CodexContinuationVerifier.check(
+                sessionID: "thread-abcdef1234567890",
+                transcriptPath: rollout.path,
+                shell: "/bin/sh",
+                workingDirectory: tempDir.path,
+                environment: environment),
+            .available)
+        XCTAssertEqual(
+            CodexContinuationVerifier.check(
+                sessionID: "different-session",
+                transcriptPath: rollout.path,
+                shell: "/bin/sh",
+                workingDirectory: tempDir.path,
+                environment: environment),
+            .missing)
+        XCTAssertEqual(
+            CodexContinuationVerifier.check(
+                sessionID: "thread-abcdef1234567890",
+                transcriptPath: "/tmp/stale-transcript.jsonl",
+                shell: "/bin/sh",
+                workingDirectory: tempDir.path,
+                environment: environment),
+            .missing)
+        XCTAssertEqual(
+            CodexContinuationVerifier.check(
+                sessionID: "thread-abcdef1234567890",
+                transcriptPath: rollout.path,
+                shell: "/bin/sh",
+                workingDirectory: "/tmp/another-checkout",
+                environment: environment),
+            .missing)
+    }
+
+    func testCodexHomeResolverUsesExplicitNondefaultHome() {
+        let customHome = tempDir.appending(path: "custom-codex-home", directoryHint: .isDirectory)
+        let resolved = CodexHomeResolver.resolve(
+            shell: "/bin/sh", environment: ["CODEX_HOME": customHome.path])
+
+        XCTAssertEqual(resolved.path, customHome.path)
+        XCTAssertEqual(
+            CodexHomeResolver.databaseURL(shell: "/bin/sh", environment: ["CODEX_HOME": customHome.path]).path,
+            customHome.appending(path: "state_5.sqlite").path)
+    }
+
+    func testCodexHomeResolverUsesInteractiveShellExport() throws {
+        let shell = "/bin/zsh"
+        guard FileManager.default.isExecutableFile(atPath: shell) else {
+            throw XCTSkip("zsh is unavailable")
+        }
+        let shellDirectory = tempDir.appending(path: "shell", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: shellDirectory, withIntermediateDirectories: true)
+        let customHome = tempDir.appending(path: "shell-codex-home", directoryHint: .isDirectory)
+        try "export CODEX_HOME='\(customHome.path)'\n".write(
+            to: shellDirectory.appending(path: ".zshenv"), atomically: true, encoding: .utf8)
+
+        let resolved = CodexHomeResolver.resolve(
+            shell: shell, environment: ["ZDOTDIR": shellDirectory.path])
+
+        XCTAssertEqual(resolved.path, customHome.path)
+    }
+
+    func testStateStoreUsesConfiguredShellAndEffectiveLaunchEnvironment() throws {
+        let shellDirectory = tempDir.appending(path: "configured-shell", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: shellDirectory, withIntermediateDirectories: true)
+        let customHome = tempDir.appending(path: "configured-shell-codex-home", directoryHint: .isDirectory)
+        try "export CODEX_HOME='\(customHome.path)'\n".write(
+            to: shellDirectory.appending(path: ".zshenv"), atomically: true, encoding: .utf8)
+        let context = makeContext(
+            processStartTime: Date(),
+            codexShell: "/bin/zsh",
+            environment: ["ZDOTDIR": shellDirectory.path])
+
+        XCTAssertEqual(
+            CodexStateStore(context: context).databaseURL.path,
+            customHome.appending(path: "state_5.sqlite").path)
+    }
+
+    func testCodexHomeResolverFallsBackWhenHomeAndStateDatabaseAreMissing() {
+        let customHome = tempDir.appending(path: "missing-codex-home", directoryHint: .isDirectory)
+        let databaseURL = CodexHomeResolver.databaseURL(
+            shell: "/bin/sh", environment: ["CODEX_HOME": customHome.path])
+
+        XCTAssertEqual(databaseURL.path, customHome.appending(path: "state_5.sqlite").path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: databaseURL.path))
+        XCTAssertThrowsError(
+            try CodexStateStore(databaseURL: databaseURL)
+                .selectThread(sessionID: "exact-session", rolloutPath: nil))
+    }
+
+    func testTranscriptAttentionAcceptsOnlyNativeQuestionCallsAndMatchingResults() {
+        let request = Data(
+            #"{"type":"response_item","payload":{"type":"function_call","name":"functions.request_user_input","call_id":"call-private","arguments":"PRIVATE PROMPT CONTENT"}}"#
+                .utf8)
+        let unrelated = Data(
+            #"{"type":"response_item","payload":{"type":"function_call","name":"functions.exec_command","call_id":"call-other","arguments":"PRIVATE COMMAND"}}"#
+                .utf8)
+        let result = Data(
+            #"{"type":"response_item","payload":{"type":"function_call_output","call_id":"call-private","output":"PRIVATE ANSWER"}}"#
+                .utf8)
+
+        XCTAssertEqual(
+            CodexTranscriptAttentionEvent.parseLine(request),
+            .questionRequested(callID: "call-private"))
+        XCTAssertNil(CodexTranscriptAttentionEvent.parseLine(unrelated))
+        XCTAssertEqual(
+            CodexTranscriptAttentionEvent.parseLine(result),
+            .questionResolved(callID: "call-private"))
+    }
+
+    @MainActor
+    func testProviderDeduplicatesNativeQuestionAndClearsOnlyMatchingCall() throws {
+        let rolloutURL = tempDir.appending(path: "question-session.jsonl")
+        let lines =
+            [
+                #"{"type":"response_item","payload":{"type":"function_call","name":"functions.request_user_input","call_id":"question-call","arguments":"PRIVATE QUESTION"}}"#,
+                #"{"type":"response_item","payload":{"type":"function_call","name":"functions.request_user_input","call_id":"question-call","arguments":"PRIVATE QUESTION"}}"#,
+                #"{"type":"response_item","payload":{"type":"function_call","name":"functions.exec_command","call_id":"other-call","arguments":"PRIVATE COMMAND"}}"#,
+                #"{"type":"response_item","payload":{"type":"function_call_output","call_id":"other-call","output":"PRIVATE RESULT"}}"#,
+                #"{"type":"response_item","payload":{"type":"function_call_output","call_id":"question-call","output":"PRIVATE ANSWER"}}"#,
+            ].joined(separator: "\n") + "\n"
+        try lines.write(to: rolloutURL, atomically: true, encoding: .utf8)
+        let hookRecordURL = tempDir.appending(path: "question-hook-record.json")
+        try writeHookRecord(to: hookRecordURL, sessionID: "question-session", transcriptPath: rolloutURL.path)
+        let dbURL = tempDir.appending(path: "question-session.sqlite")
+        try createThreadDatabase(
+            at: dbURL,
+            rolloutPath: rolloutURL.path,
+            model: "question-model",
+            createdAtMs: Int64(Date().timeIntervalSince1970 * 1000))
+        let provider = CodexStatusProvider(
+            context: makeContext(
+                processStartTime: Date(),
+                hookRecordPath: hookRecordURL.path,
+                adapter: .current(version: "0.162.1")),
+            stateStore: CodexStateStore(databaseURL: dbURL),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.5)
+        let requested = expectation(description: "one native question requests attention")
+        let resolved = expectation(description: "matching question result clears attention")
+        var attentionEvents: [PaneAttentionEvent] = []
+        var resolvedKinds: [NotificationKind] = []
+        provider.onAttention = { event in
+            attentionEvents.append(event)
+            requested.fulfill()
+        }
+        provider.onAttentionResolved = { kind in
+            resolvedKinds.append(kind)
+            resolved.fulfill()
+        }
+
+        provider.start()
+        wait(for: [requested, resolved], timeout: 2)
+        provider.stop()
+
+        XCTAssertEqual(attentionEvents, [.codexQuestion])
+        XCTAssertEqual(resolvedKinds, [.codexQuestion])
+    }
+
+    @MainActor
+    func testProviderKeepsNativeQuestionPendingAcrossForegroundTurnUntilMatchingResult() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+        let rolloutURL = tempDir.appending(path: "question-across-turns.jsonl")
+        let questionRequests =
+            [
+                #"{"type":"response_item","payload":{"type":"function_call","name":"functions.request_user_input","call_id":"question-call-one","arguments":"PRIVATE QUESTION ONE"}}"#,
+                #"{"type":"response_item","payload":{"type":"function_call","name":"functions.request_user_input","call_id":"question-call-two","arguments":"PRIVATE QUESTION TWO"}}"#,
+            ].joined(separator: "\n") + "\n"
+        try questionRequests.write(to: rolloutURL, atomically: true, encoding: .utf8)
+        let hookRecordURL = tempDir.appending(path: "question-across-turns-hook-record.json")
+        try writeHookRecord(to: hookRecordURL, sessionID: "question-session", transcriptPath: rolloutURL.path)
+        let queueURL = tempDir.appending(path: "question-across-turns-queue.jsonl")
+        let context = makeContext(
+            processStartTime: Date(),
+            hookRecordPath: hookRecordURL.path,
+            queuePath: queueURL.path,
+            launchGeneration: "question-generation",
+            adapter: .current(version: "0.162.1"))
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "question-generation",
+            sessionID: "question-session",
+            transcriptPath: rolloutURL.path,
+            hookEventName: "SessionStart")
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-question.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.5)
+        let requested = expectation(description: "native questions request attention")
+        requested.expectedFulfillmentCount = 2
+        let turnStarted = expectation(description: "foreground turn starts")
+        let resolved = expectation(description: "all matching results resolve the questions")
+        var resolvedKinds: [NotificationKind] = []
+        provider.onAttention = { event in
+            if event.source == .codexQuestion { requested.fulfill() }
+        }
+        provider.onCodexEvent = { event, _ in
+            if case .foregroundTurnStarted = event { turnStarted.fulfill() }
+        }
+        provider.onAttentionResolved = { kind in
+            resolvedKinds.append(kind)
+            if kind == .codexQuestion { resolved.fulfill() }
+        }
+
+        provider.start()
+        wait(for: [requested], timeout: 2)
+        let prompt = CodexHookQueueRecord(
+            paneID: context.paneID.uuidString,
+            tabID: context.tabID.uuidString,
+            launchGeneration: "question-generation",
+            hookEventName: "UserPromptSubmit",
+            sessionID: "question-session",
+            turnID: "turn-next",
+            requestID: nil,
+            timestamp: Date().timeIntervalSince1970,
+            source: "hook",
+            model: nil,
+            transcriptPath: nil,
+            result: nil)
+        var promptData = try JSONEncoder().encode(prompt)
+        promptData.append(UInt8(ascii: "\n"))
+        let queueHandle = try FileHandle(forWritingTo: queueURL)
+        try queueHandle.seekToEnd()
+        try queueHandle.write(contentsOf: promptData)
+        try queueHandle.close()
+        wait(for: [turnStarted], timeout: 2)
+
+        let wrongResult =
+            #"{"type":"response_item","payload":{"type":"function_call_output","call_id":"other-call","output":"PRIVATE RESULT"}}"#
+        let firstMatchingResult =
+            #"{"type":"response_item","payload":{"type":"function_call_output","call_id":"question-call-one","output":"PRIVATE ANSWER ONE"}}"#
+        let transcriptHandle = try FileHandle(forWritingTo: rolloutURL)
+        try transcriptHandle.seekToEnd()
+        try transcriptHandle.write(contentsOf: Data((wrongResult + "\n" + firstMatchingResult + "\n").utf8))
+        try transcriptHandle.close()
+        let firstCallResolved = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                TracingService.shared.recordedEventsForTesting.contains {
+                    $0.name == "statusline.codex.question.attention"
+                        && $0.attributes["result"] == "call_resolved"
+                }
+            },
+            object: nil)
+        wait(for: [firstCallResolved], timeout: 2)
+        XCTAssertTrue(resolvedKinds.isEmpty)
+
+        let secondMatchingResult =
+            #"{"type":"response_item","payload":{"type":"function_call_output","call_id":"question-call-two","output":"PRIVATE ANSWER TWO"}}"#
+        let secondMatchingHandle = try FileHandle(forWritingTo: rolloutURL)
+        try secondMatchingHandle.seekToEnd()
+        try secondMatchingHandle.write(contentsOf: Data((secondMatchingResult + "\n").utf8))
+        try secondMatchingHandle.close()
+        wait(for: [resolved], timeout: 2)
+        XCTAssertEqual(resolvedKinds, [.codexQuestion])
+        provider.stop()
+    }
+
+    @MainActor
+    func testProviderRoutesBoundPermissionHooksWithFixedCopyAndNoRequestData() throws {
+        let context = makeContext(
+            processStartTime: Date(),
+            queuePath: tempDir.appending(path: "permission-queue.jsonl").path,
+            launchGeneration: "permission-generation",
+            adapter: .current(version: "0.162.1"))
+        let records = ["SessionStart", "PermissionRequest", "PermissionRequest"].map { event in
+            CodexHookQueueRecord(
+                paneID: context.paneID.uuidString,
+                tabID: context.tabID.uuidString,
+                launchGeneration: "permission-generation",
+                hookEventName: event,
+                sessionID: "permission-session",
+                turnID: nil,
+                requestID: "private-request-id",
+                timestamp: Date().timeIntervalSince1970,
+                source: "hook",
+                model: nil,
+                transcriptPath: nil,
+                result: nil)
+        }
+        let queueData = try records.reduce(into: Data()) { data, record in
+            data.append(try JSONEncoder().encode(record))
+            data.append(UInt8(ascii: "\n"))
+        }
+        try queueData.write(to: URL(filePath: context.codexHookQueuePath!))
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-state.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.5)
+        let attention = expectation(description: "duplicate permission hook deliveries remain fixed copy")
+        attention.expectedFulfillmentCount = 2
+        var events: [PaneAttentionEvent] = []
+        provider.onAttention = { event in
+            events.append(event)
+            attention.fulfill()
+        }
+
+        provider.start()
+        wait(for: [attention], timeout: 2)
+        provider.stop()
+
+        XCTAssertEqual(events, [.codexPermissionRequest, .codexPermissionRequest])
+        XCTAssertFalse(String(describing: events).contains("private-request-id"))
     }
 
     func testStateStoreSelectsThreadByExactRolloutPath() throws {
@@ -134,16 +464,62 @@ final class CodexStatusProviderTests: XCTestCase {
         }
     }
 
+    func testRolloutParserRecognizesForegroundLifecycleAndExcludesDelegatedTurns() {
+        let started = CodexRolloutParser.parseActivityEvent(
+            Data(
+                #"{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-a","root_turn_id":"turn-a"}}"#
+                    .utf8))
+        XCTAssertEqual(started, .foregroundTurnStarted(turnID: "turn-a", isForeground: true))
+
+        let delegated = CodexRolloutParser.parseActivityEvent(
+            Data(
+                #"{"type":"event_msg","payload":{"type":"task_complete","turn_id":"subagent-turn","root_turn_id":"turn-a"}}"#
+                    .utf8))
+        XCTAssertNil(delegated)
+
+        let completed = CodexRolloutParser.parseActivityEvent(
+            Data(
+                #"{"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-a","root_turn_id":"turn-a","error":null,"last_agent_message":"private answer"}}"#
+                    .utf8))
+        XCTAssertEqual(completed, .foregroundTurnCompleted(turnID: "turn-a", isForeground: true, succeeded: true))
+        XCTAssertFalse(String(describing: completed).contains("private answer"))
+
+        let failed = CodexRolloutParser.parseActivityEvent(
+            Data(
+                #"{"type":"event_msg","payload":{"type":"turn_complete","turn_id":"turn-a","root_turn_id":"turn-a","error":{"message":"private failure"}}}"#
+                    .utf8))
+        XCTAssertEqual(failed, .foregroundTurnCompleted(turnID: "turn-a", isForeground: true, succeeded: false))
+
+        let interrupted = CodexRolloutParser.parseActivityEvent(
+            Data(
+                #"{"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-a","root_turn_id":"turn-a","reason":"interrupted"}}"#
+                    .utf8))
+        XCTAssertEqual(interrupted, .foregroundTurnInterrupted(turnID: "turn-a", isForeground: true))
+    }
+
+    func testRolloutParserKeepsQuestionCallIdentityWithoutContent() {
+        let request = CodexRolloutParser.parseActivityEvent(
+            Data(
+                #"{"type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"question-42","arguments":"private question text"}}"#
+                    .utf8))
+        XCTAssertEqual(request, .questionRequested(callID: "question-42"))
+        XCTAssertFalse(String(describing: request).contains("private question text"))
+
+        let output = CodexRolloutParser.parseActivityEvent(
+            Data(
+                #"{"type":"response_item","payload":{"type":"function_call_output","call_id":"question-42","output":"private answer"}}"#
+                    .utf8))
+        XCTAssertEqual(output, .questionResolved(callID: "question-42"))
+        XCTAssertFalse(String(describing: output).contains("private answer"))
+    }
+
     func testRolloutParserMapsTokenCountAndRateLimits() throws {
-        let line = Data(
-            """
-            {"type":"event_msg","payload":{"type":"token_count","model":"gpt-5.1-codex","total_token_usage":{"input_tokens":300,"output_tokens":100},"last_token_usage":{"total_tokens":250},"model_context_window":1000,"rate_limits":{"primary":{"window_minutes":300,"used_percentage":25,"resets_at":2000000000},"secondary":{"window_minutes":10080,"used_percentage":50,"resets_at":2000003600}}}}
-            """.utf8)
+        let line = Data(CodexCompatibilityFixtures.currentTokenCount.utf8)
 
-        let data = CodexRolloutParser.parseLine(line, expectedCWD: "/repo")
+        let data = CodexRolloutParser.parseLine(
+            line, expectedCWD: "/repo", adapter: .current(version: "0.162.1"))
 
-        XCTAssertEqual(data?.model?.id, "gpt-5.1-codex")
-        XCTAssertEqual(data?.contextWindow?.totalInputTokens, 300)
+        XCTAssertEqual(data?.contextWindow?.totalInputTokens, 900)
         XCTAssertEqual(data?.contextWindow?.totalOutputTokens, 100)
         XCTAssertEqual(data?.contextWindow?.usedPercentage, 25)
         XCTAssertEqual(data?.contextWindow?.remainingPercentage, 75)
@@ -151,6 +527,300 @@ final class CodexStatusProviderTests: XCTestCase {
         XCTAssertEqual(data?.rateLimits?.fiveHour?.resetsAt, 2_000_000_000)
         XCTAssertEqual(data?.rateLimits?.sevenDay?.usedPercentage, 50)
         XCTAssertEqual(data?.rateLimits?.sevenDay?.resetsAt, 2_000_003_600)
+    }
+
+    func testRolloutParserKeepsQuotaBucketAndUsesOnlyUsedPercentageFields() {
+        let premium =
+            #"{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"premium","primary":{"window_minutes":300,"remaining":12},"secondary":{"window_minutes":10080,"used_percent":65,"resets_at":2000003600}}}}"#
+        let data = CodexRolloutParser.parseLine(
+            Data(premium.utf8), expectedCWD: "/repo", adapter: .current(version: "0.162.1"))
+
+        XCTAssertEqual(data?.rateLimits?.bucketID, "premium")
+        XCTAssertNil(data?.rateLimits?.fiveHour?.usedPercentage)
+        XCTAssertEqual(data?.rateLimits?.sevenDay?.usedPercentage, 65)
+        XCTAssertEqual(data?.rateLimits?.sevenDay?.resetsAt, 2_000_003_600)
+    }
+
+    func testCurrentAdapterRejectsQuotaUpdateWithoutBucketID() {
+        let line = Data(
+            #"{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"window_minutes":300,"used_percent":15,"resets_at":2000007200},"secondary":{"window_minutes":10080,"used_percent":65,"resets_at":2000003600}}}}"#
+                .utf8)
+
+        let data = CodexRolloutParser.parseLine(
+            line, expectedCWD: "/repo", adapter: .current(version: "0.162.1"))
+
+        XCTAssertNil(data?.rateLimits)
+    }
+
+    func testRolloutParserIgnoresOutOfRangeNumericValues() {
+        let line = Data(
+            CodexCompatibilityFixtures.currentTokenCount
+                .replacingOccurrences(of: "\"input_tokens\":900", with: "\"input_tokens\":1e100")
+                .replacingOccurrences(of: "\"model_context_window\":100000", with: "\"model_context_window\":1e100")
+                .utf8)
+
+        let data = CodexRolloutParser.parseLine(
+            line, expectedCWD: "/repo", adapter: .current(version: "0.162.1"))
+
+        XCTAssertNotNil(data)
+        XCTAssertNil(data?.contextWindow?.totalInputTokens)
+        XCTAssertEqual(data?.contextWindow?.totalOutputTokens, 100)
+        XCTAssertNil(data?.contextWindow?.usedPercentage)
+        XCTAssertNil(data?.contextWindow?.remainingPercentage)
+    }
+
+    @MainActor
+    func testProviderRetainsStandardQuotaAcrossPremiumAndPartialUpdatesThenClearsOnRebind() throws {
+        let queueURL = tempDir.appending(path: "quota-hooks.jsonl")
+        let firstTranscript = tempDir.appending(path: "quota-first.jsonl")
+        let secondTranscript = tempDir.appending(path: "quota-second.jsonl")
+        let standard =
+            #"{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"window_minutes":300,"used_percent":20,"resets_at":2000000000},"secondary":{"window_minutes":10080,"used_percent":70,"resets_at":2000003600}}}}"#
+        let premium =
+            #"{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"premium","primary":null,"secondary":null}}}"#
+        let partialStandard =
+            #"{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"window_minutes":300,"used_percent":15,"resets_at":2000007200}}}}"#
+        try (standard + "\n").write(to: firstTranscript, atomically: true, encoding: .utf8)
+        try Data().write(to: secondTranscript)
+        let context = makeContext(
+            processStartTime: Date(), queuePath: queueURL.path, launchGeneration: "quota-generation")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "quota-generation",
+            sessionID: "quota-session-one",
+            transcriptPath: firstTranscript.path)
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-quota-state.sqlite")),
+            startupRetryInterval: 0.02,
+            startupTimeout: 0.2)
+        let initialQuota = expectation(description: "standard quotas are available")
+        let premiumRetained = expectation(description: "premium update leaves standard quotas available")
+        let partialRetained = expectation(description: "partial standard update retains weekly quota")
+        let reboundCleared = expectation(description: "new conversation clears quota values")
+        var stage = "initial"
+        provider.onUpdate = { data in
+            guard let rates = data.rateLimits else {
+                if stage == "rebound" { reboundCleared.fulfill() }
+                return
+            }
+            if stage == "initial", rates.fiveHour?.usedPercentage == 20,
+                rates.sevenDay?.usedPercentage == 70
+            {
+                initialQuota.fulfill()
+            }
+            if stage == "premium", rates.fiveHour?.usedPercentage == 20,
+                rates.sevenDay?.usedPercentage == 70
+            {
+                premiumRetained.fulfill()
+            }
+            if stage == "partial", rates.fiveHour?.usedPercentage == 15,
+                rates.fiveHour?.resetsAt == 2_000_007_200,
+                rates.sevenDay?.usedPercentage == 70, rates.sevenDay?.resetsAt == 2_000_003_600
+            {
+                partialRetained.fulfill()
+            }
+        }
+
+        provider.start()
+        wait(for: [initialQuota], timeout: 2)
+        stage = "premium"
+        let handle = try FileHandle(forWritingTo: firstTranscript)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((premium + "\n").utf8))
+        try handle.close()
+        wait(for: [premiumRetained], timeout: 2)
+        stage = "partial"
+        let partialHandle = try FileHandle(forWritingTo: firstTranscript)
+        try partialHandle.seekToEnd()
+        try partialHandle.write(contentsOf: Data((partialStandard + "\n").utf8))
+        try partialHandle.close()
+        wait(for: [partialRetained], timeout: 2)
+        stage = "rebound"
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "quota-generation",
+            sessionID: "quota-session-two",
+            transcriptPath: secondTranscript.path)
+        wait(for: [reboundCleared], timeout: 2)
+        provider.stop()
+    }
+
+    func testCurrentRolloutParserReadsTurnContextModelChanges() {
+        let adapter = CodexCompatibilityAdapter.current(version: "0.162.1")
+        let initial = CodexRolloutParser.parseLine(
+            Data(CodexCompatibilityFixtures.currentTurnContext.utf8),
+            expectedCWD: "/repo",
+            adapter: adapter)
+        let changed = CodexRolloutParser.parseLine(
+            Data(#"{"type":"turn_context","payload":{"model":"updated-model"}}"#.utf8),
+            expectedCWD: "/repo",
+            adapter: adapter)
+
+        XCTAssertEqual(initial?.model?.id, "current-model")
+        XCTAssertEqual(changed?.model?.id, "updated-model")
+        XCTAssertNil(initial?.contextWindow)
+        XCTAssertNil(
+            CodexRolloutParser.parseLine(
+                Data(CodexCompatibilityFixtures.currentTurnContext.utf8), expectedCWD: "/repo"))
+    }
+
+    func testCurrentTokenCountSeparatesCumulativeTotalsFromCurrentOccupancy() {
+        let data = CodexRolloutParser.parseLine(
+            Data(CodexCompatibilityFixtures.currentTokenCount.utf8),
+            expectedCWD: "/repo",
+            adapter: .current(version: "0.162.1"))
+
+        XCTAssertEqual(data?.contextWindow?.totalInputTokens, 900)
+        XCTAssertEqual(data?.contextWindow?.totalOutputTokens, 100)
+        XCTAssertEqual(data?.contextWindow?.usedPercentage, 25)
+        XCTAssertEqual(data?.contextWindow?.remainingPercentage, 75)
+        XCTAssertNil(data?.model)
+    }
+
+    func testCurrentContextPercentageMatchesBaselineRoundingAndClamping() {
+        let scenarios: [ContextPercentageScenario] = [
+            ContextPercentageScenario(window: 475_000, current: 236_085, used: 48, remaining: 52),
+            ContextPercentageScenario(window: 11_999, current: 0, used: 100, remaining: 0),
+            ContextPercentageScenario(window: 12_000, current: 12_000, used: 100, remaining: 0),
+            ContextPercentageScenario(window: 100_000, current: 12_000, used: 0, remaining: 100),
+            ContextPercentageScenario(window: 12_200, current: 12_095, used: 47, remaining: 53),
+            ContextPercentageScenario(window: 12_200, current: 12_097, used: 48, remaining: 52),
+            ContextPercentageScenario(window: 100_000, current: 130_000, used: 100, remaining: 0),
+        ]
+
+        for scenario in scenarios {
+            let line = Data(
+                #"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{},"last_token_usage":{"total_tokens":\#(scenario.current)},"model_context_window":\#(scenario.window)}}}"#
+                    .utf8)
+            let data = CodexRolloutParser.parseLine(
+                line,
+                expectedCWD: "/repo",
+                adapter: .current(version: "0.162.1"))
+
+            XCTAssertEqual(data?.contextWindow?.usedPercentage, scenario.used)
+            XCTAssertEqual(data?.contextWindow?.remainingPercentage, scenario.remaining)
+        }
+    }
+
+    func testCurrentTokenCountLeavesAbsentFieldsUnavailable() {
+        let line = Data(
+            #"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":250}}}}"#
+                .utf8)
+        let data = CodexRolloutParser.parseLine(
+            line,
+            expectedCWD: "/repo",
+            adapter: .current(version: "0.162.1"))
+
+        XCTAssertNil(data?.contextWindow?.usedPercentage)
+        XCTAssertNil(data?.contextWindow?.totalInputTokens)
+        XCTAssertNil(data?.contextWindow?.totalOutputTokens)
+        XCTAssertNil(data?.rateLimits)
+    }
+
+    @MainActor
+    func testCurrentModelChangesAbsentFieldsAndUnreadableTranscriptRecover() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+        let rolloutURL = tempDir.appending(path: "current-rollout.jsonl")
+        let initialLine = CodexCompatibilityFixtures.currentTokenCount
+        let initialModelLine = CodexCompatibilityFixtures.currentTurnContext
+        try (initialModelLine + "\n" + initialLine + "\n")
+            .write(to: rolloutURL, atomically: true, encoding: .utf8)
+        let hookRecordURL = tempDir.appending(path: "current-hook-record.json")
+        try writeHookRecord(
+            to: hookRecordURL,
+            sessionID: "thread-abcdef1234567890",
+            transcriptPath: rolloutURL.path)
+        let provider = CodexStatusProvider(
+            context: makeContext(
+                processStartTime: Date(),
+                hookRecordPath: hookRecordURL.path,
+                adapter: .current(version: "0.162.1")),
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-current.sqlite")),
+            startupRetryInterval: 0.02,
+            startupTimeout: 0.5)
+        let initial = expectation(description: "current model and token snapshot")
+        let changedModel = expectation(description: "current model metadata change")
+        let absentFields = expectation(description: "absent token fields clear the snapshot")
+        let unreadable = expectation(description: "unreadable transcript clears rich facts")
+        let recovered = expectation(description: "valid transcript restores rich facts")
+        var fulfilledInitial = false
+        var fulfilledChangedModel = false
+        var fulfilledAbsentFields = false
+        var fulfilledUnreadable = false
+        var fulfilledRecovered = false
+        var hasObservedInitialFacts = false
+        provider.onUpdate = { data in
+            if !fulfilledInitial, data.model?.id == "current-model", data.contextWindow?.usedPercentage == 25 {
+                fulfilledInitial = true
+                hasObservedInitialFacts = true
+                initial.fulfill()
+            }
+            if !fulfilledChangedModel, data.model?.id == "updated-model" {
+                fulfilledChangedModel = true
+                changedModel.fulfill()
+            }
+            if !fulfilledAbsentFields, data.model?.id == "updated-model",
+                data.contextWindow?.usedPercentage == nil,
+                data.contextWindow?.totalInputTokens == nil,
+                data.contextWindow?.totalOutputTokens == nil
+            {
+                fulfilledAbsentFields = true
+                absentFields.fulfill()
+            }
+            if hasObservedInitialFacts, !fulfilledUnreadable,
+                data.model == nil, data.contextWindow == nil
+            {
+                fulfilledUnreadable = true
+                unreadable.fulfill()
+            }
+            if !fulfilledRecovered, data.model?.id == "recovered-model",
+                data.contextWindow?.usedPercentage == 25
+            {
+                fulfilledRecovered = true
+                recovered.fulfill()
+            }
+        }
+
+        provider.start()
+        wait(for: [initial], timeout: 2)
+        let updateHandle = try FileHandle(forWritingTo: rolloutURL)
+        try updateHandle.seekToEnd()
+        try updateHandle.write(
+            contentsOf: Data(
+                #"{"type":"turn_context","payload":{"model":"updated-model"}}"#.appending("\n").utf8))
+        try updateHandle.write(
+            contentsOf: Data(
+                #"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":250}}}}"#
+                    .appending("\n").utf8))
+        try updateHandle.close()
+        wait(for: [changedModel, absentFields], timeout: 2)
+
+        try FileManager.default.removeItem(at: rolloutURL)
+        wait(for: [unreadable], timeout: 2)
+        try
+            (#"{"type":"turn_context","payload":{"model":"recovered-model"}}"# + "\n"
+            + initialLine + "\n")
+            .write(to: rolloutURL, atomically: true, encoding: .utf8)
+        wait(for: [recovered], timeout: 2)
+        provider.stop()
+        XCTAssertTrue(
+            TracingService.shared.recordedEventsForTesting.contains {
+                let isUnreadableRead =
+                    $0.name == "statusline.codex.tailer_read"
+                    && $0.attributes["result"] == "unreadable"
+                let isWaitingForTranscript =
+                    $0.name == "statusline.codex.tailer_attachment"
+                    && $0.attributes["result"] == "waiting"
+                let hasPaneContext = $0.attributes["pane.id"] != nil && $0.attributes["tab.id"] != nil
+                return (isUnreadableRead || isWaitingForTranscript) && hasPaneContext
+            }, "Missing pane-scoped unreadable-source diagnostic")
     }
 
     func testRolloutParserMapsCodex136SessionMetaPayload() throws {
@@ -166,38 +836,23 @@ final class CodexStatusProviderTests: XCTestCase {
     }
 
     func testRolloutParserMapsCodex136NestedTokenCountShape() throws {
-        let line = Data(
-            """
-            {"type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.1-codex","total_token_usage":{"input_tokens":320,"output_tokens":80},"last_token_usage":{"total_tokens":200},"model_context_window":2000},"rate_limits":{"primary":{"window_minutes":300,"used_percent":12.5,"resets_at":2000000000},"secondary":{"window_minutes":10080,"used_percent":44,"resets_at":2000003600}}}}
-            """.utf8)
+        let line = Data(CodexCompatibilityFixtures.legacyTokenCount.utf8)
 
         let data = CodexRolloutParser.parseLine(line, expectedCWD: "/repo")
 
-        XCTAssertEqual(data?.model?.id, "gpt-5.1-codex")
-        XCTAssertEqual(data?.contextWindow?.totalInputTokens, 320)
-        XCTAssertEqual(data?.contextWindow?.totalOutputTokens, 80)
-        XCTAssertEqual(data?.contextWindow?.usedPercentage, 10)
-        XCTAssertEqual(data?.contextWindow?.remainingPercentage, 90)
+        XCTAssertEqual(data?.contextWindow?.totalInputTokens, 20)
+        XCTAssertEqual(data?.contextWindow?.totalOutputTokens, 5)
+        XCTAssertEqual(data?.contextWindow?.usedPercentage, 31)
+        XCTAssertEqual(data?.contextWindow?.remainingPercentage, 69)
         XCTAssertEqual(data?.rateLimits?.fiveHour?.usedPercentage, 12.5)
         XCTAssertEqual(data?.rateLimits?.sevenDay?.usedPercentage, 44)
-    }
-
-    func testRolloutParserMapsTurnContextModelBeforeTokenUsage() throws {
-        let line = Data(
-            """
-            {"type":"event_msg","payload":{"type":"turn_context","model":"gpt-5.1-codex"}}
-            """.utf8)
-
-        let data = CodexRolloutParser.parseLine(line, expectedCWD: "/repo")
-
-        XCTAssertEqual(data?.model?.id, "gpt-5.1-codex")
-        XCTAssertNil(data?.contextWindow)
+        XCTAssertEqual(data?.rateLimits?.bucketID, "codex")
     }
 
     func testRolloutParserUsesLastTokenUsageForContextAndTotalUsageForTokenTotals() throws {
         let line = Data(
             """
-            {"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":900,"output_tokens":100},"last_token_usage":{"total_tokens":250},"model_context_window":1000}}}
+            {"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":900,"output_tokens":100},"last_token_usage":{"total_tokens":12250},"model_context_window":13000}}}
             """.utf8)
 
         let data = CodexRolloutParser.parseLine(line, expectedCWD: "/repo")
@@ -273,7 +928,7 @@ final class CodexStatusProviderTests: XCTestCase {
     func testTailerBuffersPartialJsonlUntilNewlineArrives() throws {
         let rolloutURL = tempDir.appending(path: "rollout.jsonl")
         let partial =
-            #"{"type":"event_msg","payload":{"type":"token_count","model":"partial","total_token_usage":{"input_tokens":10,"output_tokens":2},"last_token_usage":{"total_tokens":6},"model_context_window":100}}"#
+            #"{"type":"event_msg","payload":{"type":"token_count","model":"partial","total_token_usage":{"input_tokens":10,"output_tokens":2},"last_token_usage":{"total_tokens":12006},"model_context_window":12100}}"#
         try partial.write(to: rolloutURL, atomically: true, encoding: .utf8)
 
         let tailer = CodexRolloutTailer(rolloutPath: rolloutURL.path, expectedCWD: tempDir.path)
@@ -394,7 +1049,7 @@ final class CodexStatusProviderTests: XCTestCase {
         let rolloutURL = tempDir.appending(path: "rollout.jsonl")
         try """
         {"type":"session_meta","payload":{"cwd":"\(tempDir.path)","cli_version":"0.136.0","model":"gpt-5.1-codex"}}
-            {"type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.1-codex","total_token_usage":{"input_tokens":320,"output_tokens":80},"last_token_usage":{"total_tokens":400},"model_context_window":2000},"rate_limits":{"primary":{"window_minutes":300,"used_percent":12.5,"resets_at":2000000000},"secondary":{"window_minutes":10080,"used_percent":44,"resets_at":2000003600}}}}
+            {"type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.1-codex","total_token_usage":{"input_tokens":320,"output_tokens":80},"last_token_usage":{"total_tokens":12400},"model_context_window":14000},"rate_limits":{"primary":{"window_minutes":300,"used_percent":12.5,"resets_at":2000000000},"secondary":{"window_minutes":10080,"used_percent":44,"resets_at":2000003600}}}}
         """
         .appending("\n")
         .write(to: rolloutURL, atomically: true, encoding: .utf8)
@@ -466,7 +1121,7 @@ final class CodexStatusProviderTests: XCTestCase {
         XCTAssertNil(observed?.cost?.totalCostUsd)
 
         let events = TracingService.shared.recordedEventsForTesting
-        XCTAssertTrue(events.contains { $0.name == "statusline.codex.hook_bound" })
+        XCTAssertTrue(events.contains { $0.name == "statusline.codex.binding.changed" })
         XCTAssertTrue(events.contains { $0.name == "statusline.codex.sqlite_enrichment" })
         XCTAssertTrue(events.contains { $0.name == "statusline.codex.tailer_started" })
         XCTAssertTrue(events.contains { $0.name == "statusline.codex.tailer_read" })
@@ -523,6 +1178,271 @@ final class CodexStatusProviderTests: XCTestCase {
         }
         XCTAssertGreaterThanOrEqual(stateReads.count, 1)
         XCTAssertTrue(stateReads.contains { $0.attributes["retry_attempt"] != nil })
+    }
+
+    @MainActor
+    func testProviderFollowsForegroundNewAndResumeBindingsAndDelayedTranscript() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+
+        let queueURL = tempDir.appending(path: "foreground-hooks.jsonl")
+        let firstTranscript = tempDir.appending(path: "first-rollout.jsonl")
+        let resumedTranscript = tempDir.appending(path: "resumed-rollout.jsonl")
+        try codexTokenLine(model: "first-model", input: 40, output: 10, contextTokens: 20, window: 100)
+            .appending("\n")
+            .write(to: firstTranscript, atomically: true, encoding: .utf8)
+        let paneID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let tabID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        let generation = "generation-foreground"
+        let provider = CodexStatusProvider(
+            context: makeContext(
+                processStartTime: Date(), queuePath: queueURL.path, launchGeneration: generation),
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-state.sqlite")),
+            startupRetryInterval: 0.05,
+            startupTimeout: 0.3)
+        let firstBound = expectation(description: "first foreground conversation binds")
+        let firstFacts = expectation(description: "first transcript facts arrive")
+        let resumedBound = expectation(description: "resumed foreground conversation binds")
+        let resumedTranscriptParsed = expectation(description: "delayed resumed transcript is parsed")
+        var boundIDs: [String] = []
+        var boundTranscriptPaths: [String?] = []
+        var awaitingClearedFactsFor: String?
+        var sawClearedFacts = false
+        var sawStalePriorSessionFacts = false
+        provider.onSessionBound = { id, transcriptPath in
+            boundIDs.append(id)
+            boundTranscriptPaths.append(transcriptPath)
+            if id == "session-first" { firstBound.fulfill() }
+            if id == "session-resumed" {
+                awaitingClearedFactsFor = id
+                resumedBound.fulfill()
+            }
+        }
+        provider.onUpdate = { data in
+            if data.model?.id == "first-model", data.contextWindow?.usedPercentage == 20 {
+                firstFacts.fulfill()
+            }
+            if awaitingClearedFactsFor == "session-resumed", data.contextWindow == nil {
+                sawClearedFacts = true
+            }
+            if awaitingClearedFactsFor == "session-resumed", data.contextWindow?.usedPercentage == 90 {
+                sawStalePriorSessionFacts = true
+            }
+            if data.model?.id == "resumed-model", data.contextWindow?.usedPercentage == 30 {
+                resumedTranscriptParsed.fulfill()
+            }
+        }
+
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: paneID,
+            tabID: tabID,
+            generation: generation,
+            sessionID: "session-first",
+            transcriptPath: firstTranscript.path)
+        provider.start()
+        wait(for: [firstBound], timeout: 2)
+        wait(for: [firstFacts], timeout: 2)
+
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: paneID,
+            tabID: tabID,
+            generation: generation,
+            sessionID: "session-resumed",
+            transcriptPath: resumedTranscript.path,
+            hookEventName: "UserPromptSubmit")
+        wait(for: [resumedBound], timeout: 2)
+        XCTAssertTrue(sawClearedFacts)
+
+        let priorTranscriptContent = try String(contentsOf: firstTranscript, encoding: .utf8)
+        try
+            (priorTranscriptContent
+            + codexTokenLine(model: "first-model", input: 100, output: 50, contextTokens: 90, window: 100)
+            + "\n")
+            .write(to: firstTranscript, atomically: true, encoding: .utf8)
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: paneID,
+            tabID: tabID,
+            generation: generation,
+            sessionID: "session-resumed",
+            transcriptPath: resumedTranscript.path,
+            hookEventName: "UserPromptSubmit")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+        XCTAssertEqual(boundIDs, ["session-first", "session-resumed"])
+        XCTAssertEqual(boundTranscriptPaths, [firstTranscript.path, resumedTranscript.path])
+        XCTAssertFalse(sawStalePriorSessionFacts)
+
+        try codexTokenLine(model: "resumed-model", input: 60, output: 15, contextTokens: 30, window: 100)
+            .appending("\n")
+            .write(to: resumedTranscript, atomically: true, encoding: .utf8)
+        wait(for: [resumedTranscriptParsed], timeout: 2)
+        provider.stop()
+
+        let events = TracingService.shared.recordedEventsForTesting
+        XCTAssertTrue(events.contains { $0.name == "statusline.codex.binding.facts_cleared" })
+        XCTAssertTrue(events.contains { $0.name == "statusline.codex.binding.callback" })
+        XCTAssertTrue(events.contains { $0.name == "statusline.codex.tailer_detached" })
+        XCTAssertTrue(
+            events.contains {
+                $0.name == "statusline.codex.binding.changed"
+                    && $0.attributes["pane.id"] == paneID.uuidString
+                    && $0.attributes["tab.id"] == tabID.uuidString
+            })
+    }
+
+    @MainActor
+    func testProvidersOnDistinctCheckoutsRejectEachOthersForegroundBindings() throws {
+        let paneA = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let paneB = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+        let tabA = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        let tabB = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
+        let generationA = "generation-a"
+        let generationB = "generation-b"
+        let queueA = tempDir.appending(path: "pane-a-hooks.jsonl")
+        let queueB = tempDir.appending(path: "pane-b-hooks.jsonl")
+        let checkoutA = tempDir.appending(path: ".agent-session-manager/worktrees/pane-a", directoryHint: .isDirectory)
+        let checkoutB = tempDir.appending(path: ".agent-session-manager/worktrees/pane-b", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: checkoutA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: checkoutB, withIntermediateDirectories: true)
+        let providerA = CodexStatusProvider(
+            context: makeContext(
+                processStartTime: Date(), queuePath: queueA.path, launchGeneration: generationA,
+                workingDirectory: checkoutA.path, paneID: paneA, tabID: tabA),
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-a.sqlite")),
+            startupRetryInterval: 0.05,
+            startupTimeout: 0.2)
+        let providerB = CodexStatusProvider(
+            context: makeContext(
+                processStartTime: Date(), queuePath: queueB.path, launchGeneration: generationB,
+                workingDirectory: checkoutB.path, paneID: paneB, tabID: tabB),
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-b.sqlite")),
+            startupRetryInterval: 0.05,
+            startupTimeout: 0.2)
+        let boundA = expectation(description: "pane A binds its session")
+        let boundB = expectation(description: "pane B binds its session")
+        var idsA: [String] = []
+        var idsB: [String] = []
+        providerA.onSessionBound = { id, _ in
+            idsA.append(id)
+            boundA.fulfill()
+        }
+        providerB.onSessionBound = { id, _ in
+            idsB.append(id)
+            boundB.fulfill()
+        }
+
+        try appendQueueRecord(
+            to: queueA, paneID: paneB, tabID: tabB, generation: generationB, sessionID: "session-b")
+        try appendQueueRecord(
+            to: queueA, paneID: paneA, tabID: tabA, generation: generationA, sessionID: "session-a")
+        try appendQueueRecord(
+            to: queueB, paneID: paneA, tabID: tabA, generation: generationA, sessionID: "session-a")
+        try appendQueueRecord(
+            to: queueB, paneID: paneB, tabID: tabB, generation: generationB, sessionID: "session-b")
+        providerA.start()
+        providerB.start()
+        wait(for: [boundA, boundB], timeout: 2)
+        providerA.stop()
+        providerB.stop()
+
+        XCTAssertEqual(idsA, ["session-a"])
+        XCTAssertEqual(idsB, ["session-b"])
+    }
+
+    @MainActor
+    func testProviderIgnoresCallbacksFromPreviousAndStoppedTailerGenerations() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+
+        let queueURL = tempDir.appending(path: "tailer-generation-queue.jsonl")
+        let firstTranscript = tempDir.appending(path: "tailer-generation-first.jsonl")
+        let secondTranscript = tempDir.appending(path: "tailer-generation-second.jsonl")
+        try codexTokenLine(model: "first-model", input: 10, output: 1, contextTokens: 11, window: 100)
+            .write(to: firstTranscript, atomically: true, encoding: .utf8)
+        try codexTokenLine(model: "second-model", input: 20, output: 2, contextTokens: 22, window: 100)
+            .write(to: secondTranscript, atomically: true, encoding: .utf8)
+        let context = makeContext(
+            processStartTime: Date(), queuePath: queueURL.path, launchGeneration: "tailer-generation",
+            adapter: .current(version: "0.162.1"))
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "tailer-generation-absent.sqlite")),
+            startupRetryInterval: 0.05,
+            startupTimeout: 0.5)
+        var snapshots: [StatusLineData] = []
+        let firstUpdate = expectation(description: "first tailer emits its metrics")
+        let secondUpdate = expectation(description: "rebound tailer emits its metrics")
+        var didObserveFirstUpdate = false
+        var didObserveSecondUpdate = false
+        provider.onUpdate = { data in
+            snapshots.append(data)
+            if data.model?.id == "first-model", !didObserveFirstUpdate {
+                didObserveFirstUpdate = true
+                firstUpdate.fulfill()
+            }
+            if data.model?.id == "second-model", !didObserveSecondUpdate {
+                didObserveSecondUpdate = true
+                secondUpdate.fulfill()
+            }
+        }
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "tailer-generation",
+            sessionID: "first-session",
+            transcriptPath: firstTranscript.path,
+            model: "first-hook-model",
+            hookEventName: "SessionStart")
+
+        provider.start()
+        wait(for: [firstUpdate], timeout: 2)
+        let previousTailer = try XCTUnwrap(provider.tailer)
+        let previousSnapshot = try XCTUnwrap(snapshots.last)
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "tailer-generation",
+            sessionID: "second-session",
+            transcriptPath: secondTranscript.path,
+            model: "second-hook-model",
+            hookEventName: "UserPromptSubmit")
+        wait(for: [secondUpdate], timeout: 2)
+        let activeTailer = try XCTUnwrap(provider.tailer)
+        let secondSnapshot = try XCTUnwrap(snapshots.last)
+        let snapshotCountAfterRebind = snapshots.count
+
+        previousTailer.onUnavailable?()
+        previousTailer.onUpdate?(previousSnapshot)
+
+        XCTAssertEqual(snapshots.count, snapshotCountAfterRebind)
+        XCTAssertEqual(snapshots.last?.model?.id, "second-model")
+        XCTAssertEqual(snapshots.last?.contextWindow?.totalInputTokens, 20)
+
+        provider.stop()
+        let snapshotCountAfterStop = snapshots.count
+        activeTailer.onUnavailable?()
+        activeTailer.onUpdate?(secondSnapshot)
+
+        XCTAssertEqual(snapshots.count, snapshotCountAfterStop)
+        XCTAssertEqual(snapshots.last?.model?.id, "second-model")
+        let ignoredEvents = TracingService.shared.recordedEventsForTesting.filter {
+            $0.name == "statusline.codex.tailer_update_ignored"
+        }
+        XCTAssertEqual(ignoredEvents.count, 4)
+        XCTAssertTrue(
+            ignoredEvents.allSatisfy {
+                $0.attributes["result"] == "stale_generation"
+                    && $0.attributes["pane.id"] == context.paneID.uuidString
+                    && $0.attributes["pane.name"] == context.paneName
+                    && $0.attributes["tab.id"] == context.tabID.uuidString
+                    && $0.attributes["tab.name"] == context.tabName
+            })
     }
 
     @MainActor
@@ -669,7 +1589,11 @@ final class CodexStatusProviderTests: XCTestCase {
         defer { TracingService.shared.resetForTesting() }
 
         let rolloutURL = tempDir.appending(path: "rollout.jsonl")
-        try codexTokenLine(model: "trace-model", input: 5, output: 2, contextTokens: 7, window: 100)
+        let tokenLine = codexTokenLine(model: "trace-model", input: 5, output: 2, contextTokens: 7, window: 100)
+        XCTAssertEqual(
+            CodexRolloutParser.parseLine(Data(tokenLine.utf8), expectedCWD: tempDir.path)?.model?.id,
+            "trace-model")
+        try tokenLine
             .write(to: rolloutURL, atomically: true, encoding: .utf8)
         let dbURL = tempDir.appending(path: "state_5.sqlite")
         let hookRecordURL = tempDir.appending(path: "trace-hook-record.json")
@@ -687,7 +1611,9 @@ final class CodexStatusProviderTests: XCTestCase {
             startupTimeout: 0.5
         )
         let expectation = XCTestExpectation(description: "provider emits trace-model update")
+        var observedCodexUpdates: [(String?, Int?)] = []
         provider.onUpdate = { data in
+            observedCodexUpdates.append((data.model?.id, data.contextWindow?.usedPercentage))
             if data.model?.id == "trace-model", data.contextWindow?.usedPercentage == 7 {
                 expectation.fulfill()
             }
@@ -696,6 +1622,9 @@ final class CodexStatusProviderTests: XCTestCase {
         provider.start()
         wait(for: [expectation], timeout: 2)
         provider.stop()
+        XCTAssertTrue(
+            observedCodexUpdates.contains { $0.0 == "trace-model" && $0.1 == 7 },
+            "Observed Codex snapshots: \(observedCodexUpdates)")
 
         let events = TracingService.shared.recordedEventsForTesting
         XCTAssertFalse(events.contains { $0.name == "statusline.provider.started" })
@@ -703,6 +1632,12 @@ final class CodexStatusProviderTests: XCTestCase {
         XCTAssertFalse(events.contains { $0.name == "statusline.provider.update_applied" })
         let codexEvents = events.filter { $0.name.hasPrefix("statusline.codex.") }
         XCTAssertFalse(codexEvents.isEmpty)
+        XCTAssertTrue(
+            codexEvents.contains { $0.name == "statusline.codex.tailer_started" },
+            codexEvents.map(\.name).joined(separator: ","))
+        XCTAssertTrue(
+            codexEvents.contains { $0.name == "statusline.codex.parsed_update" },
+            codexEvents.map(\.name).joined(separator: ","))
         XCTAssertTrue(
             codexEvents.allSatisfy {
                 $0.attributes["pane.name"] == "codex-pane"
@@ -714,22 +1649,275 @@ final class CodexStatusProviderTests: XCTestCase {
         )
     }
 
-    func testBuildCodexCommandRegistersAppOwnedHooks() {
-        let command = Tab.buildCodexCommand(hookScriptPath: "/tmp/hook path.py", extraArgs: ["--model", "gpt-5.1"])
+    func testBuildCodexCommandRegistersOnlyAdapterSupportedHooks() {
+        let current = Tab.buildCodexCommand(
+            hookScriptPath: "/tmp/hook path.py",
+            adapter: .current(version: "0.162.1"),
+            extraArgs: ["--model", "gpt-5.1"])
+        let legacy = Tab.buildCodexCommand(
+            hookScriptPath: "/tmp/hook path.py",
+            adapter: .legacy(version: "0.136.0"),
+            extraArgs: [])
+        let unknown = Tab.buildCodexCommand(
+            hookScriptPath: "/tmp/hook path.py",
+            adapter: .unsupported(version: "0.163.0"),
+            extraArgs: ["--model", "custom"])
 
-        XCTAssertTrue(command.contains("codex"))
-        XCTAssertTrue(command.contains("--dangerously-bypass-hook-trust"))
-        XCTAssertTrue(command.contains("features.hooks=true"))
-        XCTAssertTrue(command.contains(where: { $0.hasPrefix("hooks.SessionStart=") }))
-        XCTAssertTrue(command.contains(where: { $0.hasPrefix("hooks.UserPromptSubmit=") }))
-        XCTAssertTrue(command.contains(where: { $0.hasPrefix("hooks.Stop=") }))
-        XCTAssertTrue(command.contains(where: { $0.contains("/tmp/hook path.py") }))
-        XCTAssertTrue(command.contains("--model"))
-        XCTAssertTrue(command.contains("gpt-5.1"))
+        XCTAssertTrue(current.contains("codex"))
+        XCTAssertFalse(current.contains("--dangerously-bypass-hook-trust"))
+        XCTAssertTrue(current.contains("features.hooks=true"))
+        XCTAssertTrue(current.contains(where: { $0.hasPrefix("hooks.SessionStart=") }))
+        XCTAssertTrue(current.contains(where: { $0.hasPrefix("hooks.UserPromptSubmit=") }))
+        XCTAssertTrue(current.contains(where: { $0.hasPrefix("hooks.Stop=") }))
+        XCTAssertTrue(current.contains(where: { $0.hasPrefix("hooks.Interrupt=") }))
+        XCTAssertFalse(current.contains(where: { $0.hasPrefix("hooks.StopFailure=") }))
+        XCTAssertTrue(current.contains(where: { $0.contains("/tmp/hook path.py") }))
+        XCTAssertTrue(current.contains("--model"))
+        XCTAssertTrue(current.contains("gpt-5.1"))
+        XCTAssertFalse(legacy.contains(where: { $0.hasPrefix("hooks.Interrupt=") }))
+        XCTAssertEqual(unknown, ["codex", "--model", "custom"])
     }
 }
 
 extension CodexStatusProviderTests {
+    @MainActor
+    func testContinuationSeedsStatusFromExactSavedTranscriptWithoutHookRecord() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+
+        let transcript = tempDir.appending(path: "saved-continuation.jsonl")
+        try codexTokenLine(model: "saved-model", input: 120, output: 30, contextTokens: 450, window: 950)
+            .write(to: transcript, atomically: true, encoding: .utf8)
+        let queue = tempDir.appending(path: "saved-continuation-hooks.jsonl")
+        let context = makeContext(
+            processStartTime: Date(),
+            queuePath: queue.path,
+            launchGeneration: UUID().uuidString,
+            adapter: .current(version: "0.162.1"),
+            initialSessionID: "saved-exact-session",
+            initialTranscriptPath: transcript.path)
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-state.sqlite")),
+            startupRetryInterval: 0.02,
+            startupTimeout: 0.1)
+        let populated = expectation(description: "saved transcript supplies conversation facts")
+        provider.onUpdate = { data in
+            if data.model?.id == "saved-model",
+                data.contextWindow?.totalInputTokens == 120,
+                data.contextWindow?.totalOutputTokens == 30
+            {
+                populated.fulfill()
+            }
+        }
+
+        provider.start()
+        defer { provider.stop() }
+        wait(for: [populated], timeout: 2)
+
+        XCTAssertTrue(
+            TracingService.shared.recordedEventsForTesting.contains {
+                $0.name == "statusline.codex.continuation.binding_seeded"
+                    && $0.attributes["session_id_prefix"] == "saved-exact-"
+            })
+    }
+
+    @MainActor
+    func testContinuationBindingConfirmsSavedIdentityThenFollowsForegroundSwitch() async throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        InvariantReporter.shared.resetForTesting()
+        InvariantReporter.shared.enableTestCapture()
+        let supportSubdirectory = "codex-continuation-confirmation-\(UUID().uuidString)"
+        PersistenceHelpers.overrideAppSupportSubdirectory = supportSubdirectory
+        defer {
+            TracingService.shared.resetForTesting()
+            InvariantReporter.shared.resetForTesting()
+            PersistenceHelpers.overrideAppSupportSubdirectory = nil
+            try? FileManager.default.removeItem(
+                at: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                    .appending(path: supportSubdirectory))
+        }
+
+        let codexHome = tempDir.appending(path: "codex-home", directoryHint: .isDirectory)
+        let bin = tempDir.appending(path: "bin", directoryHint: .isDirectory)
+        let requestedTranscript = tempDir.appending(path: "requested-session.jsonl")
+        let newTranscript = tempDir.appending(path: "new-session.jsonl")
+        let database = codexHome.appending(path: "state_5.sqlite")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        try Data().write(to: requestedTranscript)
+        try createThreadDatabase(
+            at: database,
+            rolloutPath: requestedTranscript.path,
+            model: "requested-model",
+            createdAtMs: Int64(Date().timeIntervalSince1970 * 1000))
+        let codex = bin.appending(path: "codex")
+        try "#!/bin/sh\nprintf '%s\\n' 'codex-cli 0.162.1'\n"
+            .write(to: codex, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: codex.path)
+
+        let settings = AppSettings()
+        settings.preferredShell = "/bin/sh"
+        settings.agentControlInjectionPolicy = .never
+        let tab = Tab(name: "repo", directory: tempDir)
+        let pane = Pane(name: "codex-pane", tab: tab, harness: .codex, appSettings: settings)
+        let requestedSessionID = "thread-abcdef1234567890"
+        let rejectedSessionID = "thread-rejected123456789"
+        let newSessionID = "thread-new9876543210fedcba"
+        pane.codexSessionID = requestedSessionID
+        pane.codexTranscriptPath = requestedTranscript.path
+        pane.agentControlInjectionEnabled = false
+        pane.extraArgs = ["--model", "gpt-5.1"]
+        pane.extraEnvVars = [
+            "CODEX_HOME": codexHome.path,
+            "PATH": "\(bin.path):\(ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")",
+        ]
+        let originalController = TerminalController()
+        originalController.pendingCommandArgs = ["codex"]
+        pane.installTerminalController(originalController)
+        tab.panes.append(pane)
+        let appState = AppState()
+        appState.tabs.append(tab)
+        defer {
+            pane.terminalController?.terminate()
+            pane.removeStatusLineMonitor()
+        }
+
+        tab.refreshPane(pane, appSettings: settings)
+        pane.bindNotifications(appState: appState, isPriority: false)
+
+        let monitor = try XCTUnwrap(pane.statusLineMonitor)
+        XCTAssertEqual(monitor.codexAdapter, .current(version: "0.162.1"))
+        let rejected = expectation(description: "first mismatching hook is reported")
+        let confirmed = expectation(description: "matching hook confirms the saved identity")
+        let switched = expectation(description: "foreground switch binds the new identity")
+        let previousCallback = monitor.onCodexSessionBound
+        monitor.onCodexSessionBound = { id, path in
+            previousCallback?(id, path)
+            if id == rejectedSessionID { rejected.fulfill() }
+            if id == requestedSessionID { confirmed.fulfill() }
+            if id == newSessionID { switched.fulfill() }
+        }
+        let queue = URL(filePath: monitor.codexHookQueueFilePath)
+        try appendQueueRecord(
+            to: queue,
+            paneID: pane.id,
+            tabID: tab.id,
+            generation: monitor.codexLaunchGeneration,
+            sessionID: rejectedSessionID,
+            transcriptPath: requestedTranscript.path)
+        await fulfillment(of: [rejected], timeout: 2)
+        let rejectedInvariantDeadline = Date().addingTimeInterval(2)
+        while InvariantReporter.shared.violationsForTesting.isEmpty, Date() < rejectedInvariantDeadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertEqual(pane.codexSessionID, requestedSessionID)
+        XCTAssertEqual(pane.codexLaunchResumeSessionID, requestedSessionID)
+        XCTAssertEqual(InvariantReporter.shared.violationsForTesting.count, 1)
+
+        try appendQueueRecord(
+            to: queue,
+            paneID: pane.id,
+            tabID: tab.id,
+            generation: monitor.codexLaunchGeneration,
+            sessionID: requestedSessionID,
+            transcriptPath: requestedTranscript.path)
+        await fulfillment(of: [confirmed], timeout: 2)
+        let confirmationAppliedDeadline = Date().addingTimeInterval(2)
+        while pane.codexLaunchResumeSessionID != nil, Date() < confirmationAppliedDeadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertEqual(pane.codexSessionID, requestedSessionID)
+        XCTAssertNil(pane.codexLaunchResumeSessionID)
+
+        try codexTokenLine(model: "new-session-model", input: 90, output: 15, contextTokens: 45, window: 100)
+            .appending("\n")
+            .write(to: newTranscript, atomically: true, encoding: .utf8)
+        try appendQueueRecord(
+            to: queue,
+            paneID: pane.id,
+            tabID: tab.id,
+            generation: monitor.codexLaunchGeneration,
+            sessionID: newSessionID,
+            transcriptPath: newTranscript.path,
+            hookEventName: "UserPromptSubmit")
+        await fulfillment(of: [switched], timeout: 2)
+        let paneBindingDeadline = Date().addingTimeInterval(2)
+        while pane.codexSessionID != newSessionID, Date() < paneBindingDeadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let freshFactsDeadline = Date().addingTimeInterval(2)
+        while monitor.currentData?.model?.id != "new-session-model", Date() < freshFactsDeadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertEqual(pane.codexSessionID, newSessionID)
+        XCTAssertEqual(pane.codexTranscriptPath, newTranscript.path)
+        XCTAssertEqual(monitor.currentData?.model?.id, "new-session-model")
+        XCTAssertEqual(InvariantReporter.shared.violationsForTesting.count, 1)
+
+        try executeSQL(
+            "INSERT INTO threads VALUES ('\(newSessionID)', '\(tempDir.path)', '\(newTranscript.path)', 'new-session-model', 'codex-cli 0.136.0', 105, 'main', 1, 1, 0);",
+            at: database)
+        XCTAssertEqual(
+            CodexContinuationVerifier.check(
+                sessionID: newSessionID,
+                transcriptPath: newTranscript.path,
+                shell: "/bin/sh",
+                workingDirectory: tempDir.path,
+                environment: ["CODEX_HOME": codexHome.path]),
+            .available)
+        tab.refreshPane(pane, appSettings: settings)
+        let currentController = pane.terminalController
+        let refreshedCommand = try XCTUnwrap(
+            currentController?.pendingCommandArgs,
+            "refresh command missing; recovery=\(String(describing: pane.codexContinuationRecovery)), setup=\(String(describing: pane.setupState)), session=\(String(describing: pane.codexSessionID)), launchResume=\(String(describing: pane.codexLaunchResumeSessionID)), previousCommand=\(String(describing: originalController.pendingCommandArgs)), extraArgs=\(pane.extraArgs), pendingShell=\(String(describing: currentController?.pendingShell)), pendingDirectory=\(String(describing: currentController?.pendingDirectory)), codeHome=\(String(describing: currentController?.pendingEnvironment?.first(where: { $0.hasPrefix("CODEX_HOME=") })))"
+        )
+        XCTAssertTrue(
+            refreshedCommand.contains("resume"),
+            "refresh omitted resume; command=\(refreshedCommand), recovery=\(String(describing: pane.codexContinuationRecovery)), setup=\(String(describing: pane.setupState)), session=\(String(describing: pane.codexSessionID)), launchResume=\(String(describing: pane.codexLaunchResumeSessionID)), extraArgs=\(pane.extraArgs)"
+        )
+        let resumeIndex = try XCTUnwrap(refreshedCommand.firstIndex(of: "resume"))
+        XCTAssertEqual(refreshedCommand.filter { $0 == "resume" }.count, 1)
+        XCTAssertEqual(refreshedCommand[resumeIndex + 1], newSessionID)
+        XCTAssertEqual(pane.extraArgs, ["--model", "gpt-5.1"])
+        XCTAssertEqual(pane.codexLaunchResumeSessionID, newSessionID)
+
+        let sessionURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: supportSubdirectory)
+            .appending(path: "sessions.json")
+        let persisted = try JSONDecoder().decode(PersistedSession.self, from: Data(contentsOf: sessionURL))
+        XCTAssertEqual(persisted.tabs.first?.panes.first?.codexSessionID, newSessionID)
+        XCTAssertEqual(persisted.tabs.first?.panes.first?.codexTranscriptPath, newTranscript.path)
+
+        let events = TracingService.shared.recordedEventsForTesting
+        let preflight = try XCTUnwrap(
+            events.first { $0.name == "statusline.codex.continuation.preflight" })
+        let rejectedBinding = try XCTUnwrap(
+            events.first { $0.name == "statusline.codex.continuation.binding_rejected" })
+        XCTAssertEqual(
+            preflight.attributes["requested_session_id_prefix"], String(requestedSessionID.prefix(12)))
+        XCTAssertEqual(preflight.attributes["result"], "available")
+        XCTAssertEqual(
+            rejectedBinding.attributes["requested_session_id_prefix"], String(requestedSessionID.prefix(12)))
+        XCTAssertEqual(
+            rejectedBinding.attributes["bound_session_id_prefix"], String(rejectedSessionID.prefix(12)))
+        XCTAssertTrue(events.contains { $0.name == "statusline.codex.continuation.binding_confirmed" })
+        XCTAssertTrue(
+            events.contains {
+                $0.name == "statusline.codex.binding.changed"
+                    && $0.attributes["session_id_prefix"] == String(newSessionID.prefix(12))
+            })
+        XCTAssertTrue(events.contains { $0.name == "statusline.codex.tailer_started" })
+        XCTAssertFalse(
+            events.contains { event in
+                event.attributes.values.contains {
+                    $0.contains(requestedSessionID) || $0.contains(rejectedSessionID) || $0.contains(newSessionID)
+                }
+            })
+    }
+
     @MainActor
     func testProviderBindsWhenHookRecordAppearsAfterStartupTimeout() throws {
         TracingService.shared.resetForTesting()
@@ -772,7 +1960,7 @@ extension CodexStatusProviderTests {
         XCTAssertTrue(events.contains { $0.name == "statusline.codex.hook_waiting" })
         XCTAssertTrue(
             events.contains {
-                $0.name == "statusline.codex.hook_bound"
+                $0.name == "statusline.codex.binding.changed"
                     && $0.attributes["late_bound"] == "true"
                     && $0.attributes["hook_event_name"] == "UserPromptSubmit"
             })
@@ -833,13 +2021,1278 @@ extension CodexStatusProviderTests {
             })
         XCTAssertTrue(
             events.contains {
-                $0.name == "statusline.codex.hook_bound"
+                $0.name == "statusline.codex.binding.changed"
                     && $0.attributes["hook_event_name"] == "Stop"
             })
     }
 }
 
 extension CodexStatusProviderTests {
+    @MainActor
+    func testCurrentProviderEmitsValidatedTurnEventsForCompletionCandidate() throws {
+        let queueURL = tempDir.appending(path: "turn-events.jsonl")
+        let context = makeContext(
+            processStartTime: Date(),
+            queuePath: queueURL.path,
+            launchGeneration: "turn-events-generation",
+            adapter: .current(version: "0.162.1"))
+        let records = [
+            ("SessionStart", Optional<String>.none),
+            ("UserPromptSubmit", Optional("turn-current")),
+            ("Stop", Optional("turn-current")),
+        ].map { event, turnID in
+            CodexHookQueueRecord(
+                paneID: context.paneID.uuidString,
+                tabID: context.tabID.uuidString,
+                launchGeneration: context.codexLaunchGeneration ?? "",
+                hookEventName: event,
+                sessionID: "session-current",
+                turnID: turnID,
+                requestID: nil,
+                timestamp: Date().timeIntervalSince1970,
+                source: "hook",
+                model: nil,
+                transcriptPath: nil,
+                result: nil)
+        }
+        let queueData = try records.reduce(into: Data()) { data, record in
+            data.append(try JSONEncoder().encode(record))
+            data.append(0x0A)
+        }
+        try queueData.write(to: queueURL)
+
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-turn-events.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.2)
+        let candidateReceived = expectation(description: "completion candidate follows the bound foreground start")
+        var events: [CodexProviderEvent] = []
+        provider.onCodexEvent = { event, _ in
+            events.append(event)
+            if event == .foregroundCompletionCandidate(turnID: "turn-current") {
+                candidateReceived.fulfill()
+            }
+        }
+
+        provider.start()
+        wait(for: [candidateReceived], timeout: 2)
+        provider.stop()
+
+        XCTAssertTrue(events.contains(.foregroundTurnStarted(turnID: "turn-current", isForeground: true)))
+        XCTAssertEqual(events.filter { $0 == .foregroundCompletionCandidate(turnID: "turn-current") }.count, 1)
+    }
+
+    @MainActor
+    func testCurrentAdapterReportsForegroundWorkingAndStoppedTransitions() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+
+        let queueURL = tempDir.appending(path: "activity-queue.jsonl")
+        let context = makeContext(
+            processStartTime: Date(),
+            queuePath: queueURL.path,
+            launchGeneration: "activity-generation",
+            adapter: .current(version: "0.162.1"))
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "activity-generation",
+            sessionID: "activity-session",
+            hookEventName: "UserPromptSubmit")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "activity-generation",
+            sessionID: "activity-session",
+            hookEventName: "Stop")
+
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-activity.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.2)
+        let transitionsObserved = expectation(description: "foreground start and stop are reported")
+        transitionsObserved.expectedFulfillmentCount = 2
+        let stateLock = NSLock()
+        var states: [Bool] = []
+        provider.onActivityChanged = { isWorking in
+            stateLock.withLock { states.append(isWorking) }
+            transitionsObserved.fulfill()
+        }
+
+        provider.start()
+        wait(for: [transitionsObserved], timeout: 2)
+        provider.stop()
+
+        XCTAssertEqual(stateLock.withLock { states }, [true, false])
+        let events = TracingService.shared.recordedEventsForTesting.filter {
+            $0.name == "statusline.codex.activity.changed"
+        }
+        XCTAssertEqual(events.map(\.attributes["state"]), ["working", "stopped"])
+        XCTAssertTrue(events.allSatisfy { $0.attributes["pane.id"] == context.paneID.uuidString })
+        XCTAssertTrue(events.allSatisfy { $0.attributes["tab.id"] == context.tabID.uuidString })
+    }
+
+    @MainActor
+    func testQuestionAttentionClearsSynchronouslyWhenRefreshReplacesMonitor() async throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        let supportSubdirectory = "codex-question-refresh-\(UUID().uuidString)"
+        PersistenceHelpers.overrideAppSupportSubdirectory = supportSubdirectory
+        defer {
+            TracingService.shared.resetForTesting()
+            PersistenceHelpers.overrideAppSupportSubdirectory = nil
+            try? FileManager.default.removeItem(
+                at: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                    .appending(path: supportSubdirectory))
+        }
+
+        let transcript = tempDir.appending(path: "question-session.jsonl")
+        try
+            #"{"type":"response_item","payload":{"type":"function_call","name":"functions.request_user_input","call_id":"question-on-refresh","arguments":"private"}}"#
+            .appending("\n")
+            .write(to: transcript, atomically: true, encoding: .utf8)
+        let bin = tempDir.appending(path: "bin", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let codex = bin.appending(path: "codex")
+        try "#!/bin/sh\nprintf '%s\n' 'codex-cli 0.162.1'\n"
+            .write(to: codex, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: codex.path)
+        let settings = AppSettings()
+        settings.preferredShell = "/bin/sh"
+        settings.agentControlInjectionPolicy = .never
+        let tab = Tab(name: "question-refresh", directory: tempDir)
+        let pane = Pane(name: "codex-pane", tab: tab, harness: .codex, appSettings: settings)
+        pane.agentControlInjectionEnabled = false
+        pane.codexSessionID = "thread-question"
+        pane.codexTranscriptPath = transcript.path
+        pane.extraEnvVars = [
+            "CODEX_HOME": tempDir.appending(path: "codex-home").path,
+            "PATH": "\(bin.path):\(ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")",
+        ]
+        let originalController = TerminalController()
+        originalController.pendingCommandArgs = ["codex"]
+        originalController.pendingDirectory = tempDir.path
+        originalController.pendingShell = "/bin/sh"
+        pane.installTerminalController(originalController)
+        tab.panes.append(pane)
+        let unrelatedPane = Pane(name: "unrelated-pane", tab: tab, harness: .shell, appSettings: settings)
+        tab.panes.append(unrelatedPane)
+        let appState = AppState()
+        appState.tabs.append(tab)
+        pane.bindNotifications(appState: appState, isPriority: false)
+        let originalMonitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: tempDir.path,
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"),
+            codexShell: "/bin/sh",
+            codexEnvironment: ["CODEX_HOME": pane.extraEnvVars["CODEX_HOME"]!],
+            codexInitialSessionID: "thread-question",
+            codexInitialTranscriptPath: transcript.path)
+        pane.installStatusLineMonitor(originalMonitor)
+        appState.addNotification(
+            paneID: unrelatedPane.id,
+            paneName: unrelatedPane.name,
+            tabID: tab.id,
+            tabName: tab.name,
+            isPriority: false,
+            event: .rawBell)
+        let questionDeadline = Date().addingTimeInterval(2)
+        while !appState.notifications.contains(where: { $0.paneID == pane.id && $0.kind == .codexQuestion }),
+            Date() < questionDeadline
+        {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertTrue(appState.notifications.contains { $0.paneID == pane.id && $0.kind == .codexQuestion })
+        XCTAssertTrue(
+            TracingService.shared.recordedEventsForTesting.contains {
+                $0.name == "statusline.codex.question.attention"
+                    && $0.attributes["result"] == "requested"
+            })
+
+        tab.refreshPane(
+            pane,
+            extraArgs: pane.extraArgs,
+            harness: .codex,
+            extraEnvVars: pane.extraEnvVars,
+            appSettings: settings)
+
+        XCTAssertFalse(pane.statusLineMonitor === originalMonitor)
+        XCTAssertFalse(appState.notifications.contains { $0.paneID == pane.id && $0.kind == .codexQuestion })
+        XCTAssertTrue(appState.notifications.contains { $0.paneID == unrelatedPane.id && $0.kind == .terminalBell })
+        XCTAssertNil(pane.codexSessionID)
+        XCTAssertNotNil(pane.statusLineMonitor)
+
+        pane.removeStatusLineMonitor()
+        pane.terminalController?.terminate()
+    }
+
+    @MainActor
+    func testMonitorAndPaneApplySessionBatchInChronologicalOrder() async throws {
+        let supportSubdirectory = "codex-ordered-bindings-\(UUID().uuidString)"
+        PersistenceHelpers.overrideAppSupportSubdirectory = supportSubdirectory
+        defer {
+            PersistenceHelpers.overrideAppSupportSubdirectory = nil
+            try? FileManager.default.removeItem(
+                at: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                    .appending(path: supportSubdirectory))
+        }
+
+        let settings = AppSettings()
+        settings.agentControlInjectionPolicy = .never
+        let tab = Tab(name: "ordered-bindings", directory: tempDir)
+        let pane = Pane(name: "codex-pane", tab: tab, harness: .codex, appSettings: settings)
+        pane.agentControlInjectionEnabled = false
+        pane.codexSessionID = "thread-a"
+        pane.codexLaunchResumeSessionID = "thread-a"
+        pane.codexTranscriptPath = tempDir.appending(path: "thread-a.jsonl").path
+        tab.panes.append(pane)
+        let appState = AppState()
+        appState.tabs.append(tab)
+        let monitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: tempDir.path,
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"),
+            codexInitialSessionID: "thread-a",
+            codexInitialTranscriptPath: pane.codexTranscriptPath)
+        let queueURL = URL(filePath: monitor.codexHookQueueFilePath)
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: pane.id,
+            tabID: tab.id,
+            generation: monitor.codexLaunchGeneration,
+            sessionID: "thread-a",
+            transcriptPath: pane.codexTranscriptPath,
+            hookEventName: "UserPromptSubmit",
+            turnID: "turn-a")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: pane.id,
+            tabID: tab.id,
+            generation: monitor.codexLaunchGeneration,
+            sessionID: "thread-b",
+            transcriptPath: tempDir.appending(path: "thread-b.jsonl").path,
+            hookEventName: "SessionStart")
+        pane.installStatusLineMonitor(monitor)
+        pane.bindNotifications(appState: appState, isPriority: false)
+        let bindingApplied = expectation(description: "session B and its activity reach the pane")
+        let previousCallback = monitor.onCodexSessionBound
+        var boundSessions: [String] = []
+        monitor.onCodexSessionBound = { id, transcriptPath in
+            previousCallback?(id, transcriptPath)
+            boundSessions.append(id)
+            if id == "thread-b", pane.codexSessionID == "thread-b" {
+                bindingApplied.fulfill()
+            }
+        }
+
+        defer {
+            pane.removeStatusLineMonitor()
+        }
+        await fulfillment(of: [bindingApplied], timeout: 2)
+
+        XCTAssertEqual(boundSessions, ["thread-a", "thread-b"])
+        XCTAssertEqual(pane.codexSessionID, "thread-b")
+        XCTAssertEqual(pane.codexTranscriptPath, tempDir.appending(path: "thread-b.jsonl").path)
+        XCTAssertNil(pane.codexLaunchResumeSessionID)
+        XCTAssertNil(pane.codexContinuationRecovery)
+        XCTAssertFalse(monitor.isCodexWorking)
+
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: pane.id,
+            tabID: tab.id,
+            generation: monitor.codexLaunchGeneration,
+            sessionID: "thread-b",
+            transcriptPath: tempDir.appending(path: "thread-b.jsonl").path,
+            hookEventName: "UserPromptSubmit",
+            turnID: "turn-b")
+        let activityDeadline = Date().addingTimeInterval(2)
+        while !monitor.isCodexWorking, Date() < activityDeadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertTrue(monitor.isCodexWorking)
+        XCTAssertEqual(pane.codexSessionID, "thread-b")
+    }
+
+    @MainActor
+    func testUnconfirmedContinuationDropsWrongSessionEffectsBeforeOrderedSwitch() throws {
+        let queueURL = tempDir.appending(path: "initial-binding-events.jsonl")
+        let context = makeContext(
+            processStartTime: Date(),
+            queuePath: queueURL.path,
+            launchGeneration: "initial-binding-generation",
+            adapter: .current(version: "0.162.1"),
+            initialSessionID: "thread-requested",
+            initialTranscriptPath: tempDir.appending(path: "requested.jsonl").path)
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "initial-binding-generation",
+            sessionID: "thread-wrong",
+            hookEventName: "UserPromptSubmit",
+            turnID: "turn-wrong")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "initial-binding-generation",
+            sessionID: "thread-wrong",
+            hookEventName: "Stop",
+            turnID: "turn-wrong")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "initial-binding-generation",
+            sessionID: "thread-wrong",
+            hookEventName: "PermissionRequest")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "initial-binding-generation",
+            sessionID: "thread-requested",
+            transcriptPath: context.codexInitialTranscriptPath,
+            hookEventName: "SessionStart")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "initial-binding-generation",
+            sessionID: "thread-foreground",
+            hookEventName: "UserPromptSubmit",
+            turnID: "turn-foreground")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "initial-binding-generation",
+            sessionID: "thread-foreground",
+            hookEventName: "Stop",
+            turnID: "turn-foreground")
+        try appendQueueRecord(
+            to: queueURL,
+            paneID: context.paneID,
+            tabID: context.tabID,
+            generation: "initial-binding-generation",
+            sessionID: "thread-foreground",
+            hookEventName: "PermissionRequest")
+
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-initial-binding.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.2)
+        let completionReceived = expectation(description: "confirmed foreground stop is processed")
+        let permissionReceived = expectation(description: "confirmed foreground permission is processed")
+        let activityReceived = expectation(description: "only confirmed foreground activity is processed")
+        activityReceived.expectedFulfillmentCount = 2
+        var hookRecords: [CodexHookQueueRecord] = []
+        var providerEvents: [CodexProviderEvent] = []
+        var attentionEvents: [PaneAttentionEvent] = []
+        var activityStates: [Bool] = []
+        var rejectedBindings: [String] = []
+        provider.onHookRecords = { hookRecords.append(contentsOf: $0) }
+        provider.onSessionBound = { id, _ in rejectedBindings.append(id) }
+        provider.onCodexEvent = { event, _ in
+            providerEvents.append(event)
+            if event == .foregroundCompletionCandidate(turnID: "turn-foreground") {
+                completionReceived.fulfill()
+            }
+        }
+        provider.onAttention = { event in
+            attentionEvents.append(event)
+            permissionReceived.fulfill()
+        }
+        provider.onActivityChanged = { working in
+            activityStates.append(working)
+            activityReceived.fulfill()
+        }
+
+        provider.start()
+        wait(for: [completionReceived, permissionReceived, activityReceived], timeout: 2)
+        provider.stop()
+
+        XCTAssertEqual(rejectedBindings, ["thread-wrong", "thread-requested", "thread-foreground"])
+        XCTAssertEqual(
+            hookRecords.map(\.hookEventName), ["SessionStart", "UserPromptSubmit", "Stop", "PermissionRequest"])
+        XCTAssertEqual(
+            providerEvents,
+            [
+                .foregroundTurnStarted(turnID: "turn-foreground", isForeground: true),
+                .foregroundCompletionCandidate(turnID: "turn-foreground"),
+            ])
+        XCTAssertEqual(attentionEvents, [.codexPermissionRequest])
+        XCTAssertEqual(activityStates, [true, false])
+    }
+
+    @MainActor
+    func testDelegatedHookRecordsDoNotBindForegroundSessionOrActivity() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+        let queueURL = tempDir.appending(path: "delegated-hooks.jsonl")
+        let context = makeContext(
+            processStartTime: Date(),
+            queuePath: queueURL.path,
+            launchGeneration: "delegated-generation",
+            adapter: .current(version: "0.162.1"))
+        for event in ["SessionStart", "UserPromptSubmit", "Stop"] {
+            try appendQueueRecord(
+                to: queueURL,
+                paneID: context.paneID,
+                tabID: context.tabID,
+                generation: "delegated-generation",
+                sessionID: "delegated-session",
+                hookEventName: event,
+                source: "subagent")
+        }
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-delegated.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.2)
+        var boundSessions: [String] = []
+        var activityChanges: [Bool] = []
+        provider.onSessionBound = { sessionID, _ in boundSessions.append(sessionID) }
+        provider.onActivityChanged = { activityChanges.append($0) }
+
+        provider.start()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.12))
+        provider.stop()
+
+        XCTAssertTrue(boundSessions.isEmpty)
+        XCTAssertTrue(activityChanges.isEmpty)
+        XCTAssertTrue(provider.pendingHookRecords.isEmpty)
+        XCTAssertTrue(
+            TracingService.shared.recordedEventsForTesting.contains {
+                $0.name == "statusline.codex.hook_queue.record_ignored"
+                    && $0.attributes["reason"] == "delegated_source"
+            })
+    }
+
+    @MainActor
+    func testInterruptStopsCurrentAdapterAndLegacyAdapterIgnoresIt() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+
+        let currentQueue = tempDir.appending(path: "current-interrupt-queue.jsonl")
+        let legacyQueue = tempDir.appending(path: "legacy-interrupt-queue.jsonl")
+        let currentContext = makeContext(
+            processStartTime: Date(),
+            queuePath: currentQueue.path,
+            launchGeneration: "current-interrupt-generation",
+            adapter: .current(version: "0.162.1"))
+        let legacyContext = makeContext(
+            processStartTime: Date(),
+            queuePath: legacyQueue.path,
+            launchGeneration: "legacy-interrupt-generation",
+            adapter: .legacy(version: "0.136.4"))
+        try appendQueueRecord(
+            to: currentQueue,
+            paneID: currentContext.paneID,
+            tabID: currentContext.tabID,
+            generation: "current-interrupt-generation",
+            sessionID: "current-session",
+            hookEventName: "Interrupt")
+        try appendQueueRecord(
+            to: legacyQueue,
+            paneID: legacyContext.paneID,
+            tabID: legacyContext.tabID,
+            generation: "legacy-interrupt-generation",
+            sessionID: "legacy-session",
+            hookEventName: "Interrupt")
+
+        let currentProvider = CodexStatusProvider(
+            context: currentContext,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-current.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.2)
+        let legacyProvider = CodexStatusProvider(
+            context: legacyContext,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-legacy.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.2)
+        let currentInterrupted = expectation(description: "current adapter reports interruption as stopped")
+        let legacyIgnoredInterrupt = expectation(description: "legacy adapter has no interruption lifecycle event")
+        legacyIgnoredInterrupt.isInverted = true
+        currentProvider.onActivityChanged = { isWorking in
+            XCTAssertFalse(isWorking)
+            currentInterrupted.fulfill()
+        }
+        legacyProvider.onActivityChanged = { _ in legacyIgnoredInterrupt.fulfill() }
+
+        currentProvider.start()
+        legacyProvider.start()
+        wait(for: [currentInterrupted, legacyIgnoredInterrupt], timeout: 0.4)
+        currentProvider.stop()
+        legacyProvider.stop()
+
+        XCTAssertTrue(
+            TracingService.shared.recordedEventsForTesting.contains {
+                $0.name == "statusline.codex.hook_queue.record_ignored"
+                    && $0.attributes["hook_event_name"] == "Interrupt"
+            })
+    }
+
+    @MainActor
+    func testHookWriterFailureIsReportedWithOnlyBoundedCode() throws {
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer { TracingService.shared.resetForTesting() }
+        let diagnosticURL = tempDir.appending(path: "hook-writer-diagnostic.txt")
+        let queueURL = tempDir.appending(path: "diagnostic-queue.jsonl")
+        let context = makeContext(
+            processStartTime: Date(),
+            queuePath: queueURL.path,
+            diagnosticPath: diagnosticURL.path,
+            launchGeneration: "diagnostic-generation",
+            adapter: .current(version: "0.162.1"))
+        let record = CodexHookQueueRecord(
+            paneID: context.paneID.uuidString,
+            tabID: context.tabID.uuidString,
+            launchGeneration: "diagnostic-generation",
+            hookEventName: "SessionStart",
+            sessionID: "diagnostic-session",
+            turnID: nil,
+            requestID: nil,
+            timestamp: 1,
+            source: "hook",
+            model: nil,
+            transcriptPath: nil,
+            result: nil)
+        var queueData = try JSONEncoder().encode(record)
+        queueData.append(UInt8(ascii: "\n"))
+        try queueData.write(to: queueURL)
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: tempDir.appending(path: "missing-diagnostic.sqlite")),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.2)
+        let hookObserved = expectation(description: "session start is delivered before the failure")
+        let traceCheck = expectation(description: "post-bind writer failure becomes a bounded provider diagnostic")
+        provider.onHookRecords = { _ in
+            try? "failed|unknown|queue_lock_timeout\n".write(to: diagnosticURL, atomically: true, encoding: .utf8)
+            hookObserved.fulfill()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { traceCheck.fulfill() }
+
+        provider.start()
+        wait(for: [hookObserved, traceCheck], timeout: 2)
+        provider.stop()
+
+        let failure = TracingService.shared.recordedEventsForTesting.first {
+            $0.name == "statusline.codex.hook_queue.write_failed"
+        }
+        XCTAssertEqual(failure?.attributes["result"], "queue_lock_timeout")
+        XCTAssertFalse(String(describing: failure?.attributes ?? [:]).contains("SENSITIVE"))
+    }
+
+    @MainActor
+    func testProviderBindsLatestForegroundRecordFromStartupBurst() throws {
+        let rolloutA = tempDir.appending(path: "session-a.jsonl")
+        let rolloutB = tempDir.appending(path: "session-b.jsonl")
+        try (codexTokenLine(model: "session-a-model", input: 10, output: 2, contextTokens: 12, window: 100) + "\n")
+            .write(to: rolloutA, atomically: true, encoding: .utf8)
+        try (codexTokenLine(model: "session-b-model", input: 20, output: 3, contextTokens: 23, window: 100) + "\n")
+            .write(to: rolloutB, atomically: true, encoding: .utf8)
+        let processStartMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let dbURL = tempDir.appending(path: "startup-burst.sqlite")
+        try executeSQL(
+            """
+            CREATE TABLE threads (
+              id TEXT, cwd TEXT, rollout_path TEXT, model TEXT, cli_version TEXT,
+              tokens_used INTEGER, git_branch TEXT, created_at_ms INTEGER,
+              updated_at_ms INTEGER, is_archived INTEGER
+            );
+            INSERT INTO threads VALUES ('session-a', '\(tempDir.path)', '\(rolloutA.path)', 'session-a-model', '0.162.1', 12, 'main', \(processStartMs), \(processStartMs), 0);
+            INSERT INTO threads VALUES ('session-b', '\(tempDir.path)', '\(rolloutB.path)', 'session-b-model', '0.162.1', 23, 'main', \(processStartMs), \(processStartMs), 0);
+            """,
+            at: dbURL)
+
+        let context = makeContext(
+            processStartTime: Date(),
+            queuePath: tempDir.appending(path: "startup-burst.jsonl").path,
+            launchGeneration: "generation-one",
+            adapter: .current(version: "0.162.1"))
+        let records = [
+            CodexHookQueueRecord(
+                paneID: context.paneID.uuidString,
+                tabID: context.tabID.uuidString,
+                launchGeneration: "generation-one",
+                hookEventName: "SessionStart",
+                sessionID: "session-a",
+                turnID: nil,
+                requestID: nil,
+                timestamp: 1,
+                source: "hook",
+                model: "session-a-model",
+                transcriptPath: rolloutA.path,
+                result: nil),
+            CodexHookQueueRecord(
+                paneID: context.paneID.uuidString,
+                tabID: context.tabID.uuidString,
+                launchGeneration: "generation-one",
+                hookEventName: "UserPromptSubmit",
+                sessionID: "session-b",
+                turnID: "turn-b",
+                requestID: nil,
+                timestamp: 2,
+                source: "hook",
+                model: "session-b-model",
+                transcriptPath: rolloutB.path,
+                result: nil),
+        ]
+        let supersededGenerationRecord = CodexHookQueueRecord(
+            paneID: context.paneID.uuidString,
+            tabID: context.tabID.uuidString,
+            launchGeneration: "superseded-generation",
+            hookEventName: "UserPromptSubmit",
+            sessionID: "stale-session",
+            turnID: nil,
+            requestID: nil,
+            timestamp: 0,
+            source: "hook",
+            model: "stale-model",
+            transcriptPath: nil,
+            result: nil)
+        let queueRecords = [supersededGenerationRecord] + records
+        let queueData = try queueRecords.reduce(into: Data()) { data, record in
+            data.append(try JSONEncoder().encode(record))
+            data.append(0x0A)
+        }
+        try queueData.write(to: URL(filePath: context.codexHookQueuePath!))
+
+        let provider = CodexStatusProvider(
+            context: context,
+            stateStore: CodexStateStore(databaseURL: dbURL),
+            startupRetryInterval: 0.01,
+            startupTimeout: 0.5)
+        let expectation = XCTestExpectation(description: "latest startup burst session binds")
+        provider.onUpdate = { data in
+            if data.model?.id == "session-b-model", data.contextWindow?.totalInputTokens == 20 {
+                expectation.fulfill()
+            }
+        }
+
+        provider.start()
+        wait(for: [expectation], timeout: 2)
+        provider.stop()
+
+        XCTAssertEqual(provider.pendingHookRecords, records)
+        XCTAssertEqual(provider.pendingHookRecords.last?.sessionID, "session-b")
+    }
+
+    @MainActor
+    func testCodexLaunchPreflightRejectsSessionOnlyPresentInMonitorHome() throws {
+        let codexHome = tempDir.appending(path: "codex-home-exported", directoryHint: .isDirectory)
+        let decoyHome = tempDir.appending(path: "codex-home-controller", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: decoyHome, withIntermediateDirectories: true)
+        let exactRollout = tempDir.appending(path: "exact-rollout.jsonl")
+        try Data().write(to: exactRollout)
+        try executeSQL(
+            """
+            CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT, model TEXT);
+            INSERT INTO threads VALUES ('session-exact', '/repo', '\(exactRollout.path)', 'gpt-5.1');
+            INSERT INTO threads VALUES ('session-newest', '/repo', '/repo/newest.jsonl', 'gpt-5.2');
+            """,
+            at: codexHome.appending(path: "state_5.sqlite"))
+        try executeSQL(
+            """
+            CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT, model TEXT);
+            INSERT INTO threads VALUES ('session-decoy', '/repo', '/repo/exact.jsonl', 'gpt-decoy');
+            """,
+            at: decoyHome.appending(path: "state_5.sqlite"))
+        let tab = Tab(name: "repo", directory: URL(filePath: "/repo"))
+        let pane = Pane(name: "codex", tab: tab, harness: .codex)
+        pane.codexTranscriptPath = exactRollout.path
+        let monitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: "/repo",
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"),
+            codexEnvironment: ["CODEX_HOME": codexHome.path])
+        let controller = TerminalController()
+        controller.pendingEnvironment = ["CODEX_HOME=\(decoyHome.path)"]
+        let selected = tab.configureCodexLaunch(
+            for: pane,
+            monitor: monitor,
+            controller: controller,
+            extraArgs: ["--model", "gpt-5.1"],
+            appSettings: nil,
+            resumeSessionID: "session-exact")
+
+        XCTAssertFalse(selected)
+        XCTAssertNil(controller.pendingCommandArgs)
+        XCTAssertEqual(pane.codexContinuationRecovery, .exactSessionUnavailable)
+    }
+
+    @MainActor
+    func testCodexContinuationPreflightUsesExportedHomeWhenCodexHomeIsUnset() throws {
+        let shellHome = tempDir.appending(path: "codex-shell-home", directoryHint: .isDirectory)
+        let codexHome = shellHome.appending(path: ".codex", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        let homeRollout = tempDir.appending(path: "home-rollout.jsonl")
+        try Data().write(to: homeRollout)
+        try executeSQL(
+            """
+            CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT);
+            INSERT INTO threads VALUES ('home-session', '/repo', '\(homeRollout.path)');
+            """,
+            at: codexHome.appending(path: "state_5.sqlite"))
+        let tab = Tab(name: "repo", directory: URL(filePath: "/repo"))
+        let pane = Pane(name: "codex", tab: tab, harness: .codex)
+        pane.codexTranscriptPath = homeRollout.path
+        let monitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: "/repo",
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"),
+            codexEnvironment: ["HOME": shellHome.path])
+        let controller = TerminalController()
+        controller.pendingEnvironment = ["HOME=\(shellHome.path)"]
+
+        let selected = tab.configureCodexLaunch(
+            for: pane,
+            monitor: monitor,
+            controller: controller,
+            extraArgs: [],
+            appSettings: nil,
+            resumeSessionID: "home-session")
+
+        XCTAssertTrue(selected)
+        XCTAssertTrue(controller.pendingEnvironment?.contains("HOME=\(shellHome.path)") == true)
+        XCTAssertEqual(
+            Array(controller.pendingCommandArgs?.suffix(2) ?? []), ["resume", "home-session"])
+    }
+
+    @MainActor
+    func testUnavailableCodexHomePreflightPreservesExistingIdentityAndController() throws {
+        let decoyHome = tempDir.appending(path: "codex-home-unavailable-decoy", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: decoyHome, withIntermediateDirectories: true)
+        try executeSQL(
+            """
+            CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT);
+            INSERT INTO threads VALUES ('requested-session', '/repo', '/repo/requested.jsonl');
+            """,
+            at: decoyHome.appending(path: "state_5.sqlite"))
+        let tab = Tab(name: "repo", directory: URL(filePath: "/repo"))
+        let pane = Pane(name: "codex", tab: tab, harness: .codex)
+        pane.codexSessionID = "requested-session"
+        pane.codexTranscriptPath = "/repo/requested.jsonl"
+        pane.codexLaunchResumeSessionID = "requested-session"
+        let oldController = TerminalController()
+        oldController.pendingCommandArgs = ["codex", "existing-conversation"]
+        pane.installTerminalController(oldController)
+        let oldMonitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: "/repo",
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"))
+        pane.installStatusLineMonitor(oldMonitor)
+        defer {
+            pane.removeStatusLineMonitor()
+            pane.terminalController?.terminate()
+        }
+        let monitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: "/repo",
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"))
+        let controller = TerminalController()
+        controller.pendingEnvironment = ["CODEX_HOME=\(decoyHome.path)"]
+
+        let selected = tab.configureCodexLaunch(
+            for: pane,
+            monitor: monitor,
+            controller: controller,
+            extraArgs: [],
+            appSettings: nil,
+            resumeSessionID: pane.codexSessionID)
+
+        XCTAssertFalse(selected)
+        XCTAssertTrue(pane.terminalController === oldController)
+        XCTAssertTrue(pane.statusLineMonitor === oldMonitor)
+        XCTAssertEqual(pane.codexSessionID, "requested-session")
+        XCTAssertEqual(pane.codexTranscriptPath, "/repo/requested.jsonl")
+        XCTAssertEqual(pane.codexLaunchResumeSessionID, "requested-session")
+        XCTAssertEqual(pane.codexContinuationRecovery, .exactSessionUnavailable)
+    }
+
+    @MainActor
+    func testExactCodexRelaunchBuildsFreshHookGeneration() throws {
+        let codexHome = tempDir.appending(path: "codex-home-generation", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        let exactRollout = tempDir.appending(path: "generation-rollout.jsonl")
+        try Data().write(to: exactRollout)
+        try executeSQL(
+            """
+            CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT);
+            INSERT INTO threads VALUES ('session-exact', '/repo', '\(exactRollout.path)');
+            """,
+            at: codexHome.appending(path: "state_5.sqlite"))
+        let tab = Tab(name: "repo", directory: URL(filePath: "/repo"))
+        let pane = Pane(name: "codex", tab: tab, harness: .codex)
+        pane.codexTranscriptPath = exactRollout.path
+        let firstMonitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: "/repo",
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"),
+            codexEnvironment: ["CODEX_HOME": codexHome.path])
+        let secondMonitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: "/repo",
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"),
+            codexEnvironment: ["CODEX_HOME": codexHome.path])
+        let firstController = TerminalController()
+        firstController.pendingEnvironment = ["CODEX_HOME=\(codexHome.path)"]
+        let secondController = TerminalController()
+        secondController.pendingEnvironment = ["CODEX_HOME=\(codexHome.path)"]
+
+        XCTAssertTrue(
+            tab.configureCodexLaunch(
+                for: pane,
+                monitor: firstMonitor,
+                controller: firstController,
+                extraArgs: ["--model", "gpt-5.1"],
+                appSettings: nil,
+                resumeSessionID: "session-exact"))
+        XCTAssertTrue(
+            tab.configureCodexLaunch(
+                for: pane,
+                monitor: secondMonitor,
+                controller: secondController,
+                extraArgs: ["--model", "gpt-5.1"],
+                appSettings: nil,
+                resumeSessionID: "session-exact"))
+
+        XCTAssertNotEqual(firstMonitor.codexLaunchGeneration, secondMonitor.codexLaunchGeneration)
+        XCTAssertEqual(
+            Array(firstController.pendingCommandArgs?.suffix(4) ?? []),
+            ["--model", "gpt-5.1", "resume", "session-exact"])
+        XCTAssertEqual(firstController.pendingCommandArgs, secondController.pendingCommandArgs)
+        XCTAssertTrue(
+            firstController.pendingEnvironment?.contains(
+                "AGENT_SESSION_MANAGER_CODEX_LAUNCH_GENERATION=\(firstMonitor.codexLaunchGeneration)") ?? false)
+        XCTAssertTrue(
+            secondController.pendingEnvironment?.contains(
+                "AGENT_SESSION_MANAGER_CODEX_LAUNCH_GENERATION=\(secondMonitor.codexLaunchGeneration)") ?? false)
+        XCTAssertNotEqual(firstMonitor.codexHookQueueFilePath, secondMonitor.codexHookQueueFilePath)
+    }
+
+    @MainActor
+    func testQuickRefreshResumesExactCodexSessionWithFreshHooks() throws {
+        let binDirectory = tempDir.appending(path: "codex-refresh-bin", directoryHint: .isDirectory)
+        let codexHome = tempDir.appending(path: "codex-refresh-home", directoryHint: .isDirectory)
+        let repository = tempDir.appending(path: "repo", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        let codexExecutable = binDirectory.appending(path: "codex")
+        try "#!/bin/sh\nprintf 'codex-cli 0.162.1\\n'\n"
+            .write(to: codexExecutable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: codexExecutable.path)
+        try "export PATH='\(binDirectory.path)':\"$PATH\"\n"
+            .write(to: tempDir.appending(path: ".bashrc"), atomically: true, encoding: .utf8)
+        let refreshRollout = repository.appending(path: "refresh.jsonl")
+        try Data().write(to: refreshRollout)
+        try executeSQL(
+            "CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT); INSERT INTO threads VALUES ('refresh-session', '\(repository.path)', '\(refreshRollout.path)');",
+            at: codexHome.appending(path: "state_5.sqlite"))
+
+        let tab = Tab(name: "repo", directory: repository)
+        let pane = Pane(
+            name: "codex", tab: tab, harness: .codex, agentControlInjectionEnabled: false)
+        pane.codexSessionID = "refresh-session"
+        pane.codexTranscriptPath = refreshRollout.path
+        pane.extraArgs = ["--model", "gpt-5.1"]
+        pane.extraEnvVars = ["HOME": tempDir.path, "CODEX_HOME": codexHome.path]
+        let oldMonitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: repository.path,
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"),
+            codexEnvironment: ["CODEX_HOME": codexHome.path])
+        pane.installStatusLineMonitor(oldMonitor)
+        let oldController = TerminalController()
+        oldController.pendingDirectory = repository.path
+        oldController.pendingShell = "/bin/bash"
+        oldController.pendingEnvironment = ["PATH=/usr/bin:/bin", "HOME=\(tempDir.path)"]
+        pane.installTerminalController(oldController)
+        tab.panes.append(pane)
+        defer {
+            pane.removeStatusLineMonitor()
+            pane.terminalController?.terminate()
+        }
+
+        tab.refreshPane(pane)
+
+        XCTAssertNil(pane.setupState)
+        let refreshedMonitor = try XCTUnwrap(pane.statusLineMonitor)
+        let arguments = try XCTUnwrap(pane.terminalController?.pendingCommandArgs)
+        let expectedEvents = CodexCompatibilityAdapter.select("0.162.1").hookEvents
+        let configuredHooks = arguments.compactMap { argument -> String? in
+            guard argument.hasPrefix("hooks.") else { return nil }
+            return String(argument.split(separator: "=", maxSplits: 1)[0])
+        }
+        XCTAssertEqual(Array(arguments.suffix(4)), ["--model", "gpt-5.1", "resume", "refresh-session"])
+        XCTAssertEqual(configuredHooks, expectedEvents.map { "hooks.\($0)" })
+        XCTAssertNotEqual(refreshedMonitor.codexHookScriptFilePath, oldMonitor.codexHookScriptFilePath)
+        XCTAssertNotEqual(refreshedMonitor.codexLaunchGeneration, oldMonitor.codexLaunchGeneration)
+        XCTAssertNotEqual(refreshedMonitor.codexHookQueueFilePath, oldMonitor.codexHookQueueFilePath)
+        XCTAssertTrue(
+            pane.terminalController?.pendingEnvironment?.contains(
+                "AGENT_SESSION_MANAGER_CODEX_LAUNCH_GENERATION=\(refreshedMonitor.codexLaunchGeneration)")
+                == true)
+    }
+
+    @MainActor
+    func testCodexRestartSeedsSavedTranscriptStatusBeforeHookRecord() throws {
+        let binDirectory = tempDir.appending(path: "codex-restart-bin", directoryHint: .isDirectory)
+        let codexHome = tempDir.appending(path: "codex-restart-home", directoryHint: .isDirectory)
+        let repository = tempDir.appending(path: "restart-repo", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        let codexExecutable = binDirectory.appending(path: "codex")
+        try "#!/bin/sh\nprintf 'codex-cli 0.162.1\\n'\n"
+            .write(to: codexExecutable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: codexExecutable.path)
+        try "export PATH='\(binDirectory.path)':\"$PATH\"\n"
+            .write(to: tempDir.appending(path: ".bashrc"), atomically: true, encoding: .utf8)
+        let transcript = repository.appending(path: "restart.jsonl")
+        try codexTokenLine(model: "restart-model", input: 120, output: 30, contextTokens: 450, window: 950)
+            .appending("\n")
+            .write(to: transcript, atomically: true, encoding: .utf8)
+        try executeSQL(
+            "CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT); INSERT INTO threads VALUES ('restart-session', '\(repository.path)', '\(transcript.path)');",
+            at: codexHome.appending(path: "state_5.sqlite"))
+
+        let settings = AppSettings()
+        settings.preferredShell = "/bin/bash"
+        let tab = Tab(name: "repo", directory: repository)
+        let pane = Pane(
+            name: "codex", tab: tab, harness: .codex, agentControlInjectionEnabled: false,
+            appSettings: settings)
+        pane.codexSessionID = "restart-session"
+        pane.codexTranscriptPath = transcript.path
+        pane.extraEnvVars = ["HOME": tempDir.path, "CODEX_HOME": codexHome.path]
+        let oldMonitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: repository.path,
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"),
+            codexEnvironment: ["CODEX_HOME": codexHome.path])
+        pane.installStatusLineMonitor(oldMonitor)
+        let oldController = TerminalController()
+        oldController.pendingDirectory = repository.path
+        oldController.pendingShell = "/bin/bash"
+        oldController.pendingEnvironment = ["PATH=/usr/bin:/bin", "HOME=\(tempDir.path)"]
+        pane.installTerminalController(oldController)
+        tab.panes.append(pane)
+        defer {
+            pane.removeStatusLineMonitor()
+            pane.terminalController?.terminate()
+        }
+
+        tab.restartPane(pane)
+
+        let restartedMonitor = try XCTUnwrap(pane.statusLineMonitor)
+        XCTAssertFalse(restartedMonitor === oldMonitor)
+        XCTAssertEqual(
+            Array(pane.terminalController?.pendingCommandArgs?.suffix(2) ?? []), ["resume", "restart-session"])
+        let bound = expectation(description: "real matching hook confirms the saved session identity")
+        var boundCallbacks: [(String, String?)] = []
+        restartedMonitor.onCodexSessionBound = { id, path in
+            boundCallbacks.append((id, path))
+            if id == "restart-session", path == transcript.path {
+                bound.fulfill()
+            }
+        }
+        let deadline = Date().addingTimeInterval(2)
+        while restartedMonitor.currentData?.model?.id != "restart-model", Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
+        XCTAssertEqual(restartedMonitor.currentData?.model?.id, "restart-model")
+        XCTAssertEqual(restartedMonitor.currentData?.contextWindow?.totalInputTokens, 120)
+        XCTAssertEqual(restartedMonitor.currentData?.contextWindow?.totalOutputTokens, 30)
+        XCTAssertTrue(boundCallbacks.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: URL(filePath: restartedMonitor.codexHookQueueFilePath)).count, 0)
+
+        try appendQueueRecord(
+            to: URL(filePath: restartedMonitor.codexHookQueueFilePath),
+            paneID: pane.id,
+            tabID: tab.id,
+            generation: restartedMonitor.codexLaunchGeneration,
+            sessionID: "restart-session",
+            transcriptPath: transcript.path)
+        wait(for: [bound], timeout: 2)
+        XCTAssertEqual(boundCallbacks.map(\.0), ["restart-session"])
+        XCTAssertEqual(boundCallbacks.map(\.1), [transcript.path])
+    }
+
+    @MainActor
+    func testCodexContinuationPreflightRejectsTranscriptPathForDifferentSession() throws {
+        let codexHome = tempDir.appending(path: "codex-home-path-mismatch", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        try executeSQL(
+            """
+            CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT);
+            INSERT INTO threads VALUES ('different-session', '/repo', '/repo/requested.jsonl');
+            """,
+            at: codexHome.appending(path: "state_5.sqlite"))
+        let tab = Tab(name: "repo", directory: URL(filePath: "/repo"))
+        let pane = Pane(name: "codex", tab: tab, harness: .codex)
+        pane.codexSessionID = "requested-session"
+        pane.codexTranscriptPath = "/repo/requested.jsonl"
+        let oldController = TerminalController()
+        oldController.pendingCommandArgs = ["codex", "existing-conversation"]
+        pane.installTerminalController(oldController)
+        let monitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: "/repo",
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"),
+            codexEnvironment: ["CODEX_HOME": codexHome.path])
+        let controller = TerminalController()
+        controller.pendingEnvironment = ["CODEX_HOME=\(codexHome.path)"]
+        let selected = tab.configureCodexLaunch(
+            for: pane,
+            monitor: monitor,
+            controller: controller,
+            extraArgs: [],
+            appSettings: nil,
+            resumeSessionID: pane.codexSessionID)
+
+        XCTAssertFalse(selected)
+        XCTAssertTrue(pane.terminalController === oldController)
+        XCTAssertEqual(oldController.pendingCommandArgs, ["codex", "existing-conversation"])
+        XCTAssertEqual(pane.codexContinuationRecovery, .exactSessionUnavailable)
+    }
+
+    @MainActor
+    func testCodexContinuationRetryPreservesRequestedIdentityAndExistingTerminal() {
+        let tab = Tab(name: "repo", directory: URL(filePath: "/repo"))
+        let pane = Pane(name: "codex", tab: tab, harness: .codex, agentControlInjectionEnabled: false)
+        pane.codexSessionID = "retry-session"
+        pane.codexTranscriptPath = "/repo/retry.jsonl"
+        pane.codexContinuationRecovery = .exactSessionUnavailable
+        let oldController = TerminalController()
+        oldController.pendingDirectory = "/repo"
+        oldController.pendingCommandArgs = ["codex", "existing-conversation"]
+        pane.installTerminalController(oldController)
+        tab.panes.append(pane)
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer {
+            pane.removeStatusLineMonitor()
+            pane.terminalController?.terminate()
+            TracingService.shared.resetForTesting()
+        }
+
+        tab.restartPane(pane)
+
+        XCTAssertEqual(pane.codexSessionID, "retry-session")
+        XCTAssertEqual(pane.codexTranscriptPath, "/repo/retry.jsonl")
+        XCTAssertTrue(pane.terminalController === oldController)
+        XCTAssertEqual(pane.codexContinuationRecovery, .exactSessionUnavailable)
+    }
+
+    @MainActor
+    func testCodexStartNewRecoveryClearsIdentityAndBuildsFreshCommand() {
+        let tab = Tab(name: "repo", directory: URL(filePath: "/repo"))
+        let pane = Pane(name: "codex", tab: tab, harness: .codex, agentControlInjectionEnabled: false)
+        pane.extraArgs = ["--model", "gpt-5.1"]
+        pane.codexSessionID = "unavailable-session"
+        pane.codexTranscriptPath = "/repo/unavailable.jsonl"
+        pane.codexLaunchResumeSessionID = "unavailable-session"
+        pane.codexContinuationNotice = "No saved Codex conversation identity was available, so this pane started fresh."
+        pane.codexContinuationRecovery = .exactSessionUnavailable
+        let oldController = TerminalController()
+        oldController.pendingDirectory = "/repo"
+        oldController.pendingCommandArgs = ["codex", "resume", "unavailable-session"]
+        pane.installTerminalController(oldController)
+        tab.panes.append(pane)
+        TracingService.shared.resetForTesting()
+        TracingService.shared.enableTestCapture()
+        defer {
+            pane.removeStatusLineMonitor()
+            pane.terminalController?.terminate()
+            TracingService.shared.resetForTesting()
+        }
+
+        tab.refreshPane(
+            pane,
+            extraArgs: pane.extraArgs,
+            harness: .codex,
+            extraEnvVars: pane.extraEnvVars,
+            profileID: .some(pane.profileID))
+
+        XCTAssertNil(pane.codexSessionID)
+        XCTAssertNil(pane.codexTranscriptPath)
+        XCTAssertNil(pane.codexLaunchResumeSessionID)
+        XCTAssertNil(pane.codexContinuationNotice)
+        XCTAssertFalse(pane.terminalController === oldController)
+        XCTAssertFalse(pane.terminalController?.pendingCommandArgs?.contains("resume") ?? true)
+        XCTAssertEqual(pane.extraArgs, ["--model", "gpt-5.1"])
+        XCTAssertNil(pane.codexContinuationRecovery)
+    }
+
+    @MainActor
+    func testStartNewSetupFailurePreservesControllerAndPersistedConversationIdentity() throws {
+        let subdirectory = "codex-start-new-failure-\(UUID().uuidString)"
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: subdirectory)
+        let fakeBin = tempDir.appending(path: "bin", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: fakeBin, withIntermediateDirectories: true)
+        let fakeCodex = fakeBin.appending(path: "codex")
+        try "#!/bin/sh\nprintf 'codex-cli 0.162.1\\n'\n".write(to: fakeCodex, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeCodex.path)
+        let fakeShell = tempDir.appending(path: "shell")
+        try "#!/bin/sh\nPATH='\(fakeBin.path)'\nexport PATH\nexec /bin/sh -c \"$3\"\n"
+            .write(to: fakeShell, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeShell.path)
+        PersistenceHelpers.overrideAppSupportSubdirectory = subdirectory
+        let settings = AppSettings()
+        settings.preferredShell = fakeShell.path
+        let appState = AppState()
+        let tab = Tab(name: "repo", directory: URL(filePath: tempDir.path))
+        let pane = Pane(name: "codex", tab: tab, harness: .codex, agentControlInjectionEnabled: false)
+        pane.extraArgs = ["--ask-for-approval", "untrusted", "--custom", "retained"]
+        pane.codexSessionID = "saved-session"
+        pane.codexTranscriptPath = tempDir.appending(path: "saved-rollout.jsonl").path
+        pane.codexLaunchResumeSessionID = "saved-session"
+        pane.codexContinuationNotice = "No saved Codex conversation identity was available, so this pane started fresh."
+        let oldController = TerminalController()
+        oldController.pendingDirectory = tempDir.path
+        oldController.pendingCommandArgs = ["codex", "resume", "saved-session"]
+        pane.installTerminalController(oldController)
+        pane.bindNotifications(appState: appState, isPriority: false)
+        tab.panes.append(pane)
+        appState.tabs.append(tab)
+        XCTAssertTrue(SessionPersistence.save(appState: appState))
+        let sessionURL = appSupport.appending(path: "sessions.json")
+        let savedData = try Data(contentsOf: sessionURL)
+        defer {
+            pane.terminalController?.terminate()
+            pane.removeStatusLineMonitor()
+            PersistenceHelpers.overrideAppSupportSubdirectory = nil
+            try? FileManager.default.removeItem(at: appSupport)
+        }
+
+        tab.refreshPane(
+            pane,
+            extraArgs: pane.extraArgs,
+            harness: .codex,
+            extraEnvVars: pane.extraEnvVars,
+            profileID: .some(pane.profileID),
+            appSettings: settings)
+
+        XCTAssertTrue(pane.terminalController === oldController)
+        XCTAssertEqual(pane.codexSessionID, "saved-session")
+        XCTAssertEqual(pane.codexTranscriptPath, tempDir.appending(path: "saved-rollout.jsonl").path)
+        XCTAssertEqual(pane.codexLaunchResumeSessionID, "saved-session")
+        XCTAssertNotNil(pane.codexContinuationNotice)
+        XCTAssertEqual(try Data(contentsOf: sessionURL), savedData)
+        let persisted = try JSONDecoder().decode(PersistedSession.self, from: savedData)
+        XCTAssertEqual(persisted.tabs.first?.panes.first?.codexSessionID, "saved-session")
+        XCTAssertEqual(
+            persisted.tabs.first?.panes.first?.codexTranscriptPath,
+            tempDir.appending(path: "saved-rollout.jsonl").path)
+        guard case .failed(let error) = pane.setupState else {
+            XCTFail("Expected setup validation to reject the saved unsupported approval value")
+            return
+        }
+        XCTAssertTrue(error.contains("untrusted"))
+    }
+
+    @MainActor
+    func testMissingExactCodexConversationEntersRecoveryWithoutReplacingTerminal() throws {
+        let codexHome = tempDir.appending(path: "codex-home-missing", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        try executeSQL(
+            """
+            CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT);
+            INSERT INTO threads VALUES ('newest-session', '/repo', '/repo/newest.jsonl');
+            """,
+            at: codexHome.appending(path: "state_5.sqlite"))
+        let tab = Tab(name: "repo", directory: URL(filePath: "/repo"))
+        let pane = Pane(name: "codex", tab: tab, harness: .codex)
+        pane.codexSessionID = "missing-foreground"
+        pane.codexTranscriptPath = "/repo/missing.jsonl"
+        let oldController = TerminalController()
+        oldController.pendingCommandArgs = ["codex", "existing-conversation"]
+        pane.installTerminalController(oldController)
+        let monitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: "/repo",
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name,
+            codexAdapter: .current(version: "0.162.1"),
+            codexEnvironment: ["CODEX_HOME": codexHome.path])
+        let controller = TerminalController()
+        controller.pendingEnvironment = ["CODEX_HOME=\(codexHome.path)"]
+        let selected = tab.configureCodexLaunch(
+            for: pane,
+            monitor: monitor,
+            controller: controller,
+            extraArgs: [],
+            appSettings: nil,
+            resumeSessionID: pane.codexSessionID)
+
+        XCTAssertFalse(selected)
+        XCTAssertTrue(pane.terminalController === oldController)
+        XCTAssertEqual(oldController.pendingCommandArgs, ["codex", "existing-conversation"])
+        XCTAssertEqual(pane.codexContinuationRecovery, .exactSessionUnavailable)
+    }
+
     fileprivate func executeSQL(_ sql: String, at url: URL) throws {
         var db: OpaquePointer?
         XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
@@ -891,22 +3344,80 @@ extension CodexStatusProviderTests {
         )
     }
 
-    fileprivate func makeContext(processStartTime: Date, hookRecordPath: String? = nil) -> StatusProviderContext {
+    fileprivate func makeContext(
+        processStartTime: Date,
+        hookRecordPath: String? = nil,
+        queuePath: String? = nil,
+        diagnosticPath: String? = nil,
+        launchGeneration: String? = nil,
+        adapter: CodexCompatibilityAdapter? = nil,
+        codexShell: String? = nil,
+        initialSessionID: String? = nil,
+        initialTranscriptPath: String? = nil,
+        environment: [String: String] = [:],
+        workingDirectory: String? = nil,
+        paneID: UUID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+        tabID: UUID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+    ) -> StatusProviderContext {
         StatusProviderContext(
-            paneID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            paneID: paneID,
             paneName: "codex-pane",
-            tabID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+            tabID: tabID,
             tabName: "repo",
-            workingDirectory: tempDir.path,
+            workingDirectory: workingDirectory ?? tempDir.path,
             harness: .codex,
             processStartTime: processStartTime,
             launchArgs: [],
-            environment: [:],
+            environment: environment,
+            codexShell: codexShell,
             detectedHarnessVersion: "codex-cli 0.136.0",
             codexHookRecordPath: hookRecordPath ?? tempDir.appending(path: "hook-record.json").path,
             opencodePort: nil,
-            opencodeSessionID: nil
+            opencodeSessionID: nil,
+            codexHookQueuePath: queuePath,
+            codexHookDiagnosticPath: diagnosticPath,
+            codexLaunchGeneration: launchGeneration,
+            codexAdapter: adapter,
+            codexInitialSessionID: initialSessionID,
+            codexInitialTranscriptPath: initialTranscriptPath
         )
+    }
+
+    fileprivate func appendQueueRecord(
+        to url: URL,
+        paneID: UUID,
+        tabID: UUID,
+        generation: String,
+        sessionID: String,
+        transcriptPath: String? = nil,
+        model: String? = nil,
+        hookEventName: String = "SessionStart",
+        source: String = "hook",
+        turnID: String? = nil
+    ) throws {
+        let record = CodexHookQueueRecord(
+            paneID: paneID.uuidString,
+            tabID: tabID.uuidString,
+            launchGeneration: generation,
+            hookEventName: hookEventName,
+            sessionID: sessionID,
+            turnID: turnID,
+            requestID: nil,
+            timestamp: Date().timeIntervalSince1970,
+            source: source,
+            model: model,
+            transcriptPath: transcriptPath,
+            result: nil)
+        var data = try JSONEncoder().encode(record)
+        data.append(UInt8(ascii: "\n"))
+        if FileManager.default.fileExists(atPath: url.path) {
+            let handle = try FileHandle(forWritingTo: url)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+        } else {
+            try data.write(to: url)
+        }
     }
 
     fileprivate func writeHookRecord(
@@ -939,9 +3450,11 @@ extension CodexStatusProviderTests {
         contextTokens: Int,
         window: Int
     ) -> String {
-        """
-        {"type":"event_msg","payload":{"type":"token_count","model":"\(model)","total_token_usage":{"input_tokens":\(input),"output_tokens":\(output)},"last_token_usage":{"total_tokens":\(contextTokens)},"model_context_window":\(window)}}
-        """
-        .appending("\n")
+        let currentContext = 12_000 + contextTokens
+        let contextWindow = 12_000 + window
+        return """
+            {"type":"event_msg","payload":{"type":"token_count","model":"\(model)","total_token_usage":{"input_tokens":\(input),"output_tokens":\(output)},"last_token_usage":{"total_tokens":\(currentContext)},"model_context_window":\(contextWindow)}}
+            """
+            .appending("\n")
     }
 }

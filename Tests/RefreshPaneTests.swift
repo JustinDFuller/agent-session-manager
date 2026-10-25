@@ -1,3 +1,5 @@
+import Foundation
+import SQLite3
 import XCTest
 
 @testable import AgentSessionManager
@@ -34,6 +36,288 @@ final class RefreshPaneTests: XCTestCase {
         XCTAssertTrue(cmd.contains("--settings"))
         XCTAssertTrue(cmd.contains("--model"))
         XCTAssertTrue(cmd.contains("opus"))
+    }
+
+    func testBuildCodexCommandResumesExactSessionAfterPreservedOptions() throws {
+        let command = Tab.buildCodexCommand(
+            hookScriptPath: "/tmp/codex-hook.py",
+            adapter: .current(version: "0.162.1"),
+            extraArgs: ["--model", "gpt-6-luna", "resume", "old-session"],
+            resumeSessionID: "current-session",
+            previousResumeSessionID: "old-session")
+
+        XCTAssertEqual(Array(command[1...2]), ["-c", "features.hooks=true"])
+        XCTAssertEqual(command[command.count - 4], "--model")
+        XCTAssertEqual(command[command.count - 3], "gpt-6-luna")
+        let resumeIndex = try XCTUnwrap(command.firstIndex(of: "resume"))
+        XCTAssertEqual(command[resumeIndex - 1], "gpt-6-luna")
+        XCTAssertEqual(command.last, "current-session")
+        XCTAssertTrue(command[..<resumeIndex].contains("features.hooks=true"))
+        XCTAssertTrue(command[(resumeIndex + 1)..<command.count].allSatisfy { !$0.hasPrefix("hooks.") })
+        XCTAssertTrue(command.contains(where: { $0.hasPrefix("hooks.SessionStart=") }))
+    }
+
+    func testBuildCodexCommandStartsFreshAfterRemovingPreviousAppResumeTarget() {
+        let command = Tab.buildCodexCommand(
+            hookScriptPath: "/tmp/codex-hook.py",
+            adapter: .current(version: "0.162.1"),
+            extraArgs: ["--model", "gpt-6-luna", "resume", "old-session"],
+            previousResumeSessionID: "old-session")
+
+        XCTAssertEqual(Array(command.suffix(2)), ["--model", "gpt-6-luna"])
+        XCTAssertFalse(command.contains("resume"))
+    }
+
+    func testBuildCodexCommandKeepsHookOverridesBeforeFreshPromptOptions() {
+        let command = Tab.buildCodexCommand(
+            hookScriptPath: "/tmp/codex-hook.py",
+            adapter: .current(version: "0.162.1"),
+            extraArgs: ["--model", "gpt-6-luna"])
+
+        XCTAssertEqual(command[1...2], ["-c", "features.hooks=true"])
+        XCTAssertEqual(Array(command.suffix(2)), ["--model", "gpt-6-luna"])
+    }
+
+    func testRestoreResumeTargetRequiresEnabledCodexContinuationAndSavedIdentity() {
+        XCTAssertEqual(
+            Tab.codexResumeSessionIDForRestore(
+                harness: .codex, savedSessionID: "saved-session", continueOnRestart: true),
+            "saved-session")
+        XCTAssertNil(
+            Tab.codexResumeSessionIDForRestore(
+                harness: .codex, savedSessionID: "saved-session", continueOnRestart: false))
+        XCTAssertNil(
+            Tab.codexResumeSessionIDForRestore(
+                harness: .claude, savedSessionID: "saved-session", continueOnRestart: true))
+        XCTAssertEqual(
+            Tab.codexRestoreNotice(harness: .codex, savedSessionID: nil, continueOnRestart: true),
+            "No prior Codex conversation was recorded. This pane started a new conversation.")
+        XCTAssertNil(Tab.codexRestoreNotice(harness: .codex, savedSessionID: "saved", continueOnRestart: true))
+        XCTAssertNil(Tab.codexRestoreNotice(harness: .codex, savedSessionID: nil, continueOnRestart: false))
+    }
+
+    func testCodexRestoreBuildsResumeForSavedIdentityWithoutLatestFallback() {
+        let savedSessionID = "saved-exact-session"
+        let resumeSessionID = Tab.codexResumeSessionIDForRestore(
+            harness: .codex, savedSessionID: savedSessionID, continueOnRestart: true)
+        let resumedCommand = Tab.buildCodexCommand(
+            hookScriptPath: "/tmp/codex-hook.py",
+            adapter: .unsupported(version: nil),
+            extraArgs: ["--model", "gpt-6-luna"],
+            resumeSessionID: resumeSessionID)
+
+        XCTAssertEqual(resumeSessionID, savedSessionID)
+        XCTAssertEqual(Array(resumedCommand.suffix(4)), ["--model", "gpt-6-luna", "resume", savedSessionID])
+        XCTAssertFalse(resumedCommand.contains("--last"))
+
+        let legacyResumeSessionID = Tab.codexResumeSessionIDForRestore(
+            harness: .codex, savedSessionID: nil, continueOnRestart: true)
+        let legacyCommand = Tab.buildCodexCommand(
+            hookScriptPath: "/tmp/codex-hook.py",
+            adapter: .unsupported(version: nil),
+            extraArgs: ["--model", "gpt-6-luna"],
+            resumeSessionID: legacyResumeSessionID)
+
+        XCTAssertNil(legacyResumeSessionID)
+        XCTAssertEqual(Array(legacyCommand.suffix(2)), ["--model", "gpt-6-luna"])
+        XCTAssertFalse(legacyCommand.contains("--last"))
+        XCTAssertEqual(
+            Tab.codexRestoreNotice(harness: .codex, savedSessionID: nil, continueOnRestart: true),
+            "No prior Codex conversation was recorded. This pane started a new conversation.")
+    }
+
+    @MainActor
+    func testCodexMissingSessionIdentitySurvivesPreflightUntilExplicitFreshStart() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "codex-continuation-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let repository = root.appending(path: "repo", directoryHint: .isDirectory)
+        let codexHome = root.appending(path: "codex-home", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let settings = AppSettings()
+        settings.preferredShell = "/bin/sh"
+        settings.agentControlInjectionPolicy = .never
+        let tab = Tab(name: "repo", directory: repository)
+        let pane = Pane(
+            name: "codex-pane", tab: tab, harness: .codex,
+            agentControlInjectionEnabled: false, appSettings: settings)
+        pane.extraEnvVars = ["CODEX_HOME": codexHome.path]
+        pane.codexSessionID = "deleted-exact-session"
+        pane.codexTranscriptPath = root.appending(path: "deleted-transcript.jsonl").path
+        let originalController = TerminalController()
+        originalController.pendingDirectory = repository.path
+        originalController.pendingShell = "/bin/sh"
+        originalController.pendingEnvironment = Tab.hostEnvironmentForChildProcess()
+        originalController.pendingCommandArgs = ["codex"]
+        pane.installTerminalController(originalController)
+        tab.panes.append(pane)
+
+        tab.refreshPane(pane, appSettings: settings)
+
+        XCTAssertTrue(pane.terminalController === originalController)
+        XCTAssertEqual(pane.codexSessionID, "deleted-exact-session")
+        XCTAssertEqual(pane.codexTranscriptPath, root.appending(path: "deleted-transcript.jsonl").path)
+        XCTAssertEqual(pane.codexContinuationRecovery, .exactSessionUnavailable)
+
+        tab.refreshPane(
+            pane,
+            extraArgs: pane.extraArgs,
+            harness: .codex,
+            extraEnvVars: pane.extraEnvVars,
+            profileID: .some(pane.profileID),
+            appSettings: settings)
+
+        XCTAssertNil(pane.codexSessionID)
+        XCTAssertNil(pane.codexTranscriptPath)
+        XCTAssertNil(pane.codexContinuationRecovery)
+        XCTAssertFalse(pane.terminalController?.pendingCommandArgs?.contains("resume") == true)
+        XCTAssertFalse(pane.terminalController?.pendingCommandArgs?.contains("--last") == true)
+    }
+
+    @MainActor
+    func testCodexQuickRefreshWithoutBindingKeepsCurrentProcessRunning() {
+        let tab = Tab(name: "repo", directory: URL(filePath: "/tmp/repo"))
+        let pane = Pane(name: "codex-pane", tab: tab, harness: .codex)
+        let controller = TerminalController()
+        controller.pendingCommandArgs = ["codex"]
+        pane.installTerminalController(controller)
+        tab.panes.append(pane)
+
+        tab.refreshPane(pane)
+
+        XCTAssertTrue(pane.terminalController === controller)
+        XCTAssertEqual(pane.codexContinuationRecovery, .identityNotRecorded)
+        XCTAssertEqual(pane.terminalController?.pendingCommandArgs, ["codex"])
+    }
+
+    @MainActor
+    func testCodexRefreshSheetExplainsExactContinuationAndFreshSettingsBehavior() {
+        let tab = Tab(name: "repo", directory: URL(filePath: "/tmp/repo"))
+        let pane = Pane(name: "codex-pane", tab: tab, harness: .codex)
+        let sheet = RefreshPaneSheet(pane: pane, onQuickRefresh: { _ in }, onRefreshWithSettings: { _ in })
+
+        XCTAssertTrue(sheet.isContinuationDisabled)
+        XCTAssertEqual(
+            sheet.summaryDescription,
+            "Continue this Codex conversation or start fresh with new settings.")
+        XCTAssertEqual(sheet.continuationDescription, "Codex has not reported a conversation to continue.")
+        XCTAssertEqual(sheet.settingsDescription, "Start a fresh Codex conversation with reconfigured options.")
+
+        let claudePane = Pane(name: "claude-pane", tab: tab, harness: .claude)
+        let claudeSheet = RefreshPaneSheet(
+            pane: claudePane, onQuickRefresh: { _ in }, onRefreshWithSettings: { _ in })
+        XCTAssertEqual(claudeSheet.summaryDescription, "Restart \"claude-pane\" with a fresh environment.")
+
+        pane.codexSessionID = "exact-session"
+        XCTAssertFalse(sheet.isContinuationDisabled)
+        XCTAssertEqual(sheet.continuationDescription, "Resume this pane's exact foreground conversation.")
+
+        pane.codexContinuationRecovery = .exactSessionUnavailable
+        XCTAssertTrue(sheet.isContinuationDisabled)
+        XCTAssertEqual(
+            sheet.continuationDescription,
+            "The saved Codex conversation is unavailable. Choose Retry or start a new conversation.")
+        XCTAssertEqual(sheet.settingsDescription, "Start a fresh Codex conversation with reconfigured options.")
+    }
+
+    @MainActor
+    func testCodexRestoreDefersLaunchUntilUnavailableConversationRecoveryChoice() {
+        let tab = Tab(name: "repo", directory: URL(filePath: "/tmp/repo"))
+
+        let pane = tab.addPane(
+            name: "codex-pane",
+            harness: .codex,
+            codexContinuationRecovery: .exactSessionUnavailable)
+
+        XCTAssertNil(pane.terminalController)
+        XCTAssertNil(pane.statusLineMonitor)
+        XCTAssertEqual(pane.codexContinuationRecovery, .exactSessionUnavailable)
+        XCTAssertTrue(tab.panes.contains(where: { $0 === pane }))
+    }
+
+    @MainActor
+    func testRestoredCodexPaneRetainsExactSessionAndStatusHookOverrides() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "codex-restore-hooks-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let repository = root.appending(path: "repo", directoryHint: .isDirectory)
+        let bin = root.appending(path: "bin", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sessionID = "restored-exact-session"
+        let codexHome = root.appending(path: "codex-home", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        let rollout = repository.appending(path: "restored.jsonl")
+        try Data().write(to: rollout)
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(codexHome.appending(path: "state_5.sqlite").path, &database), SQLITE_OK)
+        defer { sqlite3_close(database) }
+        let sql =
+            "CREATE TABLE threads (id TEXT, cwd TEXT, rollout_path TEXT); INSERT INTO threads VALUES ('\(sessionID)', '\(repository.path)', '\(rollout.path)');"
+        XCTAssertEqual(sqlite3_exec(database, sql, nil, nil, nil), SQLITE_OK)
+        let codexExecutable = bin.appending(path: "codex")
+        try "#!/bin/sh\nprintf '%s\\n' 'codex 0.162.1'\n".write(
+            to: codexExecutable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: codexExecutable.path)
+
+        let settings = AppSettings()
+        settings.preferredShell = "/bin/sh"
+        settings.agentControlInjectionPolicy = .never
+        let tab = Tab(name: "repo", directory: repository)
+        let pane = tab.addPane(
+            name: "codex-pane",
+            harness: .codex,
+            worktreeDirectory: repository,
+            extraEnvVars: [
+                "PATH": "\(bin.path):\(ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin")",
+                "CODEX_HOME": codexHome.path,
+            ],
+            agentControlInjectionEnabled: false,
+            resumeCodexSessionID: sessionID,
+            appSettings: settings)
+        pane.codexSessionID = sessionID
+        defer {
+            pane.removeStatusLineMonitor()
+            pane.terminalController?.terminate()
+        }
+
+        let command = pane.terminalController?.pendingCommandArgs ?? []
+
+        XCTAssertEqual(pane.codexSessionID, sessionID)
+        XCTAssertEqual(pane.codexLaunchResumeSessionID, sessionID)
+        let resumeIndex = try XCTUnwrap(command.firstIndex(of: "resume"))
+        XCTAssertEqual(command[resumeIndex + 1], sessionID)
+        XCTAssertEqual(command.last, sessionID)
+        XCTAssertTrue(command[..<resumeIndex].contains("features.hooks=true"))
+        for event in ["SessionStart", "UserPromptSubmit", "Stop", "PermissionRequest", "PostToolUse", "Interrupt"] {
+            XCTAssertTrue(
+                command.contains(where: { $0.contains("hooks.\(event)=") }),
+                "Missing \(event) hook override")
+        }
+
+        let originalMonitor = try XCTUnwrap(pane.statusLineMonitor)
+        let restoredMonitor = StatusLineMonitor(
+            paneID: pane.id,
+            paneName: pane.name,
+            workingDirectory: repository.path,
+            harness: .codex,
+            tabID: tab.id,
+            tabName: tab.name)
+        defer { restoredMonitor.stop() }
+        try restoredMonitor.writeCodexHookScript()
+
+        XCTAssertNotEqual(originalMonitor.codexLaunchGeneration, restoredMonitor.codexLaunchGeneration)
+        XCTAssertNotEqual(originalMonitor.codexHookQueueFilePath, restoredMonitor.codexHookQueueFilePath)
+        XCTAssertNotEqual(originalMonitor.codexHookDiagnosticFilePath, restoredMonitor.codexHookDiagnosticFilePath)
+        XCTAssertEqual(originalMonitor.codexHookScriptFilePath, restoredMonitor.codexHookScriptFilePath)
+        XCTAssertTrue(command.contains(where: { $0.contains(originalMonitor.codexHookScriptFilePath) }))
+
+        restoredMonitor.stop()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: originalMonitor.codexHookScriptFilePath))
+        originalMonitor.stop()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: originalMonitor.codexHookScriptFilePath))
     }
 
     @MainActor
@@ -153,5 +437,103 @@ final class RefreshPaneTests: XCTestCase {
         XCTAssertTrue(args.contains("--settings"))
         XCTAssertTrue(args.contains("--model"))
         XCTAssertTrue(args.contains("sonnet"))
+    }
+
+    @MainActor
+    func testRefreshWithNewCodexSettingsStartsFreshWithUpdatedOptionsAndRecoversSetupFailure() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "codex-refresh-settings-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let bin = directory.appending(path: "bin", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let codex = bin.appending(path: "codex")
+        try "#!/bin/sh\nprintf 'codex-cli 0.162.1\\n'\n".write(to: codex, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: codex.path)
+        let shell = directory.appending(path: "shell")
+        try "#!/bin/sh\nPATH='\(bin.path)'\nexport PATH\nexec /bin/sh -c \"$3\"\n"
+            .write(to: shell, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shell.path)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let settings = AppSettings()
+        settings.preferredShell = shell.path
+        settings.agentControlInjectionPolicy = .never
+        let tab = Tab(name: "repo", directory: directory)
+        let pane = Pane(name: "codex-pane", tab: tab, harness: .codex, agentControlInjectionEnabled: false)
+        pane.worktreeDirectory = directory
+        pane.extraArgs = ["--model", "old-model"]
+        pane.installStatusLineMonitor(
+            StatusLineMonitor(
+                paneID: pane.id,
+                paneName: pane.name,
+                workingDirectory: directory.path,
+                harness: .codex,
+                tabID: tab.id,
+                tabName: tab.name,
+                codexAdapter: .current(version: "0.162.1")))
+        pane.setupState = .failed(error: "Unsupported saved approval value")
+        tab.panes.append(pane)
+
+        tab.refreshPane(
+            pane,
+            extraArgs: ["--model", "gpt-5.2"],
+            harness: .codex,
+            appSettings: settings)
+
+        XCTAssertNotNil(pane.terminalController)
+        XCTAssertNil(pane.setupState)
+        XCTAssertNil(pane.codexSessionID)
+        XCTAssertNil(pane.codexTranscriptPath)
+        XCTAssertEqual(pane.extraArgs, ["--model", "gpt-5.2"])
+        XCTAssertEqual(
+            pane.terminalController?.pendingCommandArgs?.suffix(2), ["--model", "gpt-5.2"])
+        XCTAssertFalse(pane.terminalController?.pendingCommandArgs?.contains("resume") ?? true)
+        XCTAssertEqual(pane.terminalController?.terminalView.telemetryTabName, tab.name)
+        XCTAssertEqual(pane.terminalController?.terminalView.telemetryTabUUID, tab.id)
+        XCTAssertEqual(pane.terminalController?.terminalView.telemetryPaneName, pane.name)
+        XCTAssertEqual(pane.terminalController?.terminalView.telemetryPaneUUID, pane.id)
+
+        let paneWithController = Pane(
+            name: "codex-controller-pane", tab: tab, harness: .codex, agentControlInjectionEnabled: false)
+        paneWithController.extraArgs = ["--model", "old-model"]
+        paneWithController.codexSessionID = "previous-conversation"
+        paneWithController.codexTranscriptPath = "/tmp/previous-rollout.jsonl"
+        let oldController = TerminalController()
+        oldController.pendingDirectory = directory.path
+        oldController.pendingCommandArgs = ["codex", "resume", "previous-conversation"]
+        paneWithController.installTerminalController(oldController)
+        tab.panes.append(paneWithController)
+
+        tab.refreshPane(
+            paneWithController,
+            extraArgs: ["--model", "gpt-5.2"],
+            harness: .codex,
+            appSettings: settings)
+
+        XCTAssertFalse(paneWithController.terminalController === oldController)
+        XCTAssertNil(paneWithController.codexSessionID)
+        XCTAssertNil(paneWithController.codexTranscriptPath)
+        XCTAssertEqual(paneWithController.extraArgs, ["--model", "gpt-5.2"])
+        XCTAssertEqual(
+            paneWithController.terminalController?.pendingCommandArgs?.suffix(2), ["--model", "gpt-5.2"])
+        XCTAssertFalse(paneWithController.terminalController?.pendingCommandArgs?.contains("resume") ?? true)
+
+        let unresolvedPane = Pane(
+            name: "codex-unresolved-pane", tab: tab, harness: .codex, agentControlInjectionEnabled: false)
+        unresolvedPane.setupState = .failed(error: "The worktree could not be resolved")
+        tab.panes.append(unresolvedPane)
+
+        tab.refreshPane(
+            unresolvedPane,
+            extraArgs: ["--model", "gpt-5.2"],
+            harness: .codex,
+            appSettings: settings)
+
+        XCTAssertNil(unresolvedPane.worktreeDirectory)
+        XCTAssertNil(unresolvedPane.statusLineMonitor)
+        XCTAssertNil(unresolvedPane.terminalController)
+        guard case .failed = unresolvedPane.setupState else {
+            XCTFail("Expected the unresolved worktree failure to remain visible")
+            return
+        }
     }
 }

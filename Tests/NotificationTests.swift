@@ -14,7 +14,9 @@ private func restoreNotificationSettings(into settings: AppSettings) {
     settings.isPRMergedNotificationsEnabled = config.isPRMergedNotificationsEnabled
     settings.alwaysShowNotificationsSidebar = config.alwaysShowNotificationsSidebar
     settings.isClaudeStopNotificationEnabled = config.isClaudeStopNotificationEnabled
+    settings.isCodexCompletionNotificationEnabled = config.isCodexCompletionNotificationEnabled
     settings.isOpencodeStopNotificationEnabled = config.isOpencodeStopNotificationEnabled
+    settings.isCodexCompletionNotificationEnabled = config.isCodexCompletionNotificationEnabled
 }
 
 @MainActor
@@ -48,6 +50,87 @@ final class NotificationTests: XCTestCase {
         state.addNotification(paneID: paneID, paneName: "auth-fix", tabID: tabID, tabName: "myapp", isPriority: false)
         state.addNotification(paneID: paneID, paneName: "auth-fix", tabID: tabID, tabName: "myapp", isPriority: false)
         XCTAssertEqual(state.notifications.count, 1)
+    }
+
+    func testCodexCompletionNotificationUsesFixedReasonAndKind() {
+        let state = AppState()
+        let paneID = UUID()
+        let tabID = UUID()
+        state.addNotification(
+            paneID: paneID,
+            paneName: "codex-pane",
+            tabID: tabID,
+            tabName: "project",
+            isPriority: false,
+            event: .codexStop)
+
+        XCTAssertEqual(state.notifications.count, 1)
+        XCTAssertEqual(state.notifications[0].kind, .codexStop)
+        XCTAssertEqual(state.notifications[0].reason, "Codex finished responding")
+    }
+
+    func testCodexPermissionAndQuestionNotificationsUseFixedReasonsAndCoalesce() {
+        let state = AppState()
+        let paneID = UUID()
+        let tabID = UUID()
+        state.addNotification(
+            paneID: paneID,
+            paneName: "codex-pane",
+            tabID: tabID,
+            tabName: "project",
+            isPriority: true,
+            event: .codexPermissionRequest)
+        state.addNotification(
+            paneID: paneID,
+            paneName: "codex-pane",
+            tabID: tabID,
+            tabName: "project",
+            isPriority: true,
+            event: .codexPermissionRequest)
+
+        XCTAssertEqual(state.notifications.count, 1)
+        XCTAssertEqual(state.notifications[0].kind, .codexPermissionRequest)
+        XCTAssertEqual(state.notifications[0].reason, "Codex needs your approval")
+
+        state.addNotification(
+            paneID: paneID,
+            paneName: "codex-pane",
+            tabID: tabID,
+            tabName: "project",
+            isPriority: true,
+            event: .codexQuestion)
+
+        XCTAssertEqual(state.notifications.count, 1)
+        XCTAssertEqual(state.notifications[0].kind, .codexQuestion)
+        XCTAssertEqual(state.notifications[0].reason, "Codex is waiting for your answer")
+    }
+
+    func testCodexAttentionUsesExistingPaneFocusAndInputAcknowledgement() {
+        let state = AppState()
+        let paneID = UUID()
+        let tabID = UUID()
+        state.addNotification(
+            paneID: paneID,
+            paneName: "codex-pane",
+            tabID: tabID,
+            tabName: "project",
+            isPriority: true,
+            event: .codexPermissionRequest)
+
+        state.setActivePane(id: paneID)
+
+        XCTAssertTrue(state.notifications.isEmpty)
+
+        state.addNotification(
+            paneID: paneID,
+            paneName: "codex-pane",
+            tabID: tabID,
+            tabName: "project",
+            isPriority: true,
+            event: .codexQuestion)
+        state.clearNotification(paneID: paneID)
+
+        XCTAssertTrue(state.notifications.isEmpty)
     }
 
     func testAddNotificationRefreshesSamePaneReasonAndTimestamp() {
@@ -139,6 +222,7 @@ final class NotificationTests: XCTestCase {
         settings.isPriorityNotificationsEnabled = false
         settings.isMacOSBannerNotificationsEnabled = false
         settings.alwaysShowNotificationsSidebar = false
+        settings.isCodexCompletionNotificationEnabled = false
         SettingsPersistence.saveNotificationSettings(appSettings: settings)
 
         let restored = AppSettings()
@@ -147,6 +231,7 @@ final class NotificationTests: XCTestCase {
         XCTAssertFalse(restored.isPriorityNotificationsEnabled)
         XCTAssertFalse(restored.isMacOSBannerNotificationsEnabled)
         XCTAssertFalse(restored.alwaysShowNotificationsSidebar)
+        XCTAssertFalse(restored.isCodexCompletionNotificationEnabled)
     }
 
     func testClaudeStopNotificationEnabledRoundTrip() {
@@ -194,6 +279,77 @@ final class NotificationTests: XCTestCase {
         XCTAssertTrue(restored.isOpencodeStopNotificationEnabled)
     }
 
+    func testCodexCompletionNotificationEnabledRoundTripAndLegacyDefault() throws {
+        let subdirectory = "agent-session-manager-codex-notifications-\(UUID().uuidString)"
+        PersistenceHelpers.overrideAppSupportSubdirectory = subdirectory
+        let notificationURL = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: "\(subdirectory)/notification-settings.json")
+        defer {
+            try? FileManager.default.removeItem(at: notificationURL.deletingLastPathComponent())
+            PersistenceHelpers.overrideAppSupportSubdirectory = "agent-session-manager"
+        }
+
+        let settings = AppSettings()
+        settings.isCodexCompletionNotificationEnabled = false
+        SettingsPersistence.saveNotificationSettings(appSettings: settings)
+
+        let restored = AppSettings()
+        restoreNotificationSettings(into: restored)
+        XCTAssertFalse(restored.isCodexCompletionNotificationEnabled)
+        XCTAssertFalse(
+            SettingsPersistence.load(NotificationConfig.self, from: "notification-settings.json")?
+                .isCodexCompletionNotificationEnabled ?? true)
+
+        try Data(#"{"sidebarSide":"right","isPriorityEnabled":true}"#.utf8).write(to: notificationURL)
+        restored.isCodexCompletionNotificationEnabled = false
+        restoreNotificationSettings(into: restored)
+        XCTAssertTrue(restored.isCodexCompletionNotificationEnabled)
+        XCTAssertTrue(
+            SettingsPersistence.load(NotificationConfig.self, from: "notification-settings.json")?
+                .isCodexCompletionNotificationEnabled ?? false)
+    }
+
+    @MainActor
+    func testCodexCompletionSettingAppliesToLivePaneAndPreservesAttention() async throws {
+        let subdirectory = "agent-session-manager-codex-live-notifications-\(UUID().uuidString)"
+        PersistenceHelpers.overrideAppSupportSubdirectory = subdirectory
+        let notificationURL = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: "\(subdirectory)/notification-settings.json")
+        defer {
+            try? FileManager.default.removeItem(at: notificationURL.deletingLastPathComponent())
+            PersistenceHelpers.overrideAppSupportSubdirectory = "agent-session-manager"
+        }
+        let settings = AppSettings()
+        settings.isCodexCompletionNotificationEnabled = false
+        SettingsPersistence.saveNotificationSettings(appSettings: settings)
+        let appState = AppState()
+        let tab = Tab(name: "Codex", directory: URL(filePath: "/tmp"))
+        let pane = Pane(name: "codex-pane", tab: tab, harness: .codex)
+        let monitor = StatusLineMonitor(paneID: pane.id, paneName: pane.name, harness: .codex)
+        tab.panes.append(pane)
+        appState.tabs.append(tab)
+        pane.installStatusLineMonitor(monitor)
+        pane.bindNotifications(appState: appState, isPriority: false)
+
+        monitor.onCodexStopped?()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(appState.notifications.isEmpty)
+
+        monitor.onCodexAttention?(.codexPermissionRequest)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(appState.notifications.first?.kind, .codexPermissionRequest)
+
+        settings.isCodexCompletionNotificationEnabled = true
+        SettingsPersistence.saveNotificationSettings(appSettings: settings)
+        monitor.onCodexStopped?()
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(appState.notifications.first?.kind, .codexStop)
+        monitor.stop()
+    }
+
     func testClaudeStopNotificationEnabledLegacyDefaultsTrue() throws {
         let support = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -205,8 +361,10 @@ final class NotificationTests: XCTestCase {
         try Data(#"{"sidebarSide":"right","isPriorityEnabled":true}"#.utf8).write(to: url)
         let restored = AppSettings()
         restored.isClaudeStopNotificationEnabled = false
+        restored.isCodexCompletionNotificationEnabled = false
         restoreNotificationSettings(into: restored)
         XCTAssertTrue(restored.isClaudeStopNotificationEnabled)
+        XCTAssertTrue(restored.isCodexCompletionNotificationEnabled)
     }
 
     func testAlwaysShowNotificationsSidebarRoundTrip() {

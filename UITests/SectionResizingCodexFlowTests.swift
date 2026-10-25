@@ -159,7 +159,7 @@ final class SectionResizingCodexFlowTests: BaseTestCase {
         let shellName = "shell:\(paneName)"
         waitFor(app.staticTexts["pane-name-\(shellName)"].firstMatch, timeout: 15)
         codexTerminal.click()
-        requestCodexMarkerResponse(from: codexTerminal)
+        requestCodexMarkerResponse(from: codexTerminal, paneName: paneName)
 
         let divider = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier CONTAINS 'column-divider-0'")).firstMatch
@@ -169,17 +169,17 @@ final class SectionResizingCodexFlowTests: BaseTestCase {
         pointerStart.press(forDuration: 0.1, thenDragTo: pointerStart.withOffset(CGVector(dx: 24, dy: 0)))
         XCTAssertEqual((divider.value as? NSNumber)?.doubleValue ?? -1, initialWidth + 24, accuracy: 2)
 
-        requestCodexMarkerResponse(from: codexTerminal)
+        requestCodexMarkerResponse(from: codexTerminal, paneName: paneName)
 
         let widthBeforeKeyboard = try XCTUnwrap((divider.value as? NSNumber)?.doubleValue)
         app.typeKey(.rightArrow, modifierFlags: [.command, .option, .shift])
         XCTAssertEqual((divider.value as? NSNumber)?.doubleValue ?? -1, widthBeforeKeyboard + 16, accuracy: 2)
 
-        requestCodexMarkerResponse(from: codexTerminal)
+        requestCodexMarkerResponse(from: codexTerminal, paneName: paneName)
         screenshot("section-resizing-live-codex-continuity")
     }
 
-    private func requestCodexMarkerResponse(from terminal: XCUIElement) {
+    private func requestCodexMarkerResponse(from terminal: XCUIElement, paneName: String) {
         let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         let firstFragment = String(nonce.prefix(16))
         let secondFragment = String(nonce.suffix(16))
@@ -190,6 +190,9 @@ final class SectionResizingCodexFlowTests: BaseTestCase {
         terminal.click()
         app.typeText(prompt)
         terminal.typeKey(.enter, modifierFlags: [])
+        let workingIndicator = app.descendants(matching: .any)
+            .matching(identifier: "pane-activity-working-\(paneName)").firstMatch
+        waitFor(workingIndicator, timeout: 15)
 
         let responseDeadline = Date().addingTimeInterval(120)
         var responseCopied = false
@@ -200,6 +203,13 @@ final class SectionResizingCodexFlowTests: BaseTestCase {
             }
         }
         XCTAssertTrue(responseCopied, "Expected the real Codex response in the copied terminal output")
+        let waitingIndicator = app.descendants(matching: .any)
+            .matching(identifier: "pane-activity-waiting-\(paneName)").firstMatch
+        waitFor(waitingIndicator, timeout: 15)
+        terminal.click()
+        let stoppedIndicator = app.descendants(matching: .any)
+            .matching(identifier: "pane-activity-stopped-\(paneName)").firstMatch
+        waitFor(stoppedIndicator, timeout: 15)
     }
 
     private func waitForCodexStartup(

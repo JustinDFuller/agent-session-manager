@@ -28,6 +28,14 @@ struct Invariant: Identifiable, Hashable, Sendable {
         traceEventName: "statusline.lines.source_mismatch"
     )
 
+    static let codexContinuationIdentity = Invariant(
+        id: "codex.continuation.identity",
+        integration: "Codex",
+        severity: .warning,
+        description: "A resumed Codex pane must bind to the exact conversation requested by the saved identity.",
+        traceEventName: "session.pane.codex_identity.mismatch"
+    )
+
     static let appBundleIdentityPreferredURL = Invariant(
         id: "app.bundle_identity.preferred_url",
         integration: "App Bundle",

@@ -388,6 +388,9 @@ final class TabPaneFlowTests: BaseTestCase {
         XCTAssertTrue(app.buttons["tab-button-WorkTab"].firstMatch.exists)
 
         app.buttons["tab-close-WorkTab"].firstMatch.click()
+        let keepWorktrees = app.windows.firstMatch.buttons["Keep Worktrees"]
+        waitFor(keepWorktrees)
+        keepWorktrees.click()
         waitForDisappear(app.buttons["tab-button-WorkTab"].firstMatch)
         waitFor(app.staticTexts["empty-state-hint"])
         screenshot("11-after-close-tab")

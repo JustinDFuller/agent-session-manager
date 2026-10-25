@@ -54,7 +54,7 @@ The new shell pane uses the same working directory as the pane you selected.
 
 ### Refresh a pane
 
-To restart an agent pane with a fresh environment, open its context menu and choose **Refresh Pane…**, or press ⌘R when it is the active pane. Choose **Refresh and Continue** to restart with the same settings and `--continue`. Choose **Refresh with New Settings…** to change the CLI options before restarting. This action is not available for plain shell panes.
+To restart an agent pane with a fresh environment, open its context menu and choose **Refresh Pane…**, or press ⌘R when it is the active pane. Choose **Refresh and Continue** to restart with the same settings and resume the pane's conversation when the selected tool supports it. Codex resumes its exact foreground conversation; Claude Code and Cursor use `--continue`. Choose **Refresh with New Settings…** to change the CLI options before restarting; for Codex, this starts a fresh conversation. This action is not available for plain shell panes.
 
 ### Close a pane or tab
 

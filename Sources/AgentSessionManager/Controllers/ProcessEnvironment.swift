@@ -2,6 +2,15 @@ import Foundation
 import SwiftTerm
 
 enum ProcessEnvironment {
+    nonisolated static func dictionary(from env: [String]) -> [String: String] {
+        var values: [String: String] = [:]
+        for entry in env {
+            guard let separator = entry.firstIndex(of: "=") else { continue }
+            values[String(entry[..<separator])] = String(entry[entry.index(after: separator)...])
+        }
+        return values
+    }
+
     nonisolated static func sanitize(
         _ env: [String],
         etcDirectory: String = "/etc",

@@ -45,6 +45,30 @@ final class InvariantTests: XCTestCase {
         XCTAssertEqual(event?.attributes["field"], "worktree.name")
     }
 
+    func testCodexContinuationIdentityInvariantHasExpectedCatalogValues() {
+        XCTAssertEqual(Invariant.codexContinuationIdentity.id, "codex.continuation.identity")
+        XCTAssertEqual(Invariant.codexContinuationIdentity.integration, "Codex")
+        XCTAssertEqual(Invariant.codexContinuationIdentity.severity, .warning)
+        XCTAssertEqual(
+            Invariant.codexContinuationIdentity.traceEventName,
+            "session.pane.codex_identity.mismatch")
+    }
+
+    func testCodexContinuationIdentityInvariantEmitsBoundedMismatchContext() {
+        InvariantReporter.shared.enableTestCapture()
+        InvariantReporter.shared.violated(
+            .codexContinuationIdentity,
+            context: [
+                "requested_session_id_prefix": "requested-123",
+                "bound_session_id_prefix": "bound-456",
+            ])
+
+        let violation = InvariantReporter.shared.violationsForTesting.first
+        XCTAssertEqual(violation?.invariantID, "codex.continuation.identity")
+        XCTAssertEqual(violation?.context["requested_session_id_prefix"], "requested-123")
+        XCTAssertEqual(violation?.context["bound_session_id_prefix"], "bound-456")
+    }
+
     func testOpenCodePortPolicyInvariantHasExpectedCatalogValues() {
         XCTAssertEqual(Invariant.opencodePortPolicy.id, "opencode.port.policy")
         XCTAssertEqual(Invariant.opencodePortPolicy.integration, "OpenCode")

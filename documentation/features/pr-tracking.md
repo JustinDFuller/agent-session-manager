@@ -57,11 +57,13 @@ Click outside the popover to dismiss it.
 
 ## How it works
 
-Each polling cycle determines the current branch for eligible panes and sends one batched, aliased GraphQL request. Each alias contains the PR metadata, status rollup, and review-thread count for one pane, so all eligible panes are updated from that single request. The owner and repository are extracted from `git remote get-url origin`. Polling repeats every 60 seconds to catch status changes.
+Each polling cycle determines the current branch for eligible panes and sends one batched, aliased GraphQL request. Each alias contains the PR metadata, status rollup, and review-thread count for one pane, so all eligible panes are updated from that single request. The owner and repository are extracted from `git remote get-url origin`. Polling repeats on the configured interval to catch status changes.
 
-Finder and DMG launches use the app's sanitized environment, including macOS login-shell PATH entries. The app preserves GitHub CLI credential/configuration variables (`HOME`, `GH_CONFIG_DIR`, `XDG_CONFIG_HOME`, `GH_HOST`, and GitHub token variables) and disables prompts. `gh` remains the authentication boundary and must be installed and authenticated for PR tracking.
+Repository identity is fetched by the shared status monitor for every pane, independently of the selected harness's rich status provider and GitHub authentication. This keeps the Repository fact available when GitHub PR queries fail.
 
-A successful query with no PR clears the item. Failed queries retain the last known PR and cannot trigger resolution notifications; later polls recover automatically.
+The PR item distinguishes an in-progress check, a current pull request, a successful query with no pull request, and an unavailable result after a failed check. A failure after a successful result keeps the previous pull request visible with a warning; failed queries cannot trigger merge or close notifications. Authentication failures show **GitHub authentication required**, explain that the GitHub CLI selected by the configured shell must be authenticated, and offer **Retry**. A successful query with no pull request shows **No PR** without an error. Retry rebuilds the command context from the configured interactive shell so repaired authentication or shell settings can recover without restarting the pane.
+
+The GitHub CLI executable is selected from the configured interactive login shell's PATH, unless the app inherited an explicit `GH_PATH`, which takes precedence. Explicitly inherited GitHub configuration and token variables take precedence over values exported by that shell; missing values are filled from the shell context. The app disables interactive prompts and runs the resolved executable directly. It does not sign in, switch accounts, change credentials, or write shell environment values to diagnostics.
 
 The batched GraphQL request is passed to `gh` through standard input. If `gh` exits or closes standard input before consuming the request, Agent Session Manager records bounded pipe failure details and treats the poll as failed. A classified authentication, network, or API failure remains the primary outcome; otherwise the result is `stdin_write`. The closed pipe cannot terminate the app.
 

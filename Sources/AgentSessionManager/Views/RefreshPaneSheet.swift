@@ -6,12 +6,43 @@ struct RefreshPaneSheet: View {
     let onQuickRefresh: (Pane) -> Void
     let onRefreshWithSettings: (Pane) -> Void
 
+    var continuationDescription: String {
+        guard pane.harness == .codex else { return "Restart with the same settings and --continue" }
+        switch pane.codexContinuationRecovery {
+        case .identityNotRecorded:
+            return "Codex has not reported a conversation to continue."
+        case .exactSessionUnavailable:
+            return "The saved Codex conversation is unavailable. Choose Retry or start a new conversation."
+        case nil:
+            return pane.codexSessionID == nil
+                ? "Codex has not reported a conversation to continue."
+                : "Resume this pane's exact foreground conversation."
+        }
+    }
+
+    var settingsDescription: String {
+        pane.harness == .codex
+            ? "Start a fresh Codex conversation with reconfigured options."
+            : "Reconfigure CLI options before restarting"
+    }
+
+    var summaryDescription: String {
+        pane.harness == .codex
+            ? "Continue this Codex conversation or start fresh with new settings."
+            : "Restart \"\(pane.name)\" with a fresh environment."
+    }
+
+    var isContinuationDisabled: Bool {
+        pane.harness == .codex
+            && (pane.codexSessionID == nil || pane.codexContinuationRecovery != nil)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Refresh Pane")
                 .font(.headline)
 
-            Text("Restart \"\(pane.name)\" with a fresh environment.")
+            Text(summaryDescription)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -24,7 +55,7 @@ struct RefreshPaneSheet: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Refresh and Continue")
                                 .fontWeight(.medium)
-                            Text("Restart with the same settings and --continue")
+                            Text(continuationDescription)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -35,6 +66,7 @@ struct RefreshPaneSheet: View {
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.bordered)
                 .accessibilityIdentifier("refresh-pane-quick")
+                .disabled(isContinuationDisabled)
 
                 Button {
                     onRefreshWithSettings(pane)
@@ -44,7 +76,7 @@ struct RefreshPaneSheet: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Refresh with New Settings\u{2026}")
                                 .fontWeight(.medium)
-                            Text("Reconfigure CLI options before restarting")
+                            Text(settingsDescription)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

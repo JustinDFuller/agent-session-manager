@@ -30,6 +30,21 @@ struct PaneView: View {
                 statusLine
             }
 
+            if pane.terminalController != nil, case .failed(let error) = pane.setupState {
+                VStack(spacing: 12) {
+                    Text(error)
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.center)
+                    Button("Dismiss") { pane.setupState = nil }
+                        .buttonStyle(.bordered)
+                }
+                .padding(16)
+                .background(Theme.overlayMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.1)))
+                .accessibilityIdentifier("pane-refresh-error-\(pane.name)")
+            }
             if case .exited(let code) = pane.terminalController?.processState,
                 appSettings.exitBehavior == .prompt
             {
@@ -49,6 +64,55 @@ struct PaneView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.1)))
                 .accessibilityIdentifier("pane-exit-prompt-\(pane.name)")
+            }
+
+            if let recovery = pane.codexContinuationRecovery {
+                VStack(spacing: 12) {
+                    Text(
+                        recovery == .identityNotRecorded
+                            ? "Codex has not reported a conversation to continue."
+                            : "The saved Codex conversation is unavailable."
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                    HStack(spacing: 8) {
+                        Button("Retry") {
+                            pane.tab?.refreshPane(pane)
+                        }
+                        .accessibilityIdentifier("codex-continuation-retry")
+                        Button("Start New Conversation") {
+                            pane.tab?.refreshPane(
+                                pane,
+                                extraArgs: pane.extraArgs,
+                                harness: .codex,
+                                extraEnvVars: pane.extraEnvVars,
+                                profileID: .some(pane.profileID),
+                                appSettings: appSettings)
+                        }
+                        .accessibilityIdentifier("codex-continuation-start-new")
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding(16)
+                .background(Theme.overlayMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.1)))
+                .accessibilityIdentifier("codex-continuation-recovery")
+            }
+
+            if let notice = pane.codexContinuationNotice {
+                VStack(spacing: 8) {
+                    Text(notice)
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                    Button("Dismiss") { pane.codexContinuationNotice = nil }
+                        .buttonStyle(.bordered)
+                }
+                .padding(16)
+                .background(Theme.overlayMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.1)))
+                .accessibilityIdentifier("codex-continuation-notice")
             }
         }
         .background(Theme.paneBackground)
@@ -73,6 +137,7 @@ struct PaneView: View {
         )
         .onChange(of: pane.terminalController?.processState) { _, newState in
             guard case .exited = newState else { return }
+            if pane.harness == .codex { pane.statusLineMonitor?.codexProcessExited() }
             switch appSettings.exitBehavior {
             case .prompt:
                 break
@@ -320,9 +385,11 @@ struct PaneView: View {
                     processState: pane.terminalController?.processState,
                     isWorking: (pane.statusLineMonitor?.isClaudeWorking ?? false)
                         || (pane.statusLineMonitor?.isCursorWorking ?? false)
-                        || (pane.statusLineMonitor?.isOpenCodeWorking ?? false),
+                        || (pane.statusLineMonitor?.isOpenCodeWorking ?? false)
+                        || (pane.statusLineMonitor?.isCodexWorking ?? false),
                     isStopped: (pane.statusLineMonitor?.isClaudeStopped ?? false)
-                        || (pane.statusLineMonitor?.isCursorStopped ?? false),
+                        || (pane.statusLineMonitor?.isCursorStopped ?? false)
+                        || (pane.statusLineMonitor?.isCodexStopped ?? false),
                     sessionState: pane.statusLineMonitor?.currentData?.sessionStatus?.state,
                     hasNotification: hasNotification
                 )
@@ -510,6 +577,13 @@ struct PaneView: View {
             .layoutPriority(1)
             .id(pane.restartToken)
             .accessibilityIdentifier("pane-terminal-\(pane.name)")
+        } else if let recovery = pane.codexContinuationRecovery {
+            Text(
+                recovery == .identityNotRecorded
+                    ? "Codex has not reported a conversation to continue."
+                    : "The saved Codex conversation is unavailable."
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if case .failed(let error) = pane.setupState {
             VStack(spacing: 12) {
                 Text(error)

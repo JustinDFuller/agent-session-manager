@@ -384,7 +384,7 @@ final class ClaudeNotificationFlowTests: BaseTestCase {
             "Run exactly sleep 90 using Bash in the foreground. Do not background it and do not use another tool.")
         let prompt = try waitForLiveRecord(at: hookLogURL) { $0["hook_event_name"] as? String == "UserPromptSubmit" }
         let transcript = URL(filePath: try XCTUnwrap(prompt["transcript_path"] as? String))
-        _ = try waitForLiveRecord(at: transcript) { record in
+        let sleepCall = try waitForLiveRecord(at: transcript) { record in
             guard let message = record["message"] as? [String: Any],
                 let content = message["content"] as? [[String: Any]]
             else { return false }
@@ -392,6 +392,47 @@ final class ClaudeNotificationFlowTests: BaseTestCase {
                 item["type"] as? String == "tool_use" && item["name"] as? String == "Bash"
                     && (item["input"] as? [String: Any])?["command"] as? String == "sleep 90"
             }
+        }
+        let sleepMessage = try XCTUnwrap(sleepCall["message"] as? [String: Any])
+        let sleepContent = try XCTUnwrap(sleepMessage["content"] as? [[String: Any]])
+        let sleepToolUse = try XCTUnwrap(
+            sleepContent.first { item in
+                item["type"] as? String == "tool_use" && item["name"] as? String == "Bash"
+                    && (item["input"] as? [String: Any])?["command"] as? String == "sleep 90"
+            })
+        let sleepToolUseID = try XCTUnwrap(sleepToolUse["id"] as? String)
+        let blockedSleepResult = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                guard let data = try? Data(contentsOf: transcript),
+                    let text = String(data: data.suffix(262_144), encoding: .utf8)
+                else { return false }
+                let records = text.split(separator: "\n").suffix(100).compactMap { line in
+                    try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+                }
+                return records.contains { record in
+                    guard let message = record["message"] as? [String: Any],
+                        let content = message["content"] as? [[String: Any]]
+                    else { return false }
+                    return content.contains { item in
+                        guard item["type"] as? String == "tool_result",
+                            item["tool_use_id"] as? String == sleepToolUseID,
+                            item["is_error"] as? Bool == true
+                        else { return false }
+                        let resultText: String
+                        if let text = item["content"] as? String {
+                            resultText = text
+                        } else if let blocks = item["content"] as? [[String: Any]] {
+                            resultText = blocks.compactMap { $0["text"] as? String }.joined(separator: " ")
+                        } else {
+                            return false
+                        }
+                        return resultText.contains("Blocked: standalone sleep 90")
+                    }
+                }
+            }, object: nil)
+        if XCTWaiter.wait(for: [blockedSleepResult], timeout: 8) == .completed {
+            throw XCTSkip(
+                "Claude Code blocked the standalone sleep 90 fixture; the real interrupt scenario was not exercised")
         }
         app.typeKey(.escape, modifierFlags: [])
         _ = try waitForLiveRecord(at: hookLogURL, timeout: 100) { $0["notification_type"] as? String == "idle_prompt" }

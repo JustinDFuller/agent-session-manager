@@ -22,6 +22,7 @@ struct NotificationConfig: Codable {
     var alwaysShowNotificationsSidebar: Bool
     var isClaudeStopNotificationEnabled: Bool
     var isOpencodeStopNotificationEnabled: Bool
+    var isCodexCompletionNotificationEnabled: Bool
 
     enum CodingKeys: String, CodingKey {
         case sidebarSide
@@ -33,6 +34,7 @@ struct NotificationConfig: Codable {
         case alwaysShowNotificationsSidebar
         case isClaudeStopNotificationEnabled
         case isOpencodeStopNotificationEnabled
+        case isCodexCompletionNotificationEnabled
     }
 
     init(
@@ -44,7 +46,8 @@ struct NotificationConfig: Codable {
         isPRClosedNotificationsEnabled: Bool,
         alwaysShowNotificationsSidebar: Bool,
         isClaudeStopNotificationEnabled: Bool,
-        isOpencodeStopNotificationEnabled: Bool
+        isOpencodeStopNotificationEnabled: Bool,
+        isCodexCompletionNotificationEnabled: Bool = true
     ) {
         self.sidebarSide = sidebarSide
         self.isPriorityEnabled = isPriorityEnabled
@@ -55,6 +58,7 @@ struct NotificationConfig: Codable {
         self.alwaysShowNotificationsSidebar = alwaysShowNotificationsSidebar
         self.isClaudeStopNotificationEnabled = isClaudeStopNotificationEnabled
         self.isOpencodeStopNotificationEnabled = isOpencodeStopNotificationEnabled
+        self.isCodexCompletionNotificationEnabled = isCodexCompletionNotificationEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -74,6 +78,8 @@ struct NotificationConfig: Codable {
             try container.decodeIfPresent(Bool.self, forKey: .isClaudeStopNotificationEnabled) ?? true
         isOpencodeStopNotificationEnabled =
             try container.decodeIfPresent(Bool.self, forKey: .isOpencodeStopNotificationEnabled) ?? true
+        isCodexCompletionNotificationEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .isCodexCompletionNotificationEnabled) ?? true
     }
 
     func encode(to encoder: Encoder) throws {
@@ -87,6 +93,7 @@ struct NotificationConfig: Codable {
         try container.encode(alwaysShowNotificationsSidebar, forKey: .alwaysShowNotificationsSidebar)
         try container.encode(isClaudeStopNotificationEnabled, forKey: .isClaudeStopNotificationEnabled)
         try container.encode(isOpencodeStopNotificationEnabled, forKey: .isOpencodeStopNotificationEnabled)
+        try container.encode(isCodexCompletionNotificationEnabled, forKey: .isCodexCompletionNotificationEnabled)
     }
 }
 
@@ -129,7 +136,7 @@ struct SettingsPersistence {
     }
     private static var profilesURL: URL { appSupportDir.appending(path: "profiles.json") }
     private static var sessionNameSettingsURL: URL { appSupportDir.appending(path: "session-name-settings.json") }
-    private static var shellSettingsURL: URL { appSupportDir.appending(path: "shell-settings.json") }
+    nonisolated private static var shellSettingsURL: URL { appSupportDir.appending(path: "shell-settings.json") }
     private static var onboardingSettingsURL: URL { appSupportDir.appending(path: "onboarding-settings.json") }
     private static var activityIndicatorSettingsURL: URL {
         appSupportDir.appending(path: "activity-indicator-settings.json")
@@ -335,7 +342,8 @@ struct SettingsPersistence {
             isPRClosedNotificationsEnabled: appSettings.isPRClosedNotificationsEnabled,
             alwaysShowNotificationsSidebar: appSettings.alwaysShowNotificationsSidebar,
             isClaudeStopNotificationEnabled: appSettings.isClaudeStopNotificationEnabled,
-            isOpencodeStopNotificationEnabled: appSettings.isOpencodeStopNotificationEnabled
+            isOpencodeStopNotificationEnabled: appSettings.isOpencodeStopNotificationEnabled,
+            isCodexCompletionNotificationEnabled: appSettings.isCodexCompletionNotificationEnabled
         )
         guard let data = try? JSONEncoder().encode(config) else { return }
         try? data.write(to: notificationSettingsURL)
@@ -503,6 +511,15 @@ struct SettingsPersistence {
         let payload = ShellSettings(preferredShell: appSettings.preferredShell)
         guard let data = try? JSONEncoder().encode(payload) else { return }
         try? data.write(to: shellSettingsURL)
+    }
+
+    nonisolated static func configuredShell() -> String {
+        let data = try? Data(contentsOf: shellSettingsURL)
+        let settings = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }
+        let preferredShell = settings?["preferredShell"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return preferredShell.flatMap { $0.isEmpty ? nil : $0 }
+            ?? ProcessInfo.processInfo.environment["SHELL"]
+            ?? "/bin/zsh"
     }
 
     struct OnboardingSettings: Codable {

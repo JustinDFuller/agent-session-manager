@@ -11,8 +11,15 @@ struct StatusProviderContext {
     let processStartTime: Date
     let launchArgs: [String]
     let environment: [String: String]
+    let codexShell: String?
     let detectedHarnessVersion: String?
     let codexHookRecordPath: String?
+    let codexHookQueuePath: String?
+    let codexHookDiagnosticPath: String?
+    let codexLaunchGeneration: String?
+    let codexAdapter: CodexCompatibilityAdapter?
+    let codexInitialSessionID: String?
+    let codexInitialTranscriptPath: String?
     let opencodePort: Int?
     let opencodeSessionID: String?
     let opencodeEnvironment: [String: String]
@@ -27,10 +34,17 @@ struct StatusProviderContext {
         processStartTime: Date,
         launchArgs: [String],
         environment: [String: String],
+        codexShell: String? = nil,
         detectedHarnessVersion: String?,
         codexHookRecordPath: String?,
         opencodePort: Int?,
         opencodeSessionID: String?,
+        codexHookQueuePath: String? = nil,
+        codexHookDiagnosticPath: String? = nil,
+        codexLaunchGeneration: String? = nil,
+        codexAdapter: CodexCompatibilityAdapter? = nil,
+        codexInitialSessionID: String? = nil,
+        codexInitialTranscriptPath: String? = nil,
         opencodeEnvironment: [String: String] = [:]
     ) {
         self.paneID = paneID
@@ -42,8 +56,15 @@ struct StatusProviderContext {
         self.processStartTime = processStartTime
         self.launchArgs = launchArgs
         self.environment = environment
+        self.codexShell = codexShell
         self.detectedHarnessVersion = detectedHarnessVersion
         self.codexHookRecordPath = codexHookRecordPath
+        self.codexHookQueuePath = codexHookQueuePath
+        self.codexHookDiagnosticPath = codexHookDiagnosticPath
+        self.codexLaunchGeneration = codexLaunchGeneration
+        self.codexAdapter = codexAdapter
+        self.codexInitialSessionID = codexInitialSessionID
+        self.codexInitialTranscriptPath = codexInitialTranscriptPath
         self.opencodePort = opencodePort
         self.opencodeSessionID = opencodeSessionID
         self.opencodeEnvironment = opencodeEnvironment
@@ -74,6 +95,7 @@ struct CodexHookSessionRecord: Codable, Equatable {
 
 struct CodexThreadState: Equatable {
     let id: String
+    let cwd: String?
     let rolloutPath: String?
     let model: String?
     let cliVersion: String?
@@ -91,6 +113,40 @@ struct CodexThreadSelection: Equatable {
     let freshCandidateCount: Int
 }
 
+enum CodexProviderEvent: Equatable {
+    case foregroundTurnStarted(turnID: String, isForeground: Bool)
+    case foregroundTurnCompleted(turnID: String, isForeground: Bool, succeeded: Bool)
+    case foregroundCompletionCandidate(turnID: String)
+    case foregroundTurnInterrupted(turnID: String?, isForeground: Bool)
+    case permissionRequested(turnID: String?)
+    case questionRequested(callID: String)
+    case questionResolved(callID: String)
+}
+
+enum CodexTranscriptAttentionEvent: Equatable {
+    case questionRequested(callID: String)
+    case questionResolved(callID: String)
+
+    static func parseLine(_ data: Data) -> CodexTranscriptAttentionEvent? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            object["type"] as? String == "response_item",
+            let payload = object["payload"] as? [String: Any],
+            let type = payload["type"] as? String,
+            let callID = payload["call_id"] as? String,
+            !callID.isEmpty
+        else { return nil }
+        if type == "function_call",
+            ["request_user_input", "functions.request_user_input"].contains(payload["name"] as? String ?? "")
+        {
+            return .questionRequested(callID: callID)
+        }
+        if type == "function_call_output" {
+            return .questionResolved(callID: callID)
+        }
+        return nil
+    }
+}
+
 private struct CodexThreadRank {
     let row: CodexThreadState
     let distance: Int64
@@ -100,26 +156,27 @@ private struct CodexThreadRank {
 
 enum CodexVersionAdapter {
     static func normalize(_ version: String?) -> String? {
-        guard let version else { return nil }
-        let trimmed = version.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalized =
-            trimmed
-            .replacingOccurrences(of: "codex-cli", with: "")
-            .replacingOccurrences(of: "codex", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized.isEmpty ? nil : normalized
+        CodexCompatibilityAdapter.normalize(version)
     }
 
     static func supports(_ version: String?) -> Bool {
-        normalize(version)?.hasPrefix("0.136.") == true
+        CodexCompatibilityAdapter.select(version).supportsRichStatus
     }
 }
 
 final class CodexStateStore {
     let databaseURL: URL
 
-    init(databaseURL: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".codex/state_5.sqlite")) {
+    init(databaseURL: URL = CodexHomeResolver.databaseURL(shell: ShellResolver.detectedLoginShell())) {
         self.databaseURL = databaseURL
+    }
+
+    convenience init(context: StatusProviderContext) {
+        self.init(
+            databaseURL: CodexHomeResolver.databaseURL(
+                shell: context.codexShell ?? ShellResolver.detectedLoginShell(),
+                workingDirectory: context.workingDirectory,
+                environment: context.environment))
     }
 
     func selectThread(sessionID: String, rolloutPath: String?) throws -> CodexThreadState? {
@@ -131,7 +188,20 @@ final class CodexStateStore {
         }
         defer { sqlite3_close(db) }
 
-        let columns = try availableColumns(db: db)
+        var columnsStatement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(threads)", -1, &columnsStatement, nil) == SQLITE_OK,
+            let columnsStatement
+        else {
+            throw CodexStateStoreError.schemaUnavailable
+        }
+        defer { sqlite3_finalize(columnsStatement) }
+        var columns = Set<String>()
+        while sqlite3_step(columnsStatement) == SQLITE_ROW {
+            if let name = text(columnsStatement, 1) {
+                columns.insert(name)
+            }
+        }
+        guard !columns.isEmpty else { throw CodexStateStoreError.schemaUnavailable }
         let required = Set(["id", "cwd"])
         guard required.isSubset(of: columns) else {
             throw CodexStateStoreError.schemaUnavailable
@@ -139,6 +209,7 @@ final class CodexStateStore {
 
         let selectedColumns = [
             "id",
+            "cwd",
             columns.contains("rollout_path") ? "rollout_path" : "NULL AS rollout_path",
             columns.contains("model") ? "model" : "NULL AS model",
             columns.contains("cli_version") ? "cli_version" : "NULL AS cli_version",
@@ -172,10 +243,10 @@ final class CodexStateStore {
         }
 
         guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
-        let archivedValue = optionalInt(statement, 8) ?? 0
-        let archivedText = text(statement, 8)?.lowercased()
-        let archivedAtMs = optionalInt64(statement, 9)
-        let archivedAt = text(statement, 10)
+        let archivedValue = optionalInt(statement, 9) ?? 0
+        let archivedText = text(statement, 9)?.lowercased()
+        let archivedAtMs = optionalInt64(statement, 10)
+        let archivedAt = text(statement, 11)
         let isArchived =
             archivedValue != 0
             || archivedText == "true"
@@ -184,34 +255,17 @@ final class CodexStateStore {
             || archivedAt != nil
         return CodexThreadState(
             id: text(statement, 0) ?? "",
-            rolloutPath: text(statement, 1),
-            model: text(statement, 2),
-            cliVersion: CodexVersionAdapter.normalize(text(statement, 3)),
-            tokensUsed: optionalInt(statement, 4),
-            gitBranch: text(statement, 5),
-            createdAtMs: optionalInt64(statement, 6),
-            updatedAtMs: optionalInt64(statement, 7),
+            cwd: text(statement, 1),
+            rolloutPath: text(statement, 2),
+            model: text(statement, 3),
+            cliVersion: CodexVersionAdapter.normalize(text(statement, 4)),
+            tokensUsed: optionalInt(statement, 5),
+            gitBranch: text(statement, 6),
+            createdAtMs: optionalInt64(statement, 7),
+            updatedAtMs: optionalInt64(statement, 8),
             isArchived: isArchived,
             candidateCount: 1
         )
-    }
-
-    private func availableColumns(db: OpaquePointer) throws -> Set<String> {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "PRAGMA table_info(threads)", -1, &statement, nil) == SQLITE_OK,
-            let statement
-        else {
-            throw CodexStateStoreError.schemaUnavailable
-        }
-        defer { sqlite3_finalize(statement) }
-        var columns = Set<String>()
-        while sqlite3_step(statement) == SQLITE_ROW {
-            if let name = text(statement, 1) {
-                columns.insert(name)
-            }
-        }
-        guard !columns.isEmpty else { throw CodexStateStoreError.schemaUnavailable }
-        return columns
     }
 
     private func text(_ statement: OpaquePointer, _ index: Int32) -> String? {
@@ -239,7 +293,49 @@ enum CodexStateStoreError: Error, Equatable {
 }
 
 struct CodexRolloutParser {
-    static func parseLine(_ data: Data, expectedCWD: String) -> StatusLineData? {
+    private static let baselineTokenCount = 12_000
+
+    static func parseActivityEvent(_ data: Data) -> CodexProviderEvent? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let type = object["type"] as? String
+        else { return nil }
+        if type == "response_item", let attention = CodexTranscriptAttentionEvent.parseLine(data) {
+            switch attention {
+            case .questionRequested(let callID): return .questionRequested(callID: callID)
+            case .questionResolved(let callID): return .questionResolved(callID: callID)
+            }
+        }
+        guard type == "event_msg",
+            let payload = object["payload"] as? [String: Any],
+            let eventType = payload["type"] as? String
+        else { return nil }
+        let turnID = payload["turn_id"] as? String
+        let rootTurnID = payload["root_turn_id"] as? String
+        let isForeground = rootTurnID == nil || rootTurnID == turnID
+        switch eventType {
+        case "task_started", "turn_started":
+            guard isForeground, let turnID, !turnID.isEmpty, turnID.count <= 128 else { return nil }
+            return .foregroundTurnStarted(turnID: turnID, isForeground: true)
+        case "task_complete", "turn_complete":
+            guard isForeground, let turnID, !turnID.isEmpty, turnID.count <= 128 else { return nil }
+            return .foregroundTurnCompleted(
+                turnID: turnID,
+                isForeground: true,
+                succeeded: payload["error"] == nil || payload["error"] is NSNull)
+        case "turn_aborted":
+            guard isForeground, turnID?.count ?? 0 <= 128 else { return nil }
+            return .foregroundTurnInterrupted(turnID: turnID, isForeground: true)
+        default:
+            return nil
+        }
+    }
+
+    static func parseLine(
+        _ data: Data,
+        expectedCWD: String,
+        adapter: CodexCompatibilityAdapter = .legacy(version: "0.136.0")
+    ) -> StatusLineData? {
+        guard adapter.supportsRichStatus else { return nil }
         guard
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let type = object["type"] as? String
@@ -265,6 +361,30 @@ struct CodexRolloutParser {
                 sessionName: nil,
                 version: CodexVersionAdapter.normalize(
                     payload?["cli_version"] as? String ?? object["cli_version"] as? String),
+                exceeds200kTokens: nil,
+                pr: nil,
+                sessionStatus: nil
+            )
+        }
+
+        if type == "turn_context", case .current = adapter,
+            let payload = object["payload"] as? [String: Any],
+            let model = payload["model"] as? String
+        {
+            return StatusLineData(
+                model: StatusLineData.Model(id: model, displayName: model),
+                cost: nil,
+                contextWindow: nil,
+                rateLimits: nil,
+                worktree: nil,
+                workspace: nil,
+                effort: nil,
+                thinking: nil,
+                agent: nil,
+                outputStyle: nil,
+                vim: nil,
+                sessionName: nil,
+                version: nil,
                 exceeds200kTokens: nil,
                 pr: nil,
                 sessionStatus: nil
@@ -318,13 +438,28 @@ struct CodexRolloutParser {
             ?? (int(lastUsage?["input_tokens"]) ?? int(lastUsage?["total_input_tokens"])).flatMap { lastInput in
                 (int(lastUsage?["output_tokens"]) ?? int(lastUsage?["total_output_tokens"])).map { lastInput + $0 }
             }
-        let usedPct = contextWindow.flatMap { window -> Int? in
-            guard window > 0, let contextTokens else { return nil }
-            let raw = Int((Double(contextTokens) / Double(window)) * 100)
-            return min(100, max(0, raw))
+        let remainingPct = contextWindow.flatMap { window -> Int? in
+            guard let contextTokens else { return nil }
+            guard window > baselineTokenCount else { return 0 }
+            let effectiveWindow = window - baselineTokenCount
+            let used = contextTokens > baselineTokenCount ? contextTokens - baselineTokenCount : 0
+            let remaining = effectiveWindow > used ? effectiveWindow - used : 0
+            return Int((Double(remaining) / Double(effectiveWindow) * 100).rounded(.toNearestOrAwayFromZero))
         }
-        let remainingPct = usedPct.map { min(100, max(0, 100 - $0)) }
+        let usedPct = remainingPct.map { 100 - $0 }
         let model = payload["model"] as? String ?? info?["model"] as? String
+
+        let rawRateLimits = payload["rate_limits"] as? [String: Any]
+        let rateLimits = rawRateLimits.flatMap { raw -> StatusLineData.RateLimits? in
+            let bucketID = raw["limit_id"] as? String
+            if case .current = adapter {
+                guard let bucketID, !bucketID.isEmpty else { return nil }
+            }
+            return StatusLineData.RateLimits(
+                fiveHour: rate(raw["primary"] as? [String: Any], expectedWindowMinutes: 300),
+                sevenDay: rate(raw["secondary"] as? [String: Any], expectedWindowMinutes: 10_080),
+                bucketID: bucketID ?? "codex")
+        }
 
         return StatusLineData(
             model: model.map { StatusLineData.Model(id: $0, displayName: $0) },
@@ -335,7 +470,7 @@ struct CodexRolloutParser {
                 totalInputTokens: input,
                 totalOutputTokens: output
             ),
-            rateLimits: rateLimits(from: payload["rate_limits"] as? [String: Any]),
+            rateLimits: rateLimits,
             worktree: nil,
             workspace: nil,
             effort: nil,
@@ -351,14 +486,6 @@ struct CodexRolloutParser {
         )
     }
 
-    private static func rateLimits(from raw: [String: Any]?) -> StatusLineData.RateLimits? {
-        guard let raw else { return nil }
-        return StatusLineData.RateLimits(
-            fiveHour: rate(raw["primary"] as? [String: Any], expectedWindowMinutes: 300),
-            sevenDay: rate(raw["secondary"] as? [String: Any], expectedWindowMinutes: 10_080)
-        )
-    }
-
     private static func rate(_ raw: [String: Any]?, expectedWindowMinutes: Int) -> StatusLineData.RateLimit? {
         guard let raw, int(raw["window_minutes"]) == expectedWindowMinutes else { return nil }
         return StatusLineData.RateLimit(
@@ -369,7 +496,7 @@ struct CodexRolloutParser {
 
     private static func int(_ value: Any?) -> Int? {
         if let int = value as? Int { return int }
-        if let double = value as? Double { return Int(double) }
+        if let double = value as? Double { return Int(exactly: double.rounded(.towardZero)) }
         if let string = value as? String { return Int(string) }
         return nil
     }
@@ -386,15 +513,24 @@ struct CodexRolloutParser {
 final class CodexRolloutTailer {
     let rolloutPath: String
     let expectedCWD: String
+    let adapter: CodexCompatibilityAdapter
     var onUpdate: ((StatusLineData) -> Void)?
+    var onAttention: ((CodexTranscriptAttentionEvent) -> Void)?
+    var onActivity: ((CodexProviderEvent, Bool) -> Void)?
+    var onUnavailable: (() -> Void)?
     var onTrace: ((String, [String: String]) -> Void)?
     private var watcher: FileSystemEventWatcher?
     private var offset: UInt64 = 0
     private var pendingLineBuffer = Data()
 
-    init(rolloutPath: String, expectedCWD: String) {
+    init(
+        rolloutPath: String,
+        expectedCWD: String,
+        adapter: CodexCompatibilityAdapter = .legacy(version: "0.136.0")
+    ) {
         self.rolloutPath = rolloutPath
         self.expectedCWD = expectedCWD
+        self.adapter = adapter
     }
 
     func start() {
@@ -422,6 +558,7 @@ final class CodexRolloutTailer {
                     onTrace?(
                         "statusline.codex.tailer_attachment",
                         ["result": "waiting", "errno": String(openError)])
+                    onUnavailable?()
                 case .recovered:
                     onTrace?("statusline.codex.tailer_attachment", ["result": "recovered"])
                 case .stopped:
@@ -438,7 +575,11 @@ final class CodexRolloutTailer {
     }
 
     private func readNewLines(catchUp: Bool) {
-        guard let handle = FileHandle(forReadingAtPath: rolloutPath) else { return }
+        guard let handle = FileHandle(forReadingAtPath: rolloutPath) else {
+            onTrace?("statusline.codex.tailer_read", ["result": "unreadable"])
+            onUnavailable?()
+            return
+        }
         defer { try? handle.close() }
         do {
             let fileSize = try handle.seekToEnd()
@@ -449,47 +590,60 @@ final class CodexRolloutTailer {
             try handle.seek(toOffset: offset)
             let data = try handle.readToEnd() ?? Data()
             offset += UInt64(data.count)
-            process(data: data, catchUp: catchUp)
-        } catch {}
-    }
+            guard !data.isEmpty || !pendingLineBuffer.isEmpty else {
+                onTrace?(
+                    "statusline.codex.tailer_read",
+                    ["line_count": "0", "update_count": "0", "catch_up": catchUp ? "true" : "false"])
+                return
+            }
 
-    private func process(data: Data, catchUp: Bool) {
-        guard !data.isEmpty || !pendingLineBuffer.isEmpty else {
+            pendingLineBuffer.append(data)
+            guard let lastNewline = pendingLineBuffer.lastIndex(of: UInt8(ascii: "\n")) else { return }
+
+            let completeData = pendingLineBuffer[..<lastNewline]
+            let afterNewline = pendingLineBuffer.index(after: lastNewline)
+            pendingLineBuffer = Data(pendingLineBuffer[afterNewline...])
+
+            var lines = completeData.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: true)
+            if catchUp, lines.count > 200 {
+                lines = lines.suffix(200)
+            }
+
+            var lineCount = 0
+            var updateCount = 0
+            for line in lines {
+                lineCount += 1
+                guard line.count <= 64 * 1024 else { continue }
+                let lineData = Data(line)
+                guard (try? JSONSerialization.jsonObject(with: lineData)) != nil else {
+                    onTrace?("statusline.codex.tailer_read", ["result": "malformed_record"])
+                    onUnavailable?()
+                    continue
+                }
+                if let activity = CodexRolloutParser.parseActivityEvent(lineData) {
+                    onActivity?(activity, catchUp)
+                }
+                if let update = CodexRolloutParser.parseLine(
+                    lineData, expectedCWD: expectedCWD, adapter: adapter)
+                {
+                    updateCount += 1
+                    onUpdate?(update)
+                }
+                if let attention = CodexTranscriptAttentionEvent.parseLine(Data(line)) {
+                    onAttention?(attention)
+                }
+            }
             onTrace?(
                 "statusline.codex.tailer_read",
-                ["line_count": "0", "update_count": "0", "catch_up": catchUp ? "true" : "false"])
-            return
+                [
+                    "line_count": "\(lineCount)",
+                    "update_count": "\(updateCount)",
+                    "catch_up": catchUp ? "true" : "false",
+                ])
+        } catch {
+            onTrace?("statusline.codex.tailer_read", ["result": "unreadable"])
+            onUnavailable?()
         }
-
-        pendingLineBuffer.append(data)
-        guard let lastNewline = pendingLineBuffer.lastIndex(of: UInt8(ascii: "\n")) else { return }
-
-        let completeData = pendingLineBuffer[..<lastNewline]
-        let afterNewline = pendingLineBuffer.index(after: lastNewline)
-        pendingLineBuffer = Data(pendingLineBuffer[afterNewline...])
-
-        var lines = completeData.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: true)
-        if catchUp, lines.count > 200 {
-            lines = lines.suffix(200)
-        }
-
-        var lineCount = 0
-        var updateCount = 0
-        for line in lines {
-            lineCount += 1
-            guard line.count <= 64 * 1024 else { continue }
-            if let update = CodexRolloutParser.parseLine(Data(line), expectedCWD: expectedCWD) {
-                updateCount += 1
-                onUpdate?(update)
-            }
-        }
-        onTrace?(
-            "statusline.codex.tailer_read",
-            [
-                "line_count": "\(lineCount)",
-                "update_count": "\(updateCount)",
-                "catch_up": catchUp ? "true" : "false",
-            ])
     }
 }
 
@@ -497,27 +651,48 @@ final class CodexRolloutTailer {
 final class CodexStatusProvider: StatusLineDataProvider {
     var onUpdate: ((StatusLineData) -> Void)?
     var onAttention: ((PaneAttentionEvent) -> Void)?
+    var onAttentionResolved: ((NotificationKind) -> Void)?
+    var onHookRecords: (([CodexHookQueueRecord]) -> Void)?
+    var onCodexEvent: ((CodexProviderEvent, Bool) -> Void)?
+    var onHookFailure: (() -> Void)?
+    var onActivityChanged: ((Bool) -> Void)?
+    var onSessionBound: ((String, String?) -> Void)?
+    private(set) var pendingHookRecords: [CodexHookQueueRecord] = []
 
     private let context: StatusProviderContext
+    private let adapter: CodexCompatibilityAdapter
+    var supportsForegroundLifecycle: Bool {
+        adapter.hookEvents.contains("UserPromptSubmit") && adapter.hookEvents.contains("Stop")
+    }
     private let stateStore: CodexStateStore
     private let startupRetryInterval: TimeInterval
     private let startupTimeout: TimeInterval
     private let baseline: ToolAgnosticDataProvider
-    private var tailer: CodexRolloutTailer?
+    private(set) var tailer: CodexRolloutTailer?
+    private var tailerSessionID: String?
+    private var tailerGeneration: UInt64 = 0
     private var stateTask: Task<Void, Never>?
+    private var enrichmentTask: Task<Void, Never>?
+    private var hookDiagnosticTask: Task<Void, Never>?
     private var latestHarnessData: StatusLineData?
     private var latestBaselineData: StatusLineData?
+    private var quotaSnapshotsByBucket: [String: StatusLineData.RateLimits] = [:]
     private var boundSessionID: String?
     private var boundTranscriptPath: String?
+    private var hasConfirmedInitialSession = false
+    private var hasTranscriptUpdateForBoundSession = false
+    private var foregroundTurnIsWorking: Bool?
+    private var pendingQuestionCallIDs = Set<String>()
 
     init(
         context: StatusProviderContext,
-        stateStore: CodexStateStore = CodexStateStore(),
+        stateStore: CodexStateStore? = nil,
         startupRetryInterval: TimeInterval = 0.5,
         startupTimeout: TimeInterval = 15
     ) {
         self.context = context
-        self.stateStore = stateStore
+        self.adapter = context.codexAdapter ?? CodexCompatibilityAdapter.select(context.detectedHarnessVersion)
+        self.stateStore = stateStore ?? CodexStateStore(context: context)
         self.startupRetryInterval = startupRetryInterval
         self.startupTimeout = startupTimeout
         self.baseline = ToolAgnosticDataProvider(
@@ -534,74 +709,441 @@ final class CodexStatusProvider: StatusLineDataProvider {
             self.emitMerged()
         }
         baseline.start()
+        if context.codexHookDiagnosticPath != nil {
+            hookDiagnosticTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    self?.readAndRecordHookWriterDiagnostic()
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+            }
+        }
         stateTask = Task { [weak self] in
-            await self?.bindCodexSession()
+            guard let self else { return }
+            guard adapter.supportsRichStatus else {
+                trace(
+                    "statusline.codex.compatibility.selected",
+                    attributes: [
+                        "adapter": adapter.identifier,
+                        "version": adapter.version ?? "unknown",
+                        "result": "baseline_only",
+                    ])
+                return
+            }
+            trace(
+                "statusline.codex.compatibility.selected",
+                attributes: [
+                    "adapter": adapter.identifier,
+                    "version": adapter.version ?? "unknown",
+                    "result": "enabled",
+                    "hook_count": "\(adapter.hookEvents.count)",
+                ])
+            guard context.codexHookQueuePath != nil || context.codexHookRecordPath != nil else {
+                traceRetryableSelectionFailure(
+                    reason: "missing_hook_path", retryReason: "missing_hook_path", attempt: 1)
+                return
+            }
+            if let sessionID = context.codexInitialSessionID {
+                trace(
+                    "statusline.codex.continuation.binding_seeded",
+                    attributes: [
+                        "session_id_prefix": String(sessionID.prefix(12)),
+                        "transcript_available": context.codexInitialTranscriptPath == nil ? "false" : "true",
+                    ])
+                bind(
+                    record: CodexHookSessionRecord(
+                        paneID: context.paneID.uuidString,
+                        tabID: context.tabID.uuidString,
+                        sessionID: sessionID,
+                        cwd: context.workingDirectory,
+                        model: nil,
+                        transcriptPath: context.codexInitialTranscriptPath,
+                        hookEventName: "saved_exact_identity",
+                        timestamp: Date().timeIntervalSince1970),
+                    attempt: 0,
+                    lateBound: false)
+            }
+            let queue = context.codexHookQueuePath.map { CodexHookQueue(fileURL: URL(filePath: $0)) }
+            let deadline = Date().addingTimeInterval(startupTimeout)
+            var attempt = 0
+            var didTraceLateWaiting = false
+
+            while !Task.isCancelled {
+                attempt += 1
+                let lateBound = Date() > deadline
+                readAndRecordHookWriterDiagnostic()
+                var candidateRecords: [CodexHookQueueRecord] = []
+                if let queue {
+                    do {
+                        let drain = try queue.drain()
+                        candidateRecords = drain.records
+                        if !drain.records.isEmpty || drain.malformedRecordCount > 0 || drain.partialRecordRetained
+                            || attempt == 1 || attempt.isMultiple(of: 20)
+                        {
+                            trace(
+                                "statusline.codex.hook_queue.drained",
+                                attributes: [
+                                    "record_count": "\(drain.records.count)",
+                                    "malformed_count": "\(drain.malformedRecordCount)",
+                                    "partial_retained": String(drain.partialRecordRetained),
+                                    "retry_attempt": "\(attempt)",
+                                ])
+                        }
+                    } catch {
+                        let failureCode: String
+                        switch error as? CodexHookQueueError {
+                        case .openFailed: failureCode = "open_failed"
+                        case .lockUnavailable: failureCode = "lock_unavailable"
+                        case .readFailed: failureCode = "read_failed"
+                        case .writeFailed: failureCode = "compaction_failed"
+                        case .fileTooLarge: failureCode = "queue_too_large"
+                        case nil: failureCode = "unknown"
+                        }
+                        trace(
+                            "statusline.codex.hook_queue.read_failed",
+                            attributes: [
+                                "result": failureCode,
+                                "retry_attempt": "\(attempt)",
+                            ])
+                    }
+                }
+                let validRecords = candidateRecords.filter {
+                    $0.paneID == context.paneID.uuidString
+                        && $0.tabID == context.tabID.uuidString
+                        && (context.codexLaunchGeneration == nil
+                            || $0.launchGeneration == context.codexLaunchGeneration)
+                        && !$0.isDelegated
+                        && adapter.hookEvents.contains($0.hookEventName)
+                }
+                for queuedRecord in candidateRecords where !validRecords.contains(queuedRecord) {
+                    trace(
+                        "statusline.codex.hook_queue.record_ignored",
+                        attributes: [
+                            "reason": queuedRecord.paneID != context.paneID.uuidString
+                                || queuedRecord.tabID != context.tabID.uuidString
+                                ? "pane_tab_mismatch"
+                                : queuedRecord.isDelegated
+                                    ? "delegated_source" : "generation_or_event_mismatch",
+                            "hook_event_name": queuedRecord.hookEventName,
+                        ])
+                }
+                for record in validRecords {
+                    guard let sessionID = record.sessionID, !sessionID.isEmpty else {
+                        trace(
+                            "statusline.codex.hook_queue.record_ignored",
+                            attributes: ["reason": "missing_session_id", "hook_event_name": record.hookEventName])
+                        continue
+                    }
+                    let initialSessionID = context.codexInitialSessionID
+                    let initialIdentityUnconfirmed = initialSessionID != nil && !hasConfirmedInitialSession
+                    if initialIdentityUnconfirmed, sessionID != initialSessionID {
+                        if ["SessionStart", "UserPromptSubmit"].contains(record.hookEventName) {
+                            bind(
+                                record: CodexHookSessionRecord(
+                                    paneID: record.paneID,
+                                    tabID: record.tabID,
+                                    sessionID: sessionID,
+                                    cwd: context.workingDirectory,
+                                    model: record.model,
+                                    transcriptPath: record.transcriptPath,
+                                    hookEventName: record.hookEventName,
+                                    timestamp: record.timestamp),
+                                attempt: attempt,
+                                lateBound: lateBound)
+                        } else {
+                            trace(
+                                "statusline.codex.hook_queue.record_ignored",
+                                attributes: [
+                                    "reason": "continuation_identity_unconfirmed",
+                                    "hook_event_name": record.hookEventName,
+                                ])
+                        }
+                        continue
+                    }
+                    if initialIdentityUnconfirmed
+                        || ["SessionStart", "UserPromptSubmit"].contains(record.hookEventName)
+                    {
+                        bind(
+                            record: CodexHookSessionRecord(
+                                paneID: record.paneID,
+                                tabID: record.tabID,
+                                sessionID: sessionID,
+                                cwd: context.workingDirectory,
+                                model: record.model,
+                                transcriptPath: record.transcriptPath,
+                                hookEventName: record.hookEventName,
+                                timestamp: record.timestamp),
+                            attempt: attempt,
+                            lateBound: lateBound)
+                    }
+                    if let boundSessionID, sessionID != boundSessionID {
+                        trace(
+                            "statusline.codex.hook_queue.record_ignored",
+                            attributes: ["reason": "session_mismatch", "hook_event_name": record.hookEventName])
+                        continue
+                    }
+                    pendingHookRecords.append(record)
+                    onHookRecords?([record])
+                    let nextWorkingState: Bool?
+                    switch record.hookEventName {
+                    case "UserPromptSubmit": nextWorkingState = true
+                    case "Stop", "Interrupt": nextWorkingState = false
+                    default: nextWorkingState = nil
+                    }
+                    if let nextWorkingState, foregroundTurnIsWorking != nextWorkingState {
+                        foregroundTurnIsWorking = nextWorkingState
+                        trace(
+                            "statusline.codex.activity.changed",
+                            attributes: [
+                                "pane.id": context.paneID.uuidString,
+                                "pane.name": context.paneName,
+                                "tab.id": context.tabID.uuidString,
+                                "tab.name": context.tabName,
+                                "state": nextWorkingState ? "working" : "stopped",
+                                "hook_event_name": record.hookEventName,
+                            ])
+                        onActivityChanged?(nextWorkingState)
+                    }
+                    guard sessionID == boundSessionID else { continue }
+                    switch record.hookEventName {
+                    case "UserPromptSubmit":
+                        if let turnID = record.turnID, !turnID.isEmpty, turnID.count <= 128 {
+                            onCodexEvent?(.foregroundTurnStarted(turnID: turnID, isForeground: true), false)
+                        }
+                    case "Stop":
+                        if case .current = adapter, let turnID = record.turnID,
+                            !turnID.isEmpty, turnID.count <= 128
+                        {
+                            onCodexEvent?(.foregroundCompletionCandidate(turnID: turnID), false)
+                        }
+                    case "Interrupt":
+                        if case .current = adapter, (record.turnID?.count ?? 0) <= 128 {
+                            onCodexEvent?(
+                                .foregroundTurnInterrupted(turnID: record.turnID, isForeground: true), false)
+                        }
+                    case "PermissionRequest":
+                        onAttention?(.codexPermissionRequest)
+                        trace("statusline.codex.permission.attention", attributes: ["result": "requested"])
+                    default:
+                        break
+                    }
+                }
+                if validRecords.isEmpty, let hookRecordPath = context.codexHookRecordPath,
+                    let record = readHookRecord(path: hookRecordPath)
+                {
+                    guard record.paneID == context.paneID.uuidString, record.tabID == context.tabID.uuidString else {
+                        if attempt == 1 || attempt.isMultiple(of: 20) {
+                            trace(
+                                "statusline.codex.hook_record_ignored",
+                                attributes: [
+                                    "reason": "hook_context_mismatch",
+                                    "retry_attempt": "\(attempt)",
+                                    "late_bound": lateBound ? "true" : "false",
+                                    "record_pane_id": record.paneID,
+                                    "record_tab_id": record.tabID,
+                                    "hook_event_name": record.hookEventName,
+                                ])
+                        }
+                        if !lateBound {
+                            traceRetryableSelectionFailure(
+                                reason: "hook_context_mismatch",
+                                retryReason: "hook_context_mismatch",
+                                attempt: attempt,
+                                extraAttributes: [
+                                    "hook_record_available": "true",
+                                    "hook_event_name": record.hookEventName,
+                                ])
+                        }
+                        _ = await sleepUntilNextRetry(deadline: nil)
+                        continue
+                    }
+                    bind(record: record, attempt: attempt, lateBound: lateBound)
+                }
+
+                if attempt == 1 || attempt.isMultiple(of: 20) || (lateBound && !didTraceLateWaiting) {
+                    trace(
+                        "statusline.codex.hook_waiting",
+                        attributes: [
+                            "retry_attempt": "\(attempt)",
+                            "late_bound": lateBound ? "true" : "false",
+                            "hook_record_available": "false",
+                        ])
+                    if lateBound {
+                        didTraceLateWaiting = true
+                    }
+                }
+                if !lateBound {
+                    traceRetryableSelectionFailure(
+                        reason: "hook_record_unavailable",
+                        retryReason: "waiting_for_hook_record",
+                        attempt: attempt,
+                        extraAttributes: ["hook_record_available": "false"])
+                }
+                _ = await sleepUntilNextRetry(deadline: nil)
+            }
         }
     }
 
     func stop() {
         stateTask?.cancel()
         stateTask = nil
+        enrichmentTask?.cancel()
+        enrichmentTask = nil
+        hookDiagnosticTask?.cancel()
+        hookDiagnosticTask = nil
+        clearPendingQuestionCallIDs(reason: "provider_stopped")
         baseline.stop()
-        tailer?.stop()
-        tailer = nil
+        stopTailer()
     }
 
-    private func bindCodexSession() async {
-        guard let hookRecordPath = context.codexHookRecordPath else {
-            traceRetryableSelectionFailure(reason: "missing_hook_path", retryReason: "missing_hook_path", attempt: 1)
+    private func readAndRecordHookWriterDiagnostic() {
+        guard let path = context.codexHookDiagnosticPath else { return }
+        do {
+            let records = try CodexHookDiagnosticQueue(fileURL: URL(filePath: path)).drain()
+            for record in records {
+                if record.kind == "invoked" {
+                    trace(
+                        "statusline.codex.hook.invoked",
+                        attributes: ["hook_event_name": record.eventName, "result": record.result])
+                } else {
+                    trace(
+                        "statusline.codex.hook_queue.write_failed",
+                        attributes: ["hook_event_name": record.eventName, "result": record.result])
+                    onHookFailure?()
+                }
+            }
+        } catch {
+            let reason: String
+            switch error as? CodexHookQueueError {
+            case .openFailed: reason = "open_failed"
+            case .lockUnavailable: reason = "lock_unavailable"
+            case .readFailed: reason = "read_failed"
+            case .writeFailed: reason = "truncate_failed"
+            case .fileTooLarge: reason = "file_too_large"
+            case nil: reason = "unknown"
+            }
+            trace("statusline.codex.hook_diagnostic.read_failed", attributes: ["reason": reason])
+        }
+    }
+
+    private func bind(record: CodexHookSessionRecord, attempt: Int, lateBound: Bool) {
+        let isSavedIdentitySeed = record.hookEventName == "saved_exact_identity"
+        if !isSavedIdentitySeed,
+            let requestedSessionID = context.codexInitialSessionID,
+            !hasConfirmedInitialSession,
+            record.sessionID != requestedSessionID
+        {
+            trace(
+                "statusline.codex.continuation.binding_rejected",
+                attributes: [
+                    "requested_session_id_prefix": String(requestedSessionID.prefix(12)),
+                    "bound_session_id_prefix": String(record.sessionID.prefix(12)),
+                    "hook_event_name": record.hookEventName,
+                ])
+            onSessionBound?(record.sessionID, record.transcriptPath)
             return
         }
-        let deadline = Date().addingTimeInterval(startupTimeout)
-        var attempt = 0
-        var didTraceLateWaiting = false
-
-        while !Task.isCancelled {
-            attempt += 1
-            let lateBound = Date() > deadline
-            if let record = readHookRecord(path: hookRecordPath) {
-                guard record.paneID == context.paneID.uuidString, record.tabID == context.tabID.uuidString else {
-                    if attempt == 1 || attempt.isMultiple(of: 20) {
-                        trace(
-                            "statusline.codex.hook_record_ignored",
-                            attributes: [
-                                "reason": "hook_context_mismatch",
-                                "retry_attempt": "\(attempt)",
-                                "late_bound": lateBound ? "true" : "false",
-                                "record_pane_id": record.paneID,
-                                "record_tab_id": record.tabID,
-                                "hook_event_name": record.hookEventName,
-                            ])
-                    }
-                    if !lateBound {
-                        traceRetryableSelectionFailure(
-                            reason: "hook_context_mismatch",
-                            retryReason: "hook_context_mismatch",
-                            attempt: attempt,
-                            extraAttributes: [
-                                "hook_record_available": "true",
-                                "hook_event_name": record.hookEventName,
-                            ])
-                    }
-                    _ = await sleepUntilNextRetry(deadline: nil)
-                    continue
-                }
-                boundSessionID = record.sessionID
-                boundTranscriptPath = record.transcriptPath
+        let confirmsInitialSession =
+            !isSavedIdentitySeed
+            && !hasConfirmedInitialSession
+            && context.codexInitialSessionID == record.sessionID
+        if confirmsInitialSession {
+            hasConfirmedInitialSession = true
+            trace(
+                "statusline.codex.continuation.binding_confirmed",
+                attributes: [
+                    "session_id_prefix": String(record.sessionID.prefix(12)),
+                    "hook_event_name": record.hookEventName,
+                ])
+        }
+        let sessionChanged = boundSessionID != record.sessionID
+        let nextTranscriptPath = record.transcriptPath ?? boundTranscriptPath
+        let transcriptChanged = boundTranscriptPath != nextTranscriptPath
+        if !sessionChanged && !transcriptChanged {
+            if confirmsInitialSession {
+                onSessionBound?(record.sessionID, nextTranscriptPath)
                 trace(
-                    "statusline.codex.hook_bound",
+                    "statusline.codex.binding.callback",
+                    attributes: ["session_id_prefix": String(record.sessionID.prefix(12))])
+            }
+            if !hasTranscriptUpdateForBoundSession,
+                let model = record.model,
+                latestHarnessData?.model?.id != model
+            {
+                latestHarnessData = mergeHarnessData(
+                    StatusLineData(
+                        model: StatusLineData.Model(id: model, displayName: model),
+                        cost: nil,
+                        contextWindow: nil,
+                        rateLimits: nil,
+                        worktree: nil,
+                        workspace: nil,
+                        effort: nil,
+                        thinking: nil,
+                        agent: nil,
+                        outputStyle: nil,
+                        vim: nil,
+                        sessionName: nil,
+                        version: nil,
+                        exceeds200kTokens: nil,
+                        pr: nil,
+                        sessionStatus: nil))
+                emitMerged()
+            }
+            if attempt == 1 || attempt.isMultiple(of: 20) {
+                trace(
+                    "statusline.codex.binding.unchanged",
                     attributes: [
-                        "hook_record_available": "true",
                         "hook_event_name": record.hookEventName,
-                        "retry_attempt": "\(attempt)",
-                        "late_bound": lateBound ? "true" : "false",
                         "session_id_prefix": String(record.sessionID.prefix(12)),
-                        "transcript_available": record.transcriptPath.map {
-                            FileManager.default.fileExists(atPath: $0) ? "true" : "false"
-                        } ?? "false",
+                        "retry_attempt": "\(attempt)",
                     ])
-                let stateData = StatusLineData(
-                    model: record.model.map { StatusLineData.Model(id: $0, displayName: $0) },
+            }
+            return
+        }
+
+        if sessionChanged {
+            clearPendingQuestionCallIDs(reason: "session_changed")
+            enrichmentTask?.cancel()
+            enrichmentTask = nil
+            if tailer != nil {
+                stopTailer()
+                trace("statusline.codex.tailer_detached", attributes: ["reason": "session_changed"])
+            }
+            boundSessionID = record.sessionID
+            foregroundTurnIsWorking = nil
+            boundTranscriptPath = record.transcriptPath
+            hasTranscriptUpdateForBoundSession = false
+            latestHarnessData = nil
+            quotaSnapshotsByBucket = [:]
+            trace(
+                "statusline.codex.binding.facts_cleared",
+                attributes: [
+                    "session_id_prefix": String(record.sessionID.prefix(12)),
+                    "reason": "session_changed",
+                ])
+            if !isSavedIdentitySeed {
+                onSessionBound?(record.sessionID, record.transcriptPath)
+                trace(
+                    "statusline.codex.binding.callback",
+                    attributes: ["session_id_prefix": String(record.sessionID.prefix(12))])
+            }
+        } else {
+            let previousTranscriptPath = boundTranscriptPath
+            boundTranscriptPath = nextTranscriptPath
+            if confirmsInitialSession || previousTranscriptPath != nextTranscriptPath,
+                let nextTranscriptPath
+            {
+                onSessionBound?(record.sessionID, nextTranscriptPath)
+                trace(
+                    "statusline.codex.binding.callback",
+                    attributes: ["session_id_prefix": String(record.sessionID.prefix(12))])
+            }
+        }
+
+        if let model = record.model {
+            latestHarnessData = mergeHarnessData(
+                StatusLineData(
+                    model: StatusLineData.Model(id: model, displayName: model),
                     cost: nil,
                     contextWindow: nil,
                     rateLimits: nil,
@@ -613,67 +1155,72 @@ final class CodexStatusProvider: StatusLineDataProvider {
                     outputStyle: nil,
                     vim: nil,
                     sessionName: nil,
-                    version: CodexVersionAdapter.normalize(context.detectedHarnessVersion),
+                    version: nil,
                     exceeds200kTokens: nil,
                     pr: nil,
-                    sessionStatus: nil
-                )
-                await MainActor.run {
-                    self.latestHarnessData = stateData
-                    self.emitMerged()
-                }
-                await startBoundTailerOrEnrichment(record: record, deadline: Date().addingTimeInterval(startupTimeout))
-                return
-            }
-
-            if attempt == 1 || attempt.isMultiple(of: 20) || (lateBound && !didTraceLateWaiting) {
-                trace(
-                    "statusline.codex.hook_waiting",
-                    attributes: [
-                        "retry_attempt": "\(attempt)",
-                        "late_bound": lateBound ? "true" : "false",
-                        "hook_record_available": "false",
-                    ])
-                if lateBound {
-                    didTraceLateWaiting = true
-                }
-            }
-            if !lateBound {
-                traceRetryableSelectionFailure(
-                    reason: "hook_record_unavailable",
-                    retryReason: "waiting_for_hook_record",
-                    attempt: attempt,
-                    extraAttributes: ["hook_record_available": "false"])
-            }
-            _ = await sleepUntilNextRetry(deadline: nil)
+                    sessionStatus: nil))
         }
-    }
+        latestHarnessData = mergeHarnessData(
+            StatusLineData(
+                model: nil,
+                cost: nil,
+                contextWindow: nil,
+                rateLimits: nil,
+                worktree: nil,
+                workspace: nil,
+                effort: nil,
+                thinking: nil,
+                agent: nil,
+                outputStyle: nil,
+                vim: nil,
+                sessionName: nil,
+                version: adapter.version,
+                exceeds200kTokens: nil,
+                pr: nil,
+                sessionStatus: nil))
+        trace(
+            sessionChanged ? "statusline.codex.binding.changed" : "statusline.codex.binding.transcript_updated",
+            attributes: [
+                "hook_event_name": record.hookEventName,
+                "retry_attempt": "\(attempt)",
+                "late_bound": String(lateBound),
+                "session_id_prefix": String(record.sessionID.prefix(12)),
+                "transcript_available": boundTranscriptPath.map {
+                    FileManager.default.fileExists(atPath: $0) ? "true" : "false"
+                } ?? "false",
+            ])
+        emitMerged()
 
-    private func startBoundTailerOrEnrichment(record: CodexHookSessionRecord, deadline: Date) async {
-        if let path = record.transcriptPath, FileManager.default.fileExists(atPath: path) {
-            await MainActor.run { self.startTailer(path: path) }
+        if let path = boundTranscriptPath,
+            tailerSessionID != record.sessionID || tailer?.rolloutPath != path
+        {
+            startTailer(path: path, sessionID: record.sessionID)
         }
 
-        var attempt = 0
-        while !Task.isCancelled {
-            attempt += 1
-            do {
-                let thread = try stateStore.selectThread(
-                    sessionID: record.sessionID, rolloutPath: record.transcriptPath)
-                trace(
-                    "statusline.codex.sqlite_enrichment",
-                    attributes: [
-                        "result": thread == nil ? "no_match" : "matched",
-                        "retry_attempt": "\(attempt)",
-                        "session_id_prefix": String(record.sessionID.prefix(12)),
-                        "rollout_path_matched": thread?.rolloutPath == record.transcriptPath ? "true" : "false",
-                    ])
-                if let thread {
-                    let tailerPath = thread.rolloutPath ?? record.transcriptPath
-                    await MainActor.run {
-                        self.latestHarnessData = self.mergeHarnessData(
+        enrichmentTask?.cancel()
+        enrichmentTask = Task { [weak self] in
+            guard let self else { return }
+            let deadline = Date().addingTimeInterval(startupTimeout)
+            var attempt = 0
+            while !Task.isCancelled {
+                attempt += 1
+                do {
+                    let thread = try stateStore.selectThread(
+                        sessionID: record.sessionID, rolloutPath: record.transcriptPath)
+                    trace(
+                        "statusline.codex.sqlite_enrichment",
+                        attributes: [
+                            "result": thread == nil ? "no_match" : "matched",
+                            "retry_attempt": "\(attempt)",
+                            "session_id_prefix": String(record.sessionID.prefix(12)),
+                            "rollout_path_matched": thread?.rolloutPath == record.transcriptPath ? "true" : "false",
+                        ])
+                    guard boundSessionID == record.sessionID else { return }
+                    if let thread {
+                        latestHarnessData = mergeHarnessData(
                             StatusLineData(
-                                model: thread.model.map { StatusLineData.Model(id: $0, displayName: $0) },
+                                model: hasTranscriptUpdateForBoundSession
+                                    ? nil : thread.model.map { StatusLineData.Model(id: $0, displayName: $0) },
                                 cost: nil,
                                 contextWindow: nil,
                                 rateLimits: nil,
@@ -688,26 +1235,26 @@ final class CodexStatusProvider: StatusLineDataProvider {
                                 version: thread.cliVersion,
                                 exceeds200kTokens: nil,
                                 pr: nil,
-                                sessionStatus: nil
-                            ))
-                        self.emitMerged()
-                        if self.tailer == nil, let tailerPath, FileManager.default.fileExists(atPath: tailerPath) {
-                            self.startTailer(path: tailerPath)
+                                sessionStatus: nil))
+                        emitMerged()
+                        if boundTranscriptPath == nil, let tailerPath = thread.rolloutPath {
+                            boundTranscriptPath = tailerPath
+                            startTailer(path: tailerPath, sessionID: record.sessionID)
                         }
+                        return
                     }
-                    if tailer != nil || tailerPath == nil { return }
+                } catch let error as CodexStateStoreError {
+                    trace(
+                        "statusline.codex.sqlite_enrichment",
+                        attributes: ["result": sqliteResult(for: error), "retry_attempt": "\(attempt)"])
+                } catch {
+                    trace(
+                        "statusline.codex.sqlite_enrichment",
+                        attributes: ["result": "unknown", "retry_attempt": "\(attempt)"])
                 }
-            } catch let error as CodexStateStoreError {
-                trace(
-                    "statusline.codex.sqlite_enrichment",
-                    attributes: ["result": sqliteResult(for: error), "retry_attempt": "\(attempt)"])
-            } catch {
-                trace(
-                    "statusline.codex.sqlite_enrichment",
-                    attributes: ["result": "unknown", "retry_attempt": "\(attempt)"])
+                if await sleepUntilNextRetry(deadline: deadline) { continue }
+                return
             }
-            if await sleepUntilNextRetry(deadline: deadline) { continue }
-            return
         }
     }
 
@@ -764,14 +1311,82 @@ final class CodexStatusProvider: StatusLineDataProvider {
         return true
     }
 
-    private func startTailer(path: String) {
-        tailer?.stop()
-        let next = CodexRolloutTailer(rolloutPath: path, expectedCWD: context.workingDirectory)
+    private func startTailer(path: String, sessionID: String) {
+        stopTailer()
+        let generation = tailerGeneration
+        let next = CodexRolloutTailer(
+            rolloutPath: path, expectedCWD: context.workingDirectory, adapter: adapter)
         next.onTrace = { [weak self] name, attributes in
             self?.trace(name, attributes: attributes)
         }
+        next.onActivity = { [weak self] event, isCatchUp in
+            guard let self else { return }
+            guard self.tailerGeneration == generation else {
+                self.trace("statusline.codex.tailer_update_ignored", attributes: ["result": "stale_generation"])
+                return
+            }
+            guard self.boundSessionID == sessionID,
+                self.boundTranscriptPath == path, self.tailerSessionID == sessionID,
+                self.tailer?.rolloutPath == path
+            else { return }
+            switch event {
+            case .questionRequested, .questionResolved:
+                break
+            default:
+                onCodexEvent?(event, isCatchUp)
+            }
+        }
+        next.onAttention = { [weak self] event in
+            guard let self else { return }
+            guard self.tailerGeneration == generation else {
+                self.trace("statusline.codex.tailer_update_ignored", attributes: ["result": "stale_generation"])
+                return
+            }
+            guard self.boundSessionID == sessionID,
+                self.boundTranscriptPath == path, self.tailerSessionID == sessionID,
+                self.tailer?.rolloutPath == path
+            else { return }
+            switch event {
+            case .questionRequested(let callID):
+                guard pendingQuestionCallIDs.insert(callID).inserted else { return }
+                onAttention?(.codexQuestion)
+                trace("statusline.codex.question.attention", attributes: ["result": "requested"])
+            case .questionResolved(let callID):
+                guard pendingQuestionCallIDs.remove(callID) != nil else { return }
+                if pendingQuestionCallIDs.isEmpty {
+                    onAttentionResolved?(.codexQuestion)
+                }
+                trace(
+                    "statusline.codex.question.attention",
+                    attributes: ["result": pendingQuestionCallIDs.isEmpty ? "resolved" : "call_resolved"])
+            }
+        }
+        next.onUnavailable = { [weak self] in
+            guard let self else { return }
+            guard self.tailerGeneration == generation else {
+                self.trace("statusline.codex.tailer_update_ignored", attributes: ["result": "stale_generation"])
+                return
+            }
+            guard self.boundSessionID == sessionID,
+                self.boundTranscriptPath == path, self.tailerSessionID == sessionID,
+                self.tailer?.rolloutPath == path
+            else { return }
+            self.latestHarnessData?.model = nil
+            self.latestHarnessData?.contextWindow = nil
+            self.latestHarnessData?.rateLimits = nil
+            self.quotaSnapshotsByBucket = [:]
+            self.emitMerged()
+        }
         next.onUpdate = { [weak self] data in
             guard let self else { return }
+            guard self.tailerGeneration == generation else {
+                self.trace("statusline.codex.tailer_update_ignored", attributes: ["result": "stale_generation"])
+                return
+            }
+            guard self.boundSessionID == sessionID,
+                self.boundTranscriptPath == path, self.tailerSessionID == sessionID,
+                self.tailer?.rolloutPath == path
+            else { return }
             self.trace(
                 "statusline.codex.parsed_update",
                 attributes: [
@@ -781,18 +1396,56 @@ final class CodexStatusProvider: StatusLineDataProvider {
                     "has_context": data.contextWindow?.usedPercentage == nil ? "false" : "true",
                     "has_rate_limits": data.rateLimits == nil ? "false" : "true",
                 ])
+            self.hasTranscriptUpdateForBoundSession = true
             self.latestHarnessData = self.mergeHarnessData(data)
             self.emitMerged()
         }
         tailer = next
+        tailerSessionID = sessionID
         next.start()
+    }
+
+    private func stopTailer() {
+        tailerGeneration &+= 1
+        tailer?.stop()
+        tailer = nil
+        tailerSessionID = nil
+    }
+
+    private func clearPendingQuestionCallIDs(reason: String) {
+        guard !pendingQuestionCallIDs.isEmpty else { return }
+        pendingQuestionCallIDs.removeAll()
+        onAttentionResolved?(.codexQuestion)
+        trace("statusline.codex.question.attention", attributes: ["result": "cleared", "reason": reason])
     }
 
     private func mergeHarnessData(_ update: StatusLineData) -> StatusLineData {
         var merged = latestHarnessData ?? update
         if let model = update.model { merged.model = model }
         if let contextWindow = update.contextWindow { merged.contextWindow = contextWindow }
-        if let rateLimits = update.rateLimits { merged.rateLimits = rateLimits }
+        if let rateLimits = update.rateLimits {
+            let bucketID = rateLimits.bucketID ?? "codex"
+            let previous = quotaSnapshotsByBucket[bucketID]
+            let fiveHour =
+                rateLimits.fiveHour.map {
+                    StatusLineData.RateLimit(
+                        usedPercentage: $0.usedPercentage ?? previous?.fiveHour?.usedPercentage,
+                        resetsAt: $0.resetsAt ?? previous?.fiveHour?.resetsAt)
+                } ?? previous?.fiveHour
+            let sevenDay =
+                rateLimits.sevenDay.map {
+                    StatusLineData.RateLimit(
+                        usedPercentage: $0.usedPercentage ?? previous?.sevenDay?.usedPercentage,
+                        resetsAt: $0.resetsAt ?? previous?.sevenDay?.resetsAt)
+                } ?? previous?.sevenDay
+            quotaSnapshotsByBucket[bucketID] = StatusLineData.RateLimits(
+                fiveHour: fiveHour,
+                sevenDay: sevenDay,
+                bucketID: bucketID)
+            if bucketID == "codex" {
+                merged.rateLimits = quotaSnapshotsByBucket[bucketID]
+            }
+        }
         if let version = update.version { merged.version = version }
         return merged
     }

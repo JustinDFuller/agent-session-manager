@@ -37,7 +37,9 @@ Custom fields in a profile status-line override are independent from the global 
 
 ### Show pull-request status
 
-In **GitHub PR Tracking**, enable **Track pull requests** to show the current pull request status for a pane’s Git branch. This requires the GitHub CLI (`gh`) to be installed and authenticated. The same section controls polling and background refresh.
+In **GitHub PR Tracking**, enable **Track pull requests** to show the current pull request status for a pane’s Git branch. This requires the GitHub CLI (`gh`) to be installed and authenticated in the configured shell. The same section controls polling and background refresh.
+
+The PR item shows **Checking…** while a query is running and **No PR** after a successful query finds none. When a query fails, click the item for the error and **Retry**. If a previous PR result exists, it remains visible and is marked **Stale** until a successful refresh. Authentication errors tell you to authenticate the configured CLI before retrying.
 
 Use **PR Polling Interval** to control how often foreground checks run, **Request Timeout** to limit an in-flight request, and **Background Refresh** to keep checking while the app is unfocused. **Background Polling Interval** controls the cadence for those background checks.
 
@@ -56,7 +58,8 @@ _Status Line settings control the layout and pull-request tracking options._
 - If a custom field does not produce a value, check that its harness selection includes the pane's harness, that the field is saved, and that the command, refresh interval, and timeout are correct. A profile status line can use a different saved command from the global status line.
 - If **Run Now** starts a command but the displayed value does not change, check whether the command uses its own cache or refresh interval. **Run Now** starts the command immediately but does not bypass a cache policy implemented by the command.
 - If an exact SF Symbol name is not available on this version of macOS, select a suggested icon instead.
-- If pull-request status is missing, confirm that `gh` is installed, authenticated, and that **Track pull requests** is enabled.
+- If pull-request status is missing, confirm that `gh` is installed and run `gh auth status` in the configured shell. This checks its current authentication without changing accounts.
+- If the PR item reports an error, open it, resolve the displayed cause, then choose **Retry**.
 
 ## Related tasks
 
