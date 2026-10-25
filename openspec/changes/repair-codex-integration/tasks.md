@@ -19,7 +19,7 @@
 - [x] 2.3 Parse actual top-level model metadata and separate cumulative token totals from current occupancy; cover real sanitized 0.162 record shapes, legacy shapes, model changes, absent fields, and unreadable current sources.
 - [x] 2.4 Match the upstream normalized and rounded context calculation; test the 236085/475000 snapshot gives 48/52, small windows, baseline occupancy, rounding boundaries, overflow occupancy, and missing data.
 - [x] 2.5 Retain quota snapshots by bucket and select the standard matching windows; test premium null updates, partial standard updates, reset times, used-versus-remaining semantics, and bucket clearing on rebind.
-- [x] 2.6 Update status-line and Codex feature documentation plus binding/source diagnostic coverage; demonstrate a real Dev new/resume transition and model change with current facts rather than an injected transcript or fabricated pane.
+- [ ] 2.6 Update status-line and Codex feature documentation plus binding/source diagnostic coverage; demonstrate a real Dev new/resume transition and model change with current facts rather than an injected transcript or fabricated pane.
 
 ## 3. Codex activity and attention
 
@@ -51,4 +51,4 @@
 - [ ] 6.2 Exercise cross-feature isolation with two Codex panes on distinct UI-supported worktrees and ordinary Claude/Cursor/OpenCode or shell panes; record that Codex session changes and shared status repairs preserve other panes' lifecycle, configuration, notifications, and Agent Control access. Concurrent panes sharing one checkout are unsupported by New Pane and are out of scope.
 - [ ] 6.3 Exercise real authentication failure/retry and available banner prerequisites in Dev, and deliver an acceptance record linking each capability's scenarios to runtime captures and bounded diagnostics; separate source/unit evidence, executed runtime evidence, skips, and unresolved blockers before declaring acceptance complete.
 
-The separate Dev-only Launch Services prerequisite owns group 0. One implementation pull request owns all six Codex groups 1 through 6 and their subtasks as an approved exception to the usual one-group-per-pull-request rule. Task checkboxes track actual implementation and QA progress; task 0.1 is complete, and tasks 3.5, 4.4, 4.5, and 6.1 through 6.3 remain open. Review, OpenSpec validation, CI monitoring, and the later archive-only transition are workflow steps rather than completed implementation tasks.
+The separate Dev-only Launch Services prerequisite owns group 0. One implementation pull request owns all six Codex groups 1 through 6 and their subtasks as an approved exception to the usual one-group-per-pull-request rule. Task checkboxes track actual implementation and QA progress; task 0.1 is complete, and tasks 2.6, 3.5, 4.4, 4.5, and 6.1 through 6.3 remain open. Review, OpenSpec validation, CI monitoring, and the later archive-only transition are workflow steps rather than completed implementation tasks.

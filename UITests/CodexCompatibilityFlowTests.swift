@@ -53,12 +53,13 @@ final class CodexCompatibilityFlowTests: BaseTestCase {
         guidanceAttachment.lifetime = .keepAlways
         add(guidanceAttachment)
         let approvalDescription = settingsWindow.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS[c] %@", "approval timing")
+            NSPredicate(format: "value CONTAINS[c] %@", "approval timing")
         ).firstMatch
         waitFor(approvalDescription)
-        XCTAssertTrue(approvalDescription.label.contains("on-request"))
-        XCTAssertTrue(approvalDescription.label.contains("never"))
-        XCTAssertFalse(approvalDescription.label.contains("untrusted"))
+        let approvalDescriptionValue = try XCTUnwrap(approvalDescription.value as? String)
+        XCTAssertTrue(approvalDescriptionValue.contains("on-request"))
+        XCTAssertTrue(approvalDescriptionValue.contains("never"))
+        XCTAssertFalse(approvalDescriptionValue.contains("untrusted"))
 
         let addCustomFlag = settingsWindow.buttons["Add Custom Flag"]
         waitFor(addCustomFlag)
@@ -70,7 +71,11 @@ final class CodexCompatibilityFlowTests: BaseTestCase {
         let textType = app.radioButtons["Text"]
         waitFor(textType)
         textType.click()
-        app.buttons["Add"].click()
+        let customFlagSheet = settingsWindow.sheets.firstMatch
+        waitFor(customFlagSheet)
+        let addCustomFlagButton = customFlagSheet.buttons["Add"]
+        waitFor(addCustomFlagButton)
+        addCustomFlagButton.click()
 
         let profilesTab = settingsWindow.descendants(matching: .any)
             .matching(identifier: "settings-sidebar-profiles").firstMatch
@@ -186,21 +191,24 @@ final class CodexCompatibilityFlowTests: BaseTestCase {
         savedProfile.click()
         app.buttons["new-pane-open-button"].click()
 
-        let paneError = app.descendants(matching: .any)
-            .matching(identifier: "pane-error-overlay-\(paneName)").firstMatch
-        waitFor(paneError, timeout: 30)
-        let unsupportedValueError = paneError.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS %@", "does not support the saved value 'untrusted'")
+        let paneContainer = app.descendants(matching: .any)
+            .matching(identifier: "pane-\(paneName)").firstMatch
+        waitFor(paneContainer, timeout: 30)
+        let unsupportedValueError = paneContainer.staticTexts.matching(
+            identifier: "pane-error-overlay-\(paneName)"
+        ).matching(
+            NSPredicate(format: "value CONTAINS %@", "does not support the saved value 'untrusted'")
         ).firstMatch
         waitFor(unsupportedValueError)
-        XCTAssertTrue(unsupportedValueError.label.contains("on-request"))
-        XCTAssertTrue(unsupportedValueError.label.contains("never"))
-        XCTAssertTrue(unsupportedValueError.label.contains("edit the affected profile"))
-        XCTAssertTrue(unsupportedValueError.label.contains("Refresh Pane"))
+        let unsupportedValueErrorText = try XCTUnwrap(unsupportedValueError.value as? String)
+        XCTAssertTrue(unsupportedValueErrorText.contains("on-request"))
+        XCTAssertTrue(unsupportedValueErrorText.contains("never"))
+        XCTAssertTrue(unsupportedValueErrorText.contains("edit the affected profile"))
+        XCTAssertTrue(unsupportedValueErrorText.contains("Refresh Pane"))
         XCTAssertFalse(
             app.descendants(matching: .any)
                 .matching(identifier: "pane-terminal-\(paneName)").firstMatch.exists)
-        XCTAssertFalse(paneError.buttons["Retry"].exists)
+        XCTAssertFalse(paneContainer.buttons["Retry"].exists)
         let rejectionAttachment = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
         rejectionAttachment.name = "codex-unsupported-approval"
         rejectionAttachment.lifetime = .keepAlways
@@ -234,7 +242,7 @@ final class CodexCompatibilityFlowTests: BaseTestCase {
         app.buttons["Save"].click()
         app.typeKey("w", modifierFlags: .command)
 
-        paneError.rightClick()
+        paneContainer.rightClick()
         let refreshPane = app.menuItems["Refresh Pane…"]
         waitFor(refreshPane)
         refreshPane.click()
@@ -247,6 +255,7 @@ final class CodexCompatibilityFlowTests: BaseTestCase {
         let recoveredTerminal = app.descendants(matching: .any)
             .matching(identifier: "pane-terminal-\(paneName)").firstMatch
         waitFor(recoveredTerminal, timeout: 30)
+        waitForDisappear(unsupportedValueError, timeout: 30)
         RunLoop.current.run(until: Date().addingTimeInterval(8))
         XCTAssertFalse(
             app.descendants(matching: .any)
@@ -256,34 +265,38 @@ final class CodexCompatibilityFlowTests: BaseTestCase {
         recoveryAttachment.lifetime = .keepAlways
         add(recoveryAttachment)
 
-        recoveredTerminal.rightClick()
-        let secondRefreshPane = app.menuItems["Refresh Pane…"]
-        waitFor(secondRefreshPane)
-        secondRefreshPane.click()
-        let secondRefreshSettings = app.buttons["refresh-pane-settings"]
-        waitFor(secondRefreshSettings)
-        secondRefreshSettings.click()
-        let refreshSheet = app.sheets.firstMatch
-        let refreshProfilePicker = refreshSheet.descendants(matching: .any)
+        app.typeKey("p", modifierFlags: .command)
+        let unsupportedPaneName = "codex-unsupported-profile"
+        let unsupportedPaneNameField = app.textFields["new-pane-name-field"]
+        waitFor(unsupportedPaneNameField)
+        unsupportedPaneNameField.click()
+        unsupportedPaneNameField.typeText(unsupportedPaneName)
+        let unsupportedProfilePicker = app.descendants(matching: .any)
             .matching(identifier: "new-pane-profile-picker").firstMatch
-        waitFor(refreshProfilePicker)
-        refreshProfilePicker.click()
+        waitFor(unsupportedProfilePicker)
+        unsupportedProfilePicker.click()
         let unsupportedProfileOption = app.menuItems[unsupportedProfileName]
         waitFor(unsupportedProfileOption)
         unsupportedProfileOption.click()
-        app.buttons["Refresh"].click()
-        waitFor(paneError, timeout: 30)
-        let crossProfileError = paneError.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS %@", "does not support the saved value 'untrusted'")
+        app.buttons["new-pane-open-button"].click()
+        let unsupportedPaneContainer = app.descendants(matching: .any)
+            .matching(identifier: "pane-\(unsupportedPaneName)").firstMatch
+        waitFor(unsupportedPaneContainer, timeout: 30)
+        let unsupportedProfileError = unsupportedPaneContainer.staticTexts.matching(
+            identifier: "pane-error-overlay-\(unsupportedPaneName)"
+        ).matching(
+            NSPredicate(format: "value CONTAINS %@", "does not support the saved value 'untrusted'")
         ).firstMatch
-        waitFor(crossProfileError)
-        XCTAssertTrue(crossProfileError.label.contains("edit the affected profile"))
+        waitFor(unsupportedProfileError)
+        let unsupportedProfileErrorText = try XCTUnwrap(unsupportedProfileError.value as? String)
+        XCTAssertTrue(unsupportedProfileErrorText.contains("edit the affected profile"))
         XCTAssertFalse(
             app.descendants(matching: .any)
-                .matching(identifier: "pane-terminal-\(paneName)").firstMatch.exists)
-        let crossProfileAttachment = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
-        crossProfileAttachment.name = "codex-cross-profile-rejection"
-        crossProfileAttachment.lifetime = .keepAlways
-        add(crossProfileAttachment)
+                .matching(identifier: "pane-terminal-\(unsupportedPaneName)").firstMatch.exists)
+        XCTAssertTrue(recoveredTerminal.exists)
+        let unsupportedProfileAttachment = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+        unsupportedProfileAttachment.name = "codex-unsupported-profile-rejection"
+        unsupportedProfileAttachment.lifetime = .keepAlways
+        add(unsupportedProfileAttachment)
     }
 }

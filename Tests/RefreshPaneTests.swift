@@ -440,7 +440,7 @@ final class RefreshPaneTests: XCTestCase {
     }
 
     @MainActor
-    func testRefreshWithNewCodexSettingsStartsFreshWithUpdatedOptions() throws {
+    func testRefreshWithNewCodexSettingsStartsFreshWithUpdatedOptionsAndRecoversSetupFailure() throws {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: "codex-refresh-settings-\(UUID().uuidString)", directoryHint: .isDirectory)
         let bin = directory.appending(path: "bin", directoryHint: .isDirectory)
@@ -459,13 +459,18 @@ final class RefreshPaneTests: XCTestCase {
         settings.agentControlInjectionPolicy = .never
         let tab = Tab(name: "repo", directory: directory)
         let pane = Pane(name: "codex-pane", tab: tab, harness: .codex, agentControlInjectionEnabled: false)
+        pane.worktreeDirectory = directory
         pane.extraArgs = ["--model", "old-model"]
-        pane.codexSessionID = "previous-conversation"
-        pane.codexTranscriptPath = "/tmp/previous-rollout.jsonl"
-        let oldController = TerminalController()
-        oldController.pendingDirectory = directory.path
-        oldController.pendingCommandArgs = ["codex", "resume", "previous-conversation"]
-        pane.installTerminalController(oldController)
+        pane.installStatusLineMonitor(
+            StatusLineMonitor(
+                paneID: pane.id,
+                paneName: pane.name,
+                workingDirectory: directory.path,
+                harness: .codex,
+                tabID: tab.id,
+                tabName: tab.name,
+                codexAdapter: .current(version: "0.162.1")))
+        pane.setupState = .failed(error: "Unsupported saved approval value")
         tab.panes.append(pane)
 
         tab.refreshPane(
@@ -474,12 +479,61 @@ final class RefreshPaneTests: XCTestCase {
             harness: .codex,
             appSettings: settings)
 
-        XCTAssertFalse(pane.terminalController === oldController)
+        XCTAssertNotNil(pane.terminalController)
+        XCTAssertNil(pane.setupState)
         XCTAssertNil(pane.codexSessionID)
         XCTAssertNil(pane.codexTranscriptPath)
         XCTAssertEqual(pane.extraArgs, ["--model", "gpt-5.2"])
         XCTAssertEqual(
             pane.terminalController?.pendingCommandArgs?.suffix(2), ["--model", "gpt-5.2"])
         XCTAssertFalse(pane.terminalController?.pendingCommandArgs?.contains("resume") ?? true)
+        XCTAssertEqual(pane.terminalController?.terminalView.telemetryTabName, tab.name)
+        XCTAssertEqual(pane.terminalController?.terminalView.telemetryTabUUID, tab.id)
+        XCTAssertEqual(pane.terminalController?.terminalView.telemetryPaneName, pane.name)
+        XCTAssertEqual(pane.terminalController?.terminalView.telemetryPaneUUID, pane.id)
+
+        let paneWithController = Pane(
+            name: "codex-controller-pane", tab: tab, harness: .codex, agentControlInjectionEnabled: false)
+        paneWithController.extraArgs = ["--model", "old-model"]
+        paneWithController.codexSessionID = "previous-conversation"
+        paneWithController.codexTranscriptPath = "/tmp/previous-rollout.jsonl"
+        let oldController = TerminalController()
+        oldController.pendingDirectory = directory.path
+        oldController.pendingCommandArgs = ["codex", "resume", "previous-conversation"]
+        paneWithController.installTerminalController(oldController)
+        tab.panes.append(paneWithController)
+
+        tab.refreshPane(
+            paneWithController,
+            extraArgs: ["--model", "gpt-5.2"],
+            harness: .codex,
+            appSettings: settings)
+
+        XCTAssertFalse(paneWithController.terminalController === oldController)
+        XCTAssertNil(paneWithController.codexSessionID)
+        XCTAssertNil(paneWithController.codexTranscriptPath)
+        XCTAssertEqual(paneWithController.extraArgs, ["--model", "gpt-5.2"])
+        XCTAssertEqual(
+            paneWithController.terminalController?.pendingCommandArgs?.suffix(2), ["--model", "gpt-5.2"])
+        XCTAssertFalse(paneWithController.terminalController?.pendingCommandArgs?.contains("resume") ?? true)
+
+        let unresolvedPane = Pane(
+            name: "codex-unresolved-pane", tab: tab, harness: .codex, agentControlInjectionEnabled: false)
+        unresolvedPane.setupState = .failed(error: "The worktree could not be resolved")
+        tab.panes.append(unresolvedPane)
+
+        tab.refreshPane(
+            unresolvedPane,
+            extraArgs: ["--model", "gpt-5.2"],
+            harness: .codex,
+            appSettings: settings)
+
+        XCTAssertNil(unresolvedPane.worktreeDirectory)
+        XCTAssertNil(unresolvedPane.statusLineMonitor)
+        XCTAssertNil(unresolvedPane.terminalController)
+        guard case .failed = unresolvedPane.setupState else {
+            XCTFail("Expected the unresolved worktree failure to remain visible")
+            return
+        }
     }
 }

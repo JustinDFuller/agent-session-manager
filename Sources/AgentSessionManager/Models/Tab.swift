@@ -627,7 +627,23 @@ final class Tab: Identifiable {
     ) {
         if let extraArgs, let harness {
             let old = pane.terminalController
-            guard old != nil || (pane.harness == .codex && pane.codexContinuationRecovery != nil) else { return }
+            let hasFailedSetup: Bool
+            if case .failed = pane.setupState {
+                hasFailedSetup = true
+            } else {
+                hasFailedSetup = false
+            }
+            let canRefreshFailedCodexPane =
+                pane.harness == .codex
+                && pane.worktreeDirectory != nil
+                && pane.statusLineMonitor != nil
+                && hasFailedSetup
+            guard
+                old != nil
+                    || (pane.harness == .codex
+                        && pane.codexContinuationRecovery != nil)
+                    || canRefreshFailedCodexPane
+            else { return }
             if let profileID { pane.profileID = profileID }
             if let appSettings {
                 pane.agentControlInjectionEnabled = appSettings.resolvedAgentControlInjectionDecision(
@@ -711,7 +727,12 @@ final class Tab: Identifiable {
             }
             pane.extraArgs = extraArgs
             pane.extraEnvVars = extraEnvVars
+            controller.terminalView.telemetryTabName = self.name
+            controller.terminalView.telemetryTabUUID = self.id
+            controller.terminalView.telemetryPaneName = pane.name
+            controller.terminalView.telemetryPaneUUID = pane.id
             pane.installTerminalController(controller)
+            pane.setupState = nil
             pane.restartToken = UUID()
             if harness == .codex, let appState = pane.notificationAppState {
                 SessionPersistence.save(appState: appState)

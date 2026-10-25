@@ -26,7 +26,7 @@ final class NotificationFlowTests: BaseTestCase {
         let number = try XCTUnwrap(metadata["number"] as? Int)
         let directory = GitUITestWorkspace.directoryURL
         GitUITestWorkspace.runGitOrFail(
-            ["remote", "add", "origin", "https://github.com/JustinDFuller-org/agent-session-manager.git"],
+            ["remote", "set-url", "origin", "https://github.com/JustinDFuller-org/agent-session-manager.git"],
             cwd: directory)
         GitUITestWorkspace.runGitOrFail(
             ["fetch", "--depth=1", "origin", "refs/pull/\(number)/head"], cwd: directory)
@@ -42,7 +42,7 @@ final class NotificationFlowTests: BaseTestCase {
         app.launch()
         app.activate()
 
-        let prStatus = app.staticTexts.matching(
+        let prStatus = app.buttons.matching(identifier: "status-line-row").matching(
             NSPredicate(format: "label CONTAINS %@", "#\(number) (merged)")
         ).firstMatch
         waitFor(prStatus, timeout: 30)

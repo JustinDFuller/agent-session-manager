@@ -77,10 +77,13 @@ final class CodexContinuationFlowTests: BaseTestCase {
             .resolvingSymlinksInPath()
         let repositoryPath = GitUITestWorkspace.directoryURL.resolvingSymlinksInPath()
         waitForCodexReady(terminal, panePath: panePath, repositoryPath: repositoryPath)
-        let rememberedPhrase = "remember-\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
+        let rememberedFirstComponent = "first-\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
+        let rememberedSecondComponent =
+            "second-\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
+        let firstResponse = "\(rememberedFirstComponent)|\(rememberedSecondComponent)"
         sendPrompt(
-            "Remember this exact phrase for our next turn: \(rememberedPhrase). Reply only READY.",
-            expecting: "READY", terminal: terminal, paneName: paneName)
+            "Remember these two exact components for our next turn. The first component is \(rememberedFirstComponent), and the second component is \(rememberedSecondComponent). Reply with the first component, then a vertical bar, then the second component. Do not use tools or read files; rely only on this conversation.",
+            expecting: firstResponse, terminal: terminal, paneName: paneName)
         waitForCompletionNotification(paneName)
 
         let header = app.descendants(matching: .any)
@@ -96,9 +99,10 @@ final class CodexContinuationFlowTests: BaseTestCase {
         quickRefresh.click()
         waitFor(terminal, timeout: 30)
         waitForCodexReady(terminal, panePath: panePath, repositoryPath: repositoryPath)
+        let refreshedResponse = "\(rememberedSecondComponent):\(rememberedFirstComponent)"
         sendPrompt(
-            "What exact phrase did I ask you to remember? Reply with only that phrase.",
-            expecting: rememberedPhrase, terminal: terminal, paneName: paneName)
+            "What two components did I ask you to remember? Reply with the second component, then a colon, then the first. Do not use tools or read files; rely only on this conversation.",
+            expecting: refreshedResponse, terminal: terminal, paneName: paneName)
         waitForCompletionNotification(paneName)
         let refreshAttachment = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
         refreshAttachment.name = "codex-exact-continuation-after-refresh"
@@ -119,10 +123,14 @@ final class CodexContinuationFlowTests: BaseTestCase {
             .matching(identifier: "pane-terminal-\(paneName)").firstMatch
         waitFor(restoredTerminal, timeout: 30)
         waitForCodexReady(restoredTerminal, panePath: panePath, repositoryPath: repositoryPath)
-        let nextPhrase = "after-relaunch-\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
+        let finalFirstSuffix = "suffix-first-\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
+        let finalSecondSuffix =
+            "suffix-second-\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
+        let finalResponse =
+            "\(rememberedFirstComponent)/\(rememberedSecondComponent)~\(finalFirstSuffix)+\(finalSecondSuffix)"
         sendPrompt(
-            "Recall the phrase I asked you to remember, then append the exact suffix -\(nextPhrase). Reply with both.",
-            expecting: "\(rememberedPhrase)-\(nextPhrase)", terminal: restoredTerminal, paneName: paneName)
+            "Recall the two components I asked you to remember. Reply with the first component, then a slash, then the second component, then a tilde, then the two suffix components joined by a plus sign. The first suffix component is \(finalFirstSuffix); the second is \(finalSecondSuffix). Do not use tools or read files; rely only on this conversation.",
+            expecting: finalResponse, terminal: restoredTerminal, paneName: paneName)
         waitForCompletionNotification(paneName)
         let attachment = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
         attachment.name = "codex-exact-continuation-after-relaunch"
@@ -154,6 +162,11 @@ final class CodexContinuationFlowTests: BaseTestCase {
         terminal: XCUIElement,
         paneName: String
     ) {
+        let baselineOutput = normalizeTerminalOutput(copiedOutput(from: terminal))
+        let normalizedPrompt = normalizeTerminalOutput(prompt)
+        XCTAssertFalse(
+            baselineOutput.contains(expected), "Expected response must not already occur in prior terminal history")
+        XCTAssertFalse(normalizedPrompt.contains(expected), "Expected response must not occur in the submitted prompt")
         terminal.click()
         app.typeText(prompt)
         terminal.typeKey(.enter, modifierFlags: [])
